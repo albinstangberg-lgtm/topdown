@@ -5,14 +5,17 @@ import { TILE, type TileMap } from "./tilemap";
  * is proportional to the number of tiles crossed, not to a step size. The vision cone
  * fires a few hundred of these per player per frame — this is the hot path.
  *
- * Returns the distance to the first solid tile, or `maxDist` if nothing was hit.
+ * Sight tests OPAQUE, not solid: glass stops a body but not a look. Collision is the
+ * other half of that pair and lives in `collision.ts`.
+ *
+ * Returns the distance to the first opaque tile, or `maxDist` if nothing was hit.
  */
 export function raycast(
   map: TileMap, ox: number, oy: number, dx: number, dy: number, maxDist: number,
 ): number {
   let tx = Math.floor(ox / TILE);
   let ty = Math.floor(oy / TILE);
-  if (map.isSolid(tx, ty)) return 0;
+  if (map.isOpaque(tx, ty)) return 0;
 
   const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
   const stepY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
@@ -34,12 +37,12 @@ export function raycast(
     if (tMaxX < tMaxY) {
       if (tMaxX > maxDist) return maxDist;
       tx += stepX;
-      if (map.isSolid(tx, ty)) return tMaxX;
+      if (map.isOpaque(tx, ty)) return tMaxX;
       tMaxX += tDeltaX;
     } else {
       if (tMaxY > maxDist) return maxDist;
       ty += stepY;
-      if (map.isSolid(tx, ty)) return tMaxY;
+      if (map.isOpaque(tx, ty)) return tMaxY;
       tMaxY += tDeltaY;
     }
   }

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>topdown — map editor</title>
+    <style>
+      :root {
+        --bg: #0b0c12;
+        --panel: #12141d;
+        --line: #232634;
+        --text: #d8dae0;
+        --muted: #8890a4;
+        --accent: #5ad2ff;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%; background: var(--bg); color: var(--text);
+        font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+        overflow: hidden;
+      }
+      #app { display: flex; height: 100%; }
+      #stage { flex: 1; position: relative; min-width: 0; }
+      #grid { display: block; width: 100%; height: 100%; cursor: crosshair; }
+      #side {
+        width: 300px; flex: none; background: var(--panel); border-left: 1px solid var(--line);
+        padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px;
+      }
+      h1 { font-size: 13px; margin: 0; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+      h2 { font-size: 11px; margin: 0 0 6px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+      .row { display: flex; gap: 6px; flex-wrap: wrap; }
+      button, .filelabel {
+        background: #1b1e2a; color: var(--text); border: 1px solid var(--line);
+        border-radius: 5px; padding: 6px 9px; font: inherit; cursor: pointer;
+      }
+      button:hover, .filelabel:hover { border-color: var(--accent); color: #fff; }
+      button.active { border-color: var(--accent); background: #17303c; color: #fff; }
+      input[type="number"], input[type="text"] {
+        background: #0d0f16; color: var(--text); border: 1px solid var(--line);
+        border-radius: 5px; padding: 5px 6px; font: inherit; width: 100%;
+      }
+      input[type="file"] { display: none; }
+      .palette { display: flex; flex-direction: column; gap: 4px; }
+      .tile {
+        display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 5px;
+        border: 1px solid transparent; cursor: pointer; text-align: left; background: none;
+        color: var(--text); width: 100%;
+      }
+      .tile:hover { background: #1a1d28; }
+      .tile.active { border-color: var(--accent); background: #17303c; }
+      .swatch { width: 18px; height: 18px; border-radius: 3px; border: 1px solid #0007; flex: none; }
+      .tile .id { color: var(--muted); width: 12px; text-align: right; }
+      .tile .name { flex: 1; }
+      .hint { color: var(--muted); font-size: 11px; }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      #status { min-height: 34px; font-size: 11px; color: var(--muted); white-space: pre-wrap; }
+      #status.error { color: #ff8b8b; }
+      #status.ok { color: #8bff7a; }
+      #hover {
+        position: absolute; left: 10px; bottom: 10px; background: #0b0c12cc; padding: 5px 8px;
+        border: 1px solid var(--line); border-radius: 5px; font-size: 11px; color: var(--muted);
+        pointer-events: none;
+      }
+      kbd {
+        background: #1b1e2a; border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 3px; padding: 0 4px; font-size: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="stage">
+        <canvas id="grid"></canvas>
+        <div id="hover">—</div>
+      </div>
+      <aside id="side">
+        <h1>Map editor</h1>
+
+        <div>
+          <h2>Level</h2>
+          <input id="name" type="text" value="untitled" />
+          <div class="grid2" style="margin-top:6px">
+            <label class="hint">width<input id="cols" type="number" min="3" max="256" value="25" /></label>
+            <label class="hint">height<input id="rows" type="number" min="3" max="256" value="17" /></label>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <button id="resize">Resize</button>
+            <button id="blank">New room</button>
+            <button id="border">Add border</button>
+          </div>
+        </div>
+
+        <div>
+          <h2>Tiles <span class="hint">— keys 0-9</span></h2>
+          <div id="palette" class="palette"></div>
+        </div>
+
+        <div>
+          <h2>Tool</h2>
+          <div class="row" id="tools">
+            <button data-tool="paint" class="active">Paint</button>
+            <button data-tool="rect">Rect</button>
+            <button data-tool="fill">Fill</button>
+            <button data-tool="pick">Pick</button>
+          </div>
+          <p class="hint" style="margin:6px 0 0">
+            Right-drag paints floor. <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo,
+            <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> redo. Wheel zooms, middle-drag pans.
+          </p>
+        </div>
+
+        <div>
+          <h2>Load</h2>
+          <div class="row">
+            <label class="filelabel">Open file<input id="file" type="file" accept=".json,.txt,.map,text/plain,application/json" /></label>
+            <button id="paste">Paste</button>
+          </div>
+          <div class="row" style="margin-top:6px" id="builtins"></div>
+        </div>
+
+        <div>
+          <h2>Save</h2>
+          <div class="row">
+            <button id="download">Download .json</button>
+            <button id="copyJson">Copy JSON</button>
+            <button id="copyArray">Copy rows</button>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <button id="play">▶ Play this map</button>
+          </div>
+        </div>
+
+        <div id="status"></div>
+      </aside>
+    </div>
+    <script type="module" src="/src/editor/main.ts"></script>
+  </body>
+</html>

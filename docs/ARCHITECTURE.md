@@ -37,13 +37,21 @@ The one place presentation leaks into the sim is mouse aiming, because a cursor 
 screen position that needs a camera to become a world angle. That conversion is isolated
 in `Game.resolveAim` and nowhere else.
 
-### 3. World grid + collision — `src/world/`
+### 3. World grid + collision + a tile registry — `src/world/`
 
 A tile grid, not a polygon soup. It buys O(1) collision lookups, near-free raycasts for
 the vision cone, and a level format you can generate or edit as text. Actors are circles,
-walls are boxes, movement is substepped so a dash cannot tunnel. `generateLevel` is a
-placeholder — nothing outside it knows how the grid got its shape, so a real level format
-drops in later without touching gameplay.
+walls are boxes, movement is substepped so a dash cannot tunnel.
+
+The grid stores **tile ids**, and every id is defined once in `TILE_DEFS`
+(`src/world/tiles.ts`). Collision, vision, rendering, the editor palette and the level
+validator all read that one table, so a new tile type is one row of data rather than a
+change in five files. Keep `solid` and `opaque` as separate flags from the start: glass
+stops a body but not a look, and collapsing them into one "blocking" bit is a refactor
+you will pay for the first time you want a window, smoke, or a grate.
+
+The generator emits the same thing a hand-authored level does — a grid of ids — so the
+game has exactly one way to load a map and no special case for "generated".
 
 ### 4. Vision / line of sight — `src/vision/visibility.ts`
 
@@ -99,6 +107,25 @@ social rather than four people playing alone next to each other.
 
 ---
 
+### 9. The level format — `src/world/level.ts`, `src/levels/`
+
+A level is a 2D array of tile ids and a name. It diffs cleanly, you can type one by hand,
+and the tile registry gives every number its meaning. Everything else in that file is
+import tolerance, which is the part that matters in practice: the parser accepts a level
+file, a bare array, rows pasted out of source, loose numbers or glyph art, pads ragged
+rows, and downgrades unknown ids to floor with a warning. A level importer that rejects
+what a person actually pastes is a level importer nobody uses.
+
+Loading a map does not rebuild the world — entities are kept and re-placed, so players
+keep their device bindings, colours and score across a hot swap.
+
+### 10. The editor — `src/editor/`
+
+A second page that reads and writes the same format the game imports, using the same tile
+registry for its palette. It contains no game code: it edits a grid of ids and hands it
+over through `localStorage`. That separation is why the editor cannot drift out of sync
+with the game.
+
 ## The supporting cores
 
 - **AI perception on the same primitive** (`src/sim/enemy.ts`) — an enemy sees you when
@@ -127,8 +154,8 @@ In rough order of when it starts hurting:
    listener at the squad centroid.
 2. **Controller assignment / menus** — a real join flow (a lobby, "press START", colour
    picking, pause that does not stop the other three players).
-3. **Level content pipeline** — replace `generateLevel` with authored levels; keep the
-   `TileMap` interface so nothing else changes.
+3. **Level content** — the format and the editor exist; what is missing is maps worth
+   playing, plus level-scoped rules (objectives, doors, keyed spawns, waves).
 4. **Weapons as data** — `WEAPONS` is already a table; make it content, add pickups,
    ammo economy, and per-player loadouts.
 5. **Spatial hash** — the enemy/bullet loops are O(n·m). Fine at these counts, and the
@@ -141,6 +168,7 @@ In rough order of when it starts hurting:
 
 | What | Where |
 | --- | --- |
+| Tile types, and what each id means | `TILE_DEFS` in `src/world/tiles.ts` |
 | Cone angle, range, player speed, dash, revive rules | `src/sim/player.ts` (top of file) |
 | How dark the dark is | `AMBIENT_DARKNESS` in `src/render/renderer.ts` |
 | Vision ray density and shadow-edge sharpness | `BASE_STEP`, `REFINE_THRESHOLD` in `src/vision/visibility.ts` |

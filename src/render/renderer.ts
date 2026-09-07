@@ -1,5 +1,6 @@
 import { lerp, TAU } from "../core/math";
 import { TILE } from "../world/tilemap";
+import { tileDef } from "../world/tiles";
 import type { GameWorld } from "../sim/world";
 import type { VisionLight } from "../vision/visibility";
 import type { Camera } from "./camera";
@@ -81,6 +82,7 @@ export class Renderer {
 
     const bounds = cam.visibleBounds(vp);
     this.drawFloor(ctx, bounds);
+    this.drawLamps(ctx, world, bounds);
     this.drawParticles(ctx, world);
     this.drawActors(ctx, world, alpha);
     this.drawBullets(ctx, world);
@@ -126,6 +128,11 @@ export class Renderer {
     ctx.stroke();
   }
 
+  /**
+   * Solid geometry, drawn from tile ids. Walls are pure black silhouettes; crates read
+   * as objects sitting on the floor; glass is a pane you can see through, which is the
+   * visible payoff of solid and opaque being separate flags.
+   */
   private drawWalls(ctx: CanvasRenderingContext2D, b: Bounds, world: GameWorld): void {
     const map = world.map;
     const tx0 = Math.max(0, Math.floor(b.x0 / TILE));
@@ -133,15 +140,62 @@ export class Renderer {
     const tx1 = Math.min(map.cols - 1, Math.ceil(b.x1 / TILE));
     const ty1 = Math.min(map.rows - 1, Math.ceil(b.y1 / TILE));
 
+    const crates: number[] = [];
+    const panes: number[] = [];
+
     ctx.fillStyle = COLOR_WALL;
     ctx.beginPath();
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
-        if (!map.isSolid(tx, ty)) continue;
+        const id = map.tileAt(tx, ty);
+        const def = tileDef(id);
+        if (!def.solid) continue;
+        if (def.key === "crate") { crates.push(tx, ty); continue; }
+        if (!def.opaque) { panes.push(tx, ty); continue; }
         ctx.rect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
       }
     }
     ctx.fill();
+
+    for (let i = 0; i < crates.length; i += 2) {
+      const x = crates[i] * TILE;
+      const y = crates[i + 1] * TILE;
+      ctx.fillStyle = "#0b0b10";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = "#241c12";
+      ctx.fillRect(x + 4, y + 4, TILE - 8, TILE - 8);
+      ctx.strokeStyle = "rgba(190,150,90,0.35)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 4, y + 4, TILE - 8, TILE - 8);
+    }
+
+    for (let i = 0; i < panes.length; i += 2) {
+      const x = panes[i] * TILE;
+      const y = panes[i + 1] * TILE;
+      ctx.fillStyle = "rgba(90,210,255,0.10)";
+      ctx.fillRect(x, y, TILE, TILE);
+      ctx.strokeStyle = "rgba(140,225,255,0.45)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + 2);
+      ctx.lineTo(x + TILE - 2, y + TILE - 2);
+      ctx.moveTo(x + TILE - 2, y + 2);
+      ctx.lineTo(x + 2, y + TILE - 2);
+      ctx.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
+      ctx.stroke();
+    }
+  }
+
+  /** Lamps are part of the level, so they get a fixture drawn where the tile sits. */
+  private drawLamps(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    for (const lamp of world.map.lamps) {
+      if (lamp.x < b.x0 || lamp.x > b.x1 || lamp.y < b.y0 || lamp.y > b.y1) continue;
+      ctx.fillStyle = "rgba(255,236,180,0.95)";
+      ctx.fillRect(lamp.x - 7, lamp.y - 7, 14, 14);
+      ctx.strokeStyle = "rgba(120,100,60,0.8)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(lamp.x - 7, lamp.y - 7, 14, 14);
+    }
   }
 
   private drawActors(ctx: CanvasRenderingContext2D, world: GameWorld, alpha: number): void {
@@ -231,6 +285,9 @@ export class Renderer {
     for (const e of world.enemies) {
       if (lightVisible(e.cone, b)) fillLight(ctx, e.cone, 0.10 * e.cone.intensity);
     }
+    for (const light of world.staticLights) {
+      if (lightVisible(light, b)) fillLight(ctx, light, 0.22);
+    }
     ctx.globalCompositeOperation = "source-over";
   }
 
@@ -257,6 +314,9 @@ export class Renderer {
       if (lightVisible(p.cone, b)) eraseLight(lctx, p.cone, 1);
       if (lightVisible(p.halo, b)) eraseLight(lctx, p.halo, 0.55);
     }
+    for (const light of world.staticLights) {
+      if (lightVisible(light, b)) eraseLight(lctx, light, 0.85);
+    }
     lctx.restore();
 
     const ctx = this.ctx;
@@ -276,7 +336,9 @@ export class Renderer {
       if (poly.length < 8) continue;
       // Skip the two apex segments: they converge on the player and would wash the
       // sprite out. Only the far boundary — the part that hugs walls — is stroked.
-      ctx.strokeStyle = "rgba(255,240,200,0.5)";
+      // The stroke fades on the same curve as the light itself, otherwise the rim
+      // keeps drawing walls at the far end of the cone where nothing is actually lit.
+      ctx.strokeStyle = lightGradient(ctx, p.cone, "#fff0c8", 0.55);
       ctx.beginPath();
       ctx.moveTo(poly[2], poly[3]);
       for (let i = 4; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);

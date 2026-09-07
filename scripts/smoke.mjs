@@ -107,6 +107,102 @@ const split = await page.evaluate(async () => {
 });
 check("4 players render without errors", split === 4 && errors.length === 0, errors.join(" | "));
 
+// --- level import ------------------------------------------------------------
+
+const levelPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const levelErrors = [];
+levelPage.on("pageerror", (e) => levelErrors.push(String(e)));
+
+await levelPage.goto(`${URL}?level=corridors`, { waitUntil: "load" });
+await levelPage.waitForTimeout(400);
+const corridors = await levelPage.evaluate(() => {
+  const m = window.game.world.map;
+  return { name: m.name, cols: m.cols, rows: m.rows, enemySpawns: m.enemySpawns.length };
+});
+check("built-in level loads with its authored spawns",
+  corridors.cols === 13 && corridors.rows === 21 && corridors.enemySpawns === 3,
+  JSON.stringify(corridors));
+
+// Pasting a grid in the shape a person copies out of source has to work.
+const pasted = await levelPage.evaluate(() => {
+  const warnings = window.game.loadLevelText(
+    "[1,1,1,1,1],\n[1,0,2,0,1],\n[1,0,0,0,1],\n[1,3,0,0,1],\n[1,1,1,1,1],",
+    "pasted",
+  );
+  const m = window.game.world.map;
+  return { warnings, cols: m.cols, rows: m.rows, players: m.playerSpawns.length, enemies: m.enemySpawns.length };
+});
+check("pasted grid rows import as a level",
+  pasted.cols === 5 && pasted.rows === 5 && pasted.players === 1 && pasted.enemies === 1,
+  JSON.stringify(pasted));
+
+// A ragged, typo'd map should import with warnings rather than break.
+const forgiving = await levelPage.evaluate(() => {
+  const warnings = window.game.loadLevelText("[1,1,1,1]\n[1,0,99]\n[1,0,0,1]\n[1,1,1,1]", "ragged");
+  const m = window.game.world.map;
+  return { warnings, cols: m.cols, rows: m.rows };
+});
+check("ragged rows and unknown ids import with warnings",
+  forgiving.cols === 4 && forgiving.rows === 4 && forgiving.warnings.length >= 2,
+  JSON.stringify(forgiving));
+
+// Glass: blocks the body, not the eye. Both halves of that pair in one check.
+await levelPage.goto(`${URL}?level=showcase`, { waitUntil: "load" });
+await levelPage.waitForFunction(() => window.game.world.enemies.length > 0, null, { timeout: 8000 });
+const glass = await levelPage.evaluate(async () => {
+  const w = window.game.world;
+  const m = w.map;
+  const TILE = 48;
+  let pane = null;
+  for (let ty = 0; ty < m.rows && !pane; ty++) {
+    for (let tx = 0; tx < m.cols; tx++) {
+      if (m.tileAt(tx, ty) === 5 && !m.isSolid(tx - 1, ty) && !m.isSolid(tx + 1, ty)) {
+        pane = { tx, ty };
+        break;
+      }
+    }
+  }
+  if (!pane) return "no glass pane with open sides in this map";
+
+  const p = w.players[0];
+  p.x = (pane.tx - 1.5) * TILE;
+  p.y = (pane.ty + 0.5) * TILE;
+  p.prevX = p.x; p.prevY = p.y;
+  p.facing = 0;
+  const e = w.enemies[0];
+  if (!e) return "no enemy to place";
+  e.x = (pane.tx + 2.5) * TILE;
+  e.y = (pane.ty + 0.5) * TILE;
+  await new Promise((r) => setTimeout(r, 250));
+
+  const seenThroughGlass = e.visible;
+  // Now walk straight at the pane and confirm the body does not pass through it.
+  const startX = p.x;
+  for (let i = 0; i < 60; i++) {
+    p.vx = 900;
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return { seenThroughGlass, movedThrough: p.x > (pane.tx + 1) * TILE, startX, endX: p.x };
+});
+check("glass blocks movement but not sight",
+  typeof glass === "object" && glass.seenThroughGlass === true && glass.movedThrough === false,
+  JSON.stringify(glass));
+
+// The editor hand-off: a level parked in localStorage loads as ?level=draft.
+await levelPage.evaluate(() => {
+  localStorage.setItem(
+    "topdown.level.draft",
+    JSON.stringify({ format: "topdown-level", version: 1, name: "draft test",
+      grid: [[1,1,1,1,1],[1,0,2,0,1],[1,0,0,0,1],[1,0,0,3,1],[1,1,1,1,1]] }),
+  );
+});
+await levelPage.goto(`${URL}?level=draft`, { waitUntil: "load" });
+await levelPage.waitForTimeout(400);
+const draft = await levelPage.evaluate(() => window.game.world.map.name);
+check("editor draft loads through ?level=draft", draft === "draft test", String(draft));
+
+check("level pages raised no exceptions", levelErrors.length === 0, levelErrors.join(" | "));
+
 await browser.close();
 
 const failed = checks.filter((c) => !c.ok);

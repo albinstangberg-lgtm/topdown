@@ -19,6 +19,8 @@
         height: 100vh;
         cursor: crosshair;
       }
+      #boot a { color: #7f8aa3; pointer-events: auto; }
+      #boot a:hover { color: #cfd6e6; }
       #boot {
         position: fixed;
         inset: auto 0 16px 0;
@@ -37,7 +39,11 @@
   </head>
   <body>
     <canvas id="game"></canvas>
-    <div id="boot">WASD move · mouse aim · click/space fire · shift dash · gamepad START to join · F1 debug</div>
+    <div id="boot">
+      WASD move · mouse aim · click/space fire · shift dash · gamepad START to join ·
+      F1 debug · [ ] change map · drop or paste a map to load it ·
+      <a href="./editor.html">map editor</a>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
