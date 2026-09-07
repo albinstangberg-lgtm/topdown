@@ -165,6 +165,12 @@ with the game.
 - **HUD per viewport** (`src/render/hud.ts`) — anything drawn "at the top of the screen"
   is a bug waiting for player 3. Off-screen teammate markers and downed alerts matter
   more than health bars once the squad splits up.
+- **The lobby** (`src/menu/lobby.ts`) — the join flow, and the one screen that has to
+  work before anybody has agreed which controller they are holding. START/ENTER claims
+  a slot, again readies, B/ESC backs out, everyone ready starts the match. It knows
+  nothing about the simulation: it hands back a list of device ids and the shell binds
+  them to players, which is the same seam drop-in join uses mid-match. The shell is a
+  two-state machine (`menu` / `playing`) and that is the only thing it branches on.
 - **Debug view on day one** (`src/render/debug.ts`) — `F1`. Frame timings, entity counts,
   AI states, collision grid. Build it before you need it.
 - **A headless smoke test** (`scripts/smoke.mjs`) — drives the real build in a browser and
@@ -180,8 +186,9 @@ In rough order of when it starts hurting:
 1. **Audio** — positional audio in split screen is its own design problem: four
    listeners, one output. Decide early whether audio is per-player panned or a single
    listener at the squad centroid.
-2. **Controller assignment / menus** — a real join flow (a lobby, "press START", colour
-   picking, pause that does not stop the other three players).
+2. **The rest of the menus** — the join lobby exists; what is missing is pause (that
+   does not stop the other three players), colour and loadout picking, and a way back
+   to the lobby from a match.
 3. **Level content** — the format and the editor exist; what is missing is maps worth
    playing, plus level-scoped rules (objectives, doors, keyed spawns, waves).
 4. **Weapons as data** — `WEAPONS` is already a table; make it content, add pickups,

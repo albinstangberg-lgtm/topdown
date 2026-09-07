@@ -5,9 +5,17 @@ import { clampMagnitude } from "../core/math";
 export class KeyboardMouseSource implements InputSource {
   readonly id = "kbm";
   readonly kind = "keyboard" as const;
+  readonly label = "Keyboard + Mouse";
 
   private keys = new Set<string>();
+  /**
+   * Keys that went down since the last sample, even if they are already back up.
+   * Input is sampled at 60Hz but key events arrive whenever they arrive — without a
+   * latch, a tap that starts and ends between two samples is silently dropped.
+   */
+  private tapped = new Set<string>();
   private mouseDown = false;
+  private mouseTapped = false;
   private px = 0;
   private py = 0;
 
@@ -16,6 +24,7 @@ export class KeyboardMouseSource implements InputSource {
   private prevDash = false;
   private prevInteract = false;
   private prevStart = false;
+  private prevCancel = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener("keydown", this.onKeyDown);
@@ -38,24 +47,33 @@ export class KeyboardMouseSource implements InputSource {
 
   private onKeyDown = (e: KeyboardEvent): void => {
     this.keys.add(e.code);
+    this.tapped.add(e.code);
     // Stop the page scrolling out from under the game.
     if (e.code === "Space" || e.code.startsWith("Arrow")) e.preventDefault();
   };
   private onKeyUp = (e: KeyboardEvent): void => { this.keys.delete(e.code); };
-  private onBlur = (): void => { this.keys.clear(); this.mouseDown = false; };
+  private onBlur = (): void => {
+    this.keys.clear();
+    this.tapped.clear();
+    this.mouseDown = false;
+    this.mouseTapped = false;
+  };
 
   private onMouseMove = (e: MouseEvent): void => {
     const r = this.canvas.getBoundingClientRect();
     this.px = e.clientX - r.left;
     this.py = e.clientY - r.top;
   };
-  private onMouseDown = (): void => { this.mouseDown = true; };
+  private onMouseDown = (): void => { this.mouseDown = true; this.mouseTapped = true; };
   private onMouseUp = (): void => { this.mouseDown = false; };
 
   isConnected(): boolean { return true; }
 
   /** Exposed so the debug overlay and the join prompt can read raw keys. */
   isDown(code: string): boolean { return this.keys.has(code); }
+
+  /** Held now, or tapped since the last sample. Use for anything edge-triggered. */
+  private hit(code: string): boolean { return this.keys.has(code) || this.tapped.has(code); }
 
   sample(out: InputState): void {
     const k = this.keys;
@@ -76,10 +94,12 @@ export class KeyboardMouseSource implements InputSource {
     // the camera — the game shell fills it in.
     out.aimStrength = 0;
 
-    const fire = this.mouseDown || k.has("Space");
-    const dash = k.has("ShiftLeft") || k.has("ShiftRight");
+    // Movement reads held keys only; everything edge-triggered reads the latch too.
+    const fire = this.mouseDown || this.mouseTapped || this.hit("Space");
+    const dash = this.hit("ShiftLeft") || this.hit("ShiftRight");
     const interact = k.has("KeyE");
-    const start = k.has("Enter");
+    const start = this.hit("Enter") || this.hit("NumpadEnter");
+    const cancel = this.hit("Escape") || this.hit("Backspace");
 
     out.fire = fire;
     out.firePressed = fire && !this.prevFire;
@@ -88,10 +108,15 @@ export class KeyboardMouseSource implements InputSource {
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
     out.startPressed = start && !this.prevStart;
+    out.cancelPressed = cancel && !this.prevCancel;
 
     this.prevFire = fire;
     this.prevDash = dash;
     this.prevInteract = interact;
     this.prevStart = start;
+    this.prevCancel = cancel;
+
+    this.tapped.clear();
+    this.mouseTapped = false;
   }
 }

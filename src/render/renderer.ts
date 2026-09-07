@@ -34,6 +34,11 @@ function lightVisible(light: VisionLight, b: Bounds): boolean {
 
 export class Renderer {
   readonly ctx: CanvasRenderingContext2D;
+  /**
+   * Lights that are not owned by the world — the menu's roving spotlight today, a
+   * flashbang or a muzzle flare later. Cleared by whoever sets them.
+   */
+  ambientLights: VisionLight[] = [];
   private lightCanvas: HTMLCanvasElement;
   private lightCtx: CanvasRenderingContext2D;
   dpr = 1;
@@ -293,6 +298,9 @@ export class Renderer {
     for (const light of world.staticLights) {
       if (lightVisible(light, b)) fillLight(ctx, light, 0.22);
     }
+    for (const light of this.ambientLights) {
+      if (lightVisible(light, b)) fillLight(ctx, light, 0.16);
+    }
     ctx.globalCompositeOperation = "source-over";
   }
 
@@ -321,6 +329,9 @@ export class Renderer {
     }
     for (const light of world.staticLights) {
       if (lightVisible(light, b)) eraseLight(lctx, light, 0.85);
+    }
+    for (const light of this.ambientLights) {
+      if (lightVisible(light, b)) eraseLight(lctx, light, 0.8);
     }
     lctx.restore();
 

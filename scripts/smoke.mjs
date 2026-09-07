@@ -24,7 +24,7 @@ page.on("pageerror", (e) => errors.push(String(e)));
 
 // Combat checks run on the fixed camera: aiming is absolute there, so "point at the
 // enemy and shoot" is deterministic. The rotating camera gets its own checks below.
-await page.goto(`${URL}?camera=fixed`, { waitUntil: "load" });
+await page.goto(`${URL}?camera=fixed&players=1`, { waitUntil: "load" });
 await page.waitForTimeout(500);
 
 check("boots without exceptions", errors.length === 0, errors.join(" | "));
@@ -114,7 +114,7 @@ check("4 players render without errors", split === 4 && errors.length === 0, err
 const camPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const camErrors = [];
 camPage.on("pageerror", (e) => camErrors.push(String(e)));
-await camPage.goto(`${URL}?level=showcase`, { waitUntil: "load" });
+await camPage.goto(`${URL}?level=showcase&players=1`, { waitUntil: "load" });
 await camPage.waitForTimeout(500);
 
 // Put the player in open floor and point the cursor dead ahead so steering is neutral.
@@ -256,7 +256,7 @@ await padPage.addInitScript(() => {
   window.__pad = pad;
   navigator.getGamepads = () => [pad];
 });
-await padPage.goto(`${URL}?level=showcase`, { waitUntil: "load" });
+await padPage.goto(`${URL}?level=showcase&players=1`, { waitUntil: "load" });
 await padPage.waitForTimeout(400);
 
 const joined = await padPage.evaluate(async () => {
@@ -334,13 +334,94 @@ check("gamepad trigger fires and LT dashes",
   padButtons.dashed && padButtons.fired, JSON.stringify(padButtons));
 check("gamepad page raised no exceptions", padErrors.length === 0, padErrors.join(" | "));
 
+// --- lobby -------------------------------------------------------------------
+
+const lobbyPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const lobbyErrors = [];
+lobbyPage.on("pageerror", (e) => lobbyErrors.push(String(e)));
+await lobbyPage.addInitScript(() => {
+  const pad = {
+    index: 0, id: "virtual test pad (standard)", connected: true, mapping: "standard",
+    axes: [0, 0, 0, 0],
+    buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0, touched: false })),
+    timestamp: 0,
+  };
+  window.__pad = pad;
+  navigator.getGamepads = () => [pad];
+});
+const padStart = () => lobbyPage.evaluate(async () => {
+  window.__pad.buttons[9].pressed = true;
+  await new Promise((r) => setTimeout(r, 150));
+  window.__pad.buttons[9].pressed = false;
+  await new Promise((r) => setTimeout(r, 150));
+});
+
+// No ?players= this time: this is the real path a person takes.
+await lobbyPage.goto(`${URL}?level=showcase`, { waitUntil: "load" });
+await lobbyPage.waitForTimeout(600);
+
+const atBoot = await lobbyPage.evaluate(() => ({
+  phase: window.game.phase,
+  players: window.game.world.players.length,
+  slots: window.game.lobby.slots.length,
+  hintHidden: document.getElementById("boot").hidden,
+}));
+check("the game boots into the menu with nobody playing",
+  atBoot.phase === "menu" && atBoot.players === 0 && atBoot.slots === 0 && atBoot.hintHidden,
+  JSON.stringify(atBoot));
+
+await lobbyPage.keyboard.press("Enter");
+await lobbyPage.waitForTimeout(200);
+await padStart();
+const slots = await lobbyPage.evaluate(() => ({
+  phase: window.game.phase,
+  slots: window.game.lobby.slots.map((s) => `${s.sourceId}:${s.ready}`),
+}));
+check("ENTER and START each claim a slot, and claiming does not start the match",
+  slots.phase === "menu" && slots.slots.join(",") === "kbm:false,pad0:false",
+  JSON.stringify(slots));
+
+// Backing out: one press un-readies, the next leaves the lobby entirely.
+await lobbyPage.keyboard.press("Enter");                 // keyboard ready
+await lobbyPage.waitForTimeout(150);
+await lobbyPage.keyboard.press("Escape");                // un-ready
+await lobbyPage.waitForTimeout(150);
+const unready = await lobbyPage.evaluate(() => window.game.lobby.slots.map((s) => s.ready));
+await lobbyPage.keyboard.press("Escape");                // leave
+await lobbyPage.waitForTimeout(150);
+const left = await lobbyPage.evaluate(() => window.game.lobby.slots.map((s) => s.sourceId));
+check("cancel un-readies first and only then drops the slot",
+  unready[0] === false && left.join(",") === "pad0",
+  `after un-ready ${JSON.stringify(unready)}, after leave ${JSON.stringify(left)}`);
+
+// Rejoin and start for real.
+await lobbyPage.keyboard.press("Enter");                 // keyboard joins again
+await lobbyPage.waitForTimeout(200);
+await lobbyPage.keyboard.press("Enter");                 // keyboard ready
+await lobbyPage.waitForTimeout(200);
+const oneReady = await lobbyPage.evaluate(() => window.game.phase);
+await padStart();                                        // pad ready -> everyone is
+await lobbyPage.waitForTimeout(500);
+const started = await lobbyPage.evaluate(() => ({
+  phase: window.game.phase,
+  players: window.game.world.players.length,
+  views: window.game.views.length,
+  sources: window.game.world.players.map((p) => p.sourceId),
+  hintShown: !document.getElementById("boot").hidden,
+}));
+check("the match starts only once every joined player is ready",
+  oneReady === "menu" && started.phase === "playing" && started.players === 2 &&
+  started.views === 2 && started.hintShown,
+  `${oneReady} then ${JSON.stringify(started)}`);
+check("lobby page raised no exceptions", lobbyErrors.length === 0, lobbyErrors.join(" | "));
+
 // --- level import ------------------------------------------------------------
 
 const levelPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const levelErrors = [];
 levelPage.on("pageerror", (e) => levelErrors.push(String(e)));
 
-await levelPage.goto(`${URL}?level=corridors`, { waitUntil: "load" });
+await levelPage.goto(`${URL}?level=corridors&players=1`, { waitUntil: "load" });
 await levelPage.waitForTimeout(400);
 const corridors = await levelPage.evaluate(() => {
   const m = window.game.world.map;
@@ -374,7 +455,7 @@ check("ragged rows and unknown ids import with warnings",
   JSON.stringify(forgiving));
 
 // Glass: blocks the body, not the eye. Both halves of that pair in one check.
-await levelPage.goto(`${URL}?level=showcase`, { waitUntil: "load" });
+await levelPage.goto(`${URL}?level=showcase&players=1`, { waitUntil: "load" });
 await levelPage.waitForFunction(() => window.game.world.enemies.length > 0, null, { timeout: 8000 });
 const glass = await levelPage.evaluate(async () => {
   const w = window.game.world;
@@ -423,7 +504,7 @@ await levelPage.evaluate(() => {
       grid: [[1,1,1,1,1],[1,0,2,0,1],[1,0,0,0,1],[1,0,0,3,1],[1,1,1,1,1]] }),
   );
 });
-await levelPage.goto(`${URL}?level=draft`, { waitUntil: "load" });
+await levelPage.goto(`${URL}?level=draft&players=1`, { waitUntil: "load" });
 await levelPage.waitForTimeout(400);
 const draft = await levelPage.evaluate(() => window.game.world.map.name);
 check("editor draft loads through ?level=draft", draft === "draft test", String(draft));

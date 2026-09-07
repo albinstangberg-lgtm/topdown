@@ -15,14 +15,17 @@ function applyDeadzone(x: number, y: number): [number, number] {
 export class GamepadSource implements InputSource {
   readonly kind = "gamepad" as const;
   readonly id: string;
+  readonly label: string;
 
   private prevFire = false;
   private prevDash = false;
   private prevInteract = false;
   private prevStart = false;
+  private prevCancel = false;
 
   constructor(readonly index: number) {
     this.id = `pad${index}`;
+    this.label = `Gamepad ${index + 1}`;
   }
 
   private pad(): Gamepad | null {
@@ -41,7 +44,8 @@ export class GamepadSource implements InputSource {
       out.aimStrength = 0;
       out.fire = false; out.firePressed = false;
       out.dash = false; out.dashPressed = false;
-      out.interact = false; out.interactPressed = false; out.startPressed = false;
+      out.interact = false; out.interactPressed = false;
+      out.startPressed = false; out.cancelPressed = false;
       return;
     }
 
@@ -70,6 +74,7 @@ export class GamepadSource implements InputSource {
     const dash = btn(6) || btn(1) || btn(10);
     const interact = btn(2);
     const start = btn(9) || btn(8);
+    const cancel = btn(1);                    // B / circle
 
     out.fire = fire;
     out.firePressed = fire && !this.prevFire;
@@ -78,10 +83,12 @@ export class GamepadSource implements InputSource {
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
     out.startPressed = start && !this.prevStart;
+    out.cancelPressed = cancel && !this.prevCancel;
 
     this.prevFire = fire;
     this.prevDash = dash;
     this.prevInteract = interact;
     this.prevStart = start;
+    this.prevCancel = cancel;
   }
 }

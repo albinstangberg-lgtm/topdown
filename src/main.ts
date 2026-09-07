@@ -6,13 +6,15 @@ import { parseLevelText, type LevelData } from "./world/level";
 import { BUILTIN_LEVELS, PROCEDURAL, resolveLevel } from "./levels";
 import type { Player } from "./sim/entities";
 import { STEER_RATE, TURN_RATE, type AimCommand } from "./sim/player";
-import { clamp } from "./core/math";
+import { clamp, damp } from "./core/math";
 import { emptyInput } from "./input/types";
 import { Camera, type CameraMode } from "./render/camera";
 import { Renderer } from "./render/renderer";
 import { layoutViewports, type Viewport } from "./render/viewport";
 import { drawBanner, drawHud, drawSplitBorders } from "./render/hud";
 import { DebugOverlay } from "./render/debug";
+import { Lobby, MAX_PLAYERS } from "./menu/lobby";
+import { computeVisibility, makeLight } from "./vision/visibility";
 
 /** Cursor distance from the player, in CSS pixels, below which steering is neutral. */
 const POINTER_DEADZONE = 40;
@@ -23,6 +25,14 @@ const POINTER_FULL_FRACTION = 0.35;
  * which is what you want when the same stick has to both scan a room and spin you round.
  */
 const STEER_RESPONSE = 1.5;
+
+/** How long the menu backdrop lingers on one part of the level before moving on. */
+const MENU_PAN_SECONDS = 9;
+/** World units visible vertically behind the menu — wider than gameplay, on purpose. */
+const MENU_VIEW_HEIGHT = 900;
+
+/** Menu or match. Everything the shell does branches on exactly this. */
+export type Phase = "menu" | "playing";
 
 /**
  * Game shell: owns the loop, the input manager, the world, and one camera per player.
@@ -43,6 +53,15 @@ export class Game {
   /** Reusable per-player command buffer — the sim sees this, not the raw device. */
   private readonly commands = new Map<number, InputState>();
   private readonly loop: GameLoop;
+
+  /** Public so the smoke tests and the debug console can see where the shell is. */
+  phase: Phase = "menu";
+  readonly lobby = new Lobby();
+  private readonly menuCam = new Camera();
+  private readonly menuLight = makeLight("#ffe0a8", Math.PI, 760, 0.9);
+  private readonly menuFocus = { x: 0, y: 0 };
+  private readonly menuDest = { x: 0, y: 0 };
+  private menuPanTimer = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new Renderer(canvas);
@@ -65,12 +84,17 @@ export class Game {
     if (mode === "fixed" || mode === "rotating") this.cameraMode = mode;
     this.levelIndex = Math.max(0, BUILTIN_LEVELS.findIndex((l) => l.id === requestedLevel));
 
-    this.addPlayerFor("kbm");
-
-    // Dev affordance: ?players=4 fills the remaining slots with idle players so the
-    // split-screen layout can be worked on without four pads plugged in.
-    const requested = Number(params.get("players") ?? "1");
-    for (let i = 1; i < Math.min(4, Math.max(1, requested)); i++) this.addPlayerFor(`dummy${i}`);
+    // Dev affordance: ?players=N skips the lobby and starts with N players, the extra
+    // ones idle. Keeps split-screen work (and the tests) from going through the menu.
+    const requestedPlayers = params.get("players");
+    if (requestedPlayers !== null) {
+      const n = clamp(Number(requestedPlayers) || 1, 1, MAX_PLAYERS);
+      const ids = ["kbm"];
+      for (let i = 1; i < n; i++) ids.push(`dummy${i}`);
+      this.startMatch(ids);
+    } else {
+      this.relayout();
+    }
 
     window.addEventListener("resize", this.onResize);
     this.installLevelImport(canvas);
@@ -149,7 +173,12 @@ export class Game {
     this.levelIndex = (this.levelIndex + dir + count) % count;
     const builtin = BUILTIN_LEVELS[this.levelIndex];
     const level = resolveLevel(builtin ? builtin.id : PROCEDURAL, (Date.now() & 0xffff) + 1);
-    if (level) this.loadLevel(level);
+    if (!level) return;
+    this.loadLevel(level);
+    // The old pan target belongs to the old map.
+    this.menuFocus.x = 0; this.menuFocus.y = 0;
+    this.menuDest.x = 0; this.menuDest.y = 0;
+    this.menuPanTimer = 0;
   }
 
   private onResize = (): void => {
@@ -169,10 +198,20 @@ export class Game {
   }
 
   private addPlayerFor(sourceId: string): void {
-    if (this.world.players.length >= 4) return;
+    if (this.world.players.length >= MAX_PLAYERS) return;
     this.claimed.add(sourceId);
     this.world.addPlayer(sourceId);
     this.relayout();
+  }
+
+  /** Bind each lobby device to a player and drop into the match. */
+  private startMatch(sourceIds: string[]): void {
+    for (const id of sourceIds) this.addPlayerFor(id);
+    this.phase = "playing";
+    this.relayout();
+    this.renderer.ambientLights = [];
+    const hint = document.getElementById("boot");
+    if (hint) { hint.hidden = false; hint.classList.add("show"); }
   }
 
   private toggleCameraMode(): void {
@@ -294,9 +333,17 @@ export class Game {
   private update(dt: number): void {
     this.input.update();
 
+    if (this.phase === "menu") {
+      if (this.lobby.update(this.input)) {
+        this.startMatch(this.lobby.slots.map((s) => s.sourceId));
+      }
+      if (this.banner.time > 0) this.banner.time -= dt;
+      return;
+    }
+
     // Drop-in co-op: any unclaimed pad that presses START/fire becomes a player.
     for (const src of this.input.pendingJoins(this.claimed)) {
-      if (this.world.players.length >= 4) break;
+      if (this.world.players.length >= MAX_PLAYERS) break;
       this.addPlayerFor(src.id);
     }
 
@@ -343,8 +390,55 @@ export class Game {
     }
   }
 
+  /**
+   * The menu backdrop: the level itself, seen from a slowly roving spotlight. It costs
+   * one extra visibility polygon per frame and means the first thing anyone sees is the
+   * game's actual lighting rather than a title card.
+   */
+  private renderMenu(frameDt: number): void {
+    const { world, renderer } = this;
+    const vp: Viewport = { x: 0, y: 0, w: renderer.width, h: renderer.height, playerIndex: 0 };
+
+    this.menuPanTimer -= frameDt;
+    if (this.menuPanTimer <= 0 || (this.menuDest.x === 0 && this.menuDest.y === 0)) {
+      const spot = world.map.randomWalkable() ?? world.map.mostOpenPoint();
+      this.menuDest.x = spot.x;
+      this.menuDest.y = spot.y;
+      this.menuPanTimer = MENU_PAN_SECONDS;
+      if (this.menuFocus.x === 0 && this.menuFocus.y === 0) {
+        this.menuFocus.x = spot.x;
+        this.menuFocus.y = spot.y;
+        this.menuCam.snapTo(spot.x, spot.y, 0);
+      }
+    }
+    // Glide the target rather than the camera, so the pan never stops or snaps.
+    this.menuFocus.x = damp(this.menuFocus.x, this.menuDest.x, 0.32, frameDt);
+    this.menuFocus.y = damp(this.menuFocus.y, this.menuDest.y, 0.32, frameDt);
+
+    this.menuCam.mode = "fixed";
+    this.menuCam.follow(
+      this.menuFocus.x, this.menuFocus.y, 0, vp,
+      world.map.worldWidth, world.map.worldHeight, frameDt,
+    );
+    // follow() sizes zoom for gameplay; the menu wants to show more of the room.
+    this.menuCam.zoom = Math.max(0.35, vp.h / MENU_VIEW_HEIGHT);
+
+    this.menuLight.x = this.menuCam.x;
+    this.menuLight.y = this.menuCam.y;
+    computeVisibility(world.map, this.menuLight);
+    renderer.ambientLights = [this.menuLight];
+
+    renderer.beginFrame();
+    renderer.renderViewport(world, vp, this.menuCam, 0);
+    this.lobby.draw(
+      renderer.ctx, renderer.width, renderer.height, renderer.dpr,
+      world.map.name, this.cameraMode,
+    );
+  }
+
   private render(alpha: number, frameDt: number): void {
     const { world, renderer } = this;
+    if (this.phase === "menu") { this.renderMenu(frameDt); return; }
     if (this.views.length !== Math.max(1, world.players.length)) this.relayout();
 
     for (let i = 0; i < this.views.length; i++) {

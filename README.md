@@ -65,12 +65,23 @@ cursor or stick names a world direction and you snap to it.
 
 ## Local co-op
 
-Player 1 is the keyboard and mouse. Plug in a gamepad and press `START` to drop in as
-player 2, 3 or 4 — the screen re-splits live (full → side by side → quadrants) and the
+The game boots into a lobby with nobody playing:
+
+1. **`ENTER` on the keyboard, or `START` on a controller** — you take the next free slot
+2. **Press it again** — you are ready
+3. **`ESC` / `B`** — un-ready, and again to leave the lobby
+4. When everyone in the lobby is ready, the match starts
+
+Up to four, in any mix of one keyboard and three pads. `[` `]` changes the map and `C`
+switches camera from the lobby too.
+
+Once you are playing, a controller that has not joined yet can still press `START` to
+drop in mid-match — the screen re-splits live (full → side by side → quadrants) and the
 new player spawns next to the squad.
 
 To work on the split-screen layout without four controllers plugged in, open
-`?players=4`. The extra players are inert but fully rendered.
+`?players=4`. That skips the lobby entirely and starts with four players, the extra
+three inert but fully rendered — which is also how the test suite drives the game.
 
 ## Maps
 

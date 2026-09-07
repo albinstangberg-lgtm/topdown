@@ -29,7 +29,9 @@
         color: #6a7080;
         pointer-events: none;
         letter-spacing: 0.04em;
-        /* Gets out of the way of the split-screen HUD once you have read it. */
+      }
+      /* Shown once the match starts, then gets out of the split-screen HUD's way. */
+      #boot.show {
         animation: fade-hint 1s ease-out 9s forwards;
       }
       @keyframes fade-hint {
@@ -39,7 +41,7 @@
   </head>
   <body>
     <canvas id="game"></canvas>
-    <div id="boot">
+    <div id="boot" hidden>
       WASD move · mouse steers · click/space fire · shift dash · gamepad START to join ·
       C camera · F1 debug · [ ] change map · drop or paste a map to load it ·
       <a href="./editor.html">map editor</a>

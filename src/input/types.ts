@@ -38,6 +38,8 @@ export interface InputState {
   interactPressed: boolean;
   /** Used only by the join flow (START / Enter). */
   startPressed: boolean;
+  /** Back out: leave the lobby, un-ready, close a menu. Escape or B. */
+  cancelPressed: boolean;
 }
 
 export function emptyInput(): InputState {
@@ -52,6 +54,7 @@ export function emptyInput(): InputState {
     interact: false,
     interactPressed: false,
     startPressed: false,
+    cancelPressed: false,
   };
 }
 
@@ -59,6 +62,8 @@ export function emptyInput(): InputState {
 export interface InputSource {
   readonly id: string;
   readonly kind: "keyboard" | "gamepad";
+  /** Human-readable name, shown in the lobby so people know which slot is theirs. */
+  readonly label: string;
   /** Called once per simulation step. Must fill `out` completely. */
   sample(out: InputState): void;
   /** True while the device still exists (a gamepad can be unplugged). */
