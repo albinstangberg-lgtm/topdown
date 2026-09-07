@@ -27,6 +27,11 @@
         color: #6a7080;
         pointer-events: none;
         letter-spacing: 0.04em;
+        /* Gets out of the way of the split-screen HUD once you have read it. */
+        animation: fade-hint 1s ease-out 9s forwards;
+      }
+      @keyframes fade-hint {
+        to { opacity: 0; }
       }
     </style>
   </head>
