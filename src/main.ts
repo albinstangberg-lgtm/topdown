@@ -6,12 +6,23 @@ import { parseLevelText, type LevelData } from "./world/level";
 import { BUILTIN_LEVELS, PROCEDURAL, resolveLevel } from "./levels";
 import type { Player } from "./sim/entities";
 import { STEER_RATE, TURN_RATE, type AimCommand } from "./sim/player";
+import { clamp } from "./core/math";
 import { emptyInput } from "./input/types";
 import { Camera, type CameraMode } from "./render/camera";
 import { Renderer } from "./render/renderer";
 import { layoutViewports, type Viewport } from "./render/viewport";
 import { drawBanner, drawHud, drawSplitBorders } from "./render/hud";
 import { DebugOverlay } from "./render/debug";
+
+/** Cursor distance from the player, in CSS pixels, below which steering is neutral. */
+const POINTER_DEADZONE = 40;
+/** Cursor distance at which steering is at full rate, as a fraction of viewport height. */
+const POINTER_FULL_FRACTION = 0.35;
+/**
+ * Response curve on deflection. 1 is linear; above 1 gives finer control near centre,
+ * which is what you want when the same stick has to both scan a room and spin you round.
+ */
+const STEER_RESPONSE = 1.5;
 
 /**
  * Game shell: owns the loop, the input manager, the world, and one camera per player.
@@ -225,10 +236,15 @@ export class Game {
 
     if (this.cameraMode === "rotating") {
       if (!view) return null;
-      const screenAngle = this.screenAimAngle(input, view.cam, view.vp);
-      if (screenAngle === null) return { angle: p.facing, turnRate: STEER_RATE };
+      const aim = this.screenAim(input, view.cam, view.vp);
+      // No deflection: hold this heading rather than drifting.
+      if (aim === null) return { angle: p.facing, turnRate: 0 };
       // Screen angle is measured from straight up; the camera's angle is that direction.
-      return { angle: view.cam.angle + screenAngle, turnRate: STEER_RATE };
+      // Turn rate scales with deflection, so a nudge scans and a full push spins.
+      return {
+        angle: view.cam.angle + aim.angle,
+        turnRate: STEER_RATE * Math.pow(aim.strength, STEER_RESPONSE),
+      };
     }
 
     if (input.aimMode === "stick") {
@@ -244,21 +260,35 @@ export class Game {
   };
 
   /**
-   * How far off straight-up the aim input is pointing, in radians. Both devices answer
-   * the same question: a stick by its deflection, a mouse by where the cursor sits
-   * relative to the player's anchor on screen. Null means "no input, hold this heading".
+   * The aim input as a steering command: which way off straight-up it points, and how
+   * hard it is pushed. Both devices answer the same two questions — a stick by its
+   * angle and deflection, a mouse by where the cursor sits relative to the player's
+   * anchor and how far away it is. Null means "no input, hold this heading".
    */
-  private screenAimAngle(input: InputState, cam: Camera, vp: Viewport): number | null {
+  private screenAim(
+    input: InputState, cam: Camera, vp: Viewport,
+  ): { angle: number; strength: number } | null {
     if (input.aimMode === "stick") {
-      if (input.aimX === 0 && input.aimY === 0) return null;
-      return Math.atan2(input.aimY, input.aimX) + Math.PI / 2;
+      if (input.aimStrength <= 0) return null;
+      return {
+        angle: Math.atan2(input.aimY, input.aimX) + Math.PI / 2,
+        strength: Math.min(1, input.aimStrength),
+      };
     }
+
     const anchor = cam.anchorScreen(vp);
     const dx = input.pointerX - anchor.x;
     const dy = input.pointerY - anchor.y;
-    // A dead zone around the player, or the cursor sitting on them spins the view.
-    if (dx * dx + dy * dy < 40 * 40) return null;
-    return Math.atan2(dy, dx) + Math.PI / 2;
+    const dist = Math.hypot(dx, dy);
+    // A dead zone around the player: the cursor sitting on them would spin the view.
+    if (dist < POINTER_DEADZONE) return null;
+    // Distance from the player is the mouse's equivalent of stick deflection, scaled to
+    // the viewport so a quarter-screen player is not forced into a smaller range.
+    const full = POINTER_DEADZONE + vp.h * POINTER_FULL_FRACTION;
+    return {
+      angle: Math.atan2(dy, dx) + Math.PI / 2,
+      strength: clamp((dist - POINTER_DEADZONE) / (full - POINTER_DEADZONE), 0, 1),
+    };
   }
 
   private update(dt: number): void {

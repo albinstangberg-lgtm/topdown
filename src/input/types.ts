@@ -17,6 +17,15 @@ export interface InputState {
   /** Stick aim: unit direction. Zero when the stick is centred. */
   aimX: number;
   aimY: number;
+  /**
+   * How far the aim device is deflected, 0..1, AFTER the deadzone rescale. Direction
+   * and deflection are separate because a rotating camera turns at a rate rather than
+   * snapping to an angle — a nudged stick should scan, a slammed one should spin.
+   *
+   * Pointer sources leave this at 0: their deflection is the cursor's distance from the
+   * player on screen, which only the camera can answer, so the game shell fills it in.
+   */
+  aimStrength: number;
   /** Pointer aim: position in CSS pixels relative to the canvas. */
   pointerX: number;
   pointerY: number;
@@ -36,6 +45,7 @@ export function emptyInput(): InputState {
     moveX: 0, moveY: 0,
     aimMode: "stick",
     aimX: 1, aimY: 0,
+    aimStrength: 0,
     pointerX: 0, pointerY: 0,
     fire: false, firePressed: false,
     dash: false, dashPressed: false,

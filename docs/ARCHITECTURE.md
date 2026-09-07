@@ -33,6 +33,16 @@ Consequences you get for free:
 - drop-in join is a device asking to be claimed (`pendingJoins`)
 - rebinding, replays and AI-driven "players" all plug into the same seam
 
+One detail worth copying: aim direction and aim *deflection* are separate fields. It is
+tempting to normalise a stick to a unit vector and be done, but that throws away the
+magnitude — and with a rotating camera the magnitude is the turn rate, which is the
+difference between scanning a room and spinning on the spot. Keep both.
+
+Headless browsers cannot produce gamepad input, so the smoke suite stands up a virtual
+standard-mapping pad by stubbing `navigator.getGamepads`. That proves the source logic —
+discovery, deadzone, join, steering, buttons — but not that any particular controller
+reports those button numbers. Real hardware is still the only test for that.
+
 The one place presentation leaks into the sim is mouse aiming, because a cursor is a
 screen position that needs a camera to become a world angle. That conversion is isolated
 in `Game.resolveAim` and nowhere else.

@@ -72,6 +72,9 @@ export class KeyboardMouseSource implements InputSource {
     out.pointerY = this.py;
     out.aimX = 0;
     out.aimY = 0;
+    // Deflection for a cursor is its distance from the player on screen, which needs
+    // the camera — the game shell fills it in.
+    out.aimStrength = 0;
 
     const fire = this.mouseDown || k.has("Space");
     const dash = k.has("ShiftLeft") || k.has("ShiftRight");

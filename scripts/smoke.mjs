@@ -203,6 +203,28 @@ check("aim steers the view and settles when pointed dead ahead",
   turned > 0.5 && held < 0.02 && Math.abs(steerRight) < 0.02,
   `dead-ahead ${steerRight.toFixed(3)}, right ${turned.toFixed(3)}, deadzone ${held.toFixed(4)}`);
 
+// Steering is proportional: a cursor just outside the dead zone scans, a far one spins.
+const steerRate = async (offsetX) => {
+  await camPage.mouse.move(640, 720 * 0.78 - 220); // recentre, stop turning
+  await camPage.waitForTimeout(250);
+  await camPage.mouse.move(640 + offsetX, 720 * 0.78);
+  return camPage.evaluate(async () => {
+    const p = window.game.world.players[0];
+    const a0 = p.facing;
+    await new Promise((r) => setTimeout(r, 500));
+    let d = p.facing - a0;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return Math.abs(d);
+  });
+};
+const nudge = await steerRate(100);
+const shove = await steerRate(320);
+check("mouse steering is proportional to distance from the player",
+  nudge > 0.02 && shove > nudge * 2.5,
+  `near ${nudge.toFixed(3)} rad, far ${shove.toFixed(3)} rad`);
+await camPage.mouse.move(640, 720 * 0.78 - 220);
+
 const toggled = await camPage.evaluate(async () => {
   window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyC" }));
   await new Promise((r) => setTimeout(r, 200));
@@ -212,6 +234,105 @@ const toggled = await camPage.evaluate(async () => {
 check("C toggles back to the fixed camera",
   toggled.mode === "fixed" && toggled.rotation === 0, JSON.stringify(toggled));
 check("camera page raised no exceptions", camErrors.length === 0, camErrors.join(" | "));
+
+// --- gamepad -----------------------------------------------------------------
+
+// Headless Chromium cannot produce real pad input, so stand up a virtual standard-
+// mapping pad. This does not prove any particular controller reports these button
+// numbers, but it does exercise the whole source: discovery, deadzone, join, steering.
+const padPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const padErrors = [];
+padPage.on("pageerror", (e) => padErrors.push(String(e)));
+await padPage.addInitScript(() => {
+  const pad = {
+    index: 0,
+    id: "virtual test pad (standard)",
+    connected: true,
+    mapping: "standard",
+    axes: [0, 0, 0, 0],
+    buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0, touched: false })),
+    timestamp: 0,
+  };
+  window.__pad = pad;
+  navigator.getGamepads = () => [pad];
+});
+await padPage.goto(`${URL}?level=showcase`, { waitUntil: "load" });
+await padPage.waitForTimeout(400);
+
+const joined = await padPage.evaluate(async () => {
+  window.__pad.buttons[9].pressed = true;   // START
+  await new Promise((r) => setTimeout(r, 250));
+  window.__pad.buttons[9].pressed = false;
+  await new Promise((r) => setTimeout(r, 250));
+  return { players: window.game.world.players.length, views: window.game.views.length };
+});
+check("a gamepad pressing START drops in as a second player",
+  joined.players === 2 && joined.views === 2, JSON.stringify(joined));
+
+// Left stick pushed "up" must walk along the camera's forward, same as WASD.
+const padWalk = await padPage.evaluate(async () => {
+  const p = window.game.world.players[1];
+  const cam = window.game.cameras[1];
+  const T = 48;
+  p.x = 12.5 * T; p.y = 9.5 * T; p.prevX = p.x; p.prevY = p.y; p.vx = 0; p.vy = 0;
+  cam.snapTo(p.x, p.y, p.facing);
+  await new Promise((r) => setTimeout(r, 150));
+  const a = cam.angle;
+  const x0 = p.x;
+  const y0 = p.y;
+  window.__pad.axes[1] = -1;                // left stick up
+  await new Promise((r) => setTimeout(r, 400));
+  window.__pad.axes[1] = 0;
+  let rel = Math.atan2(p.y - y0, p.x - x0) - a;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+  return { deg: (rel * 180) / Math.PI, dist: Math.hypot(p.x - x0, p.y - y0) };
+});
+check("left stick moves relative to that player's own camera",
+  padWalk.dist > 40 && Math.abs(padWalk.deg) < 12,
+  `${padWalk.deg.toFixed(1)}deg over ${padWalk.dist.toFixed(0)}u`);
+
+// The point of the exercise: deflection sets the turn RATE, not just the direction.
+const padTurn = async (x) => padPage.evaluate(async (deflection) => {
+  window.__pad.axes[2] = 0;
+  await new Promise((r) => setTimeout(r, 200));
+  const p = window.game.world.players[1];
+  const a0 = p.facing;
+  window.__pad.axes[2] = deflection;        // right stick, pushed right
+  await new Promise((r) => setTimeout(r, 500));
+  window.__pad.axes[2] = 0;
+  let d = p.facing - a0;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}, x);
+
+const halfPush = await padTurn(0.5);
+const fullPush = await padTurn(1);
+const inDeadzone = await padTurn(0.15);
+check("right stick deflection sets the turn rate",
+  fullPush > 1 && halfPush > 0.05 && fullPush > halfPush * 2.5 && Math.abs(inDeadzone) < 0.02,
+  `full ${fullPush.toFixed(3)}, half ${halfPush.toFixed(3)}, deadzone ${inDeadzone.toFixed(4)}`);
+
+const padButtons = await padPage.evaluate(async () => {
+  const p = window.game.world.players[1];
+  const before = p.dashCooldown;
+  window.__pad.buttons[6].pressed = true;   // LT = dash
+  window.__pad.axes[0] = 1;                 // needs a direction to dash in
+  await new Promise((r) => setTimeout(r, 200));
+  window.__pad.buttons[6].pressed = false;
+  window.__pad.axes[0] = 0;
+  const dashed = p.dashCooldown > before;
+
+  const ammo = p.ammo;
+  window.__pad.buttons[7] = { pressed: true, value: 1, touched: true }; // RT = fire
+  await new Promise((r) => setTimeout(r, 300));
+  window.__pad.buttons[7] = { pressed: false, value: 0, touched: false };
+  return { dashed, fired: p.ammo < ammo };
+});
+check("gamepad trigger fires and LT dashes",
+  padButtons.dashed && padButtons.fired, JSON.stringify(padButtons));
+check("gamepad page raised no exceptions", padErrors.length === 0, padErrors.join(" | "));
 
 // --- level import ------------------------------------------------------------
 

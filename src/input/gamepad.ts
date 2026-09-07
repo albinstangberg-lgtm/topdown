@@ -38,6 +38,7 @@ export class GamepadSource implements InputSource {
     const gp = this.pad();
     if (!gp) {
       out.moveX = 0; out.moveY = 0;
+      out.aimStrength = 0;
       out.fire = false; out.firePressed = false;
       out.dash = false; out.dashPressed = false;
       out.interact = false; out.interactPressed = false; out.startPressed = false;
@@ -50,12 +51,16 @@ export class GamepadSource implements InputSource {
     const [rx, ry] = applyDeadzone(ax[2] ?? 0, ax[3] ?? 0);
     out.aimMode = "stick";
     if (rx !== 0 || ry !== 0) {
+      // Direction and deflection are reported separately: the deflection is what makes
+      // turning proportional, and normalising the vector would throw it away.
       const len = Math.hypot(rx, ry);
       out.aimX = rx / len;
       out.aimY = ry / len;
+      out.aimStrength = Math.min(1, len);
     } else {
       out.aimX = 0;
       out.aimY = 0; // caller keeps the previous facing
+      out.aimStrength = 0;
     }
 
     const btn = (i: number): boolean => gp.buttons[i]?.pressed ?? false;

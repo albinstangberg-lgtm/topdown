@@ -31,7 +31,7 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Action | Keyboard + mouse | Gamepad |
 | --- | --- | --- |
 | Move | `WASD` (relative to the screen) | Left stick |
-| Steer / aim | Mouse | Right stick |
+| Steer / aim | Mouse (rate scales with distance) | Right stick (rate scales with push) |
 | Fire | Left click / `Space` | RT / RB / A |
 | Dash | `Shift` | LT / B |
 | Revive teammate | Hold `E` | Hold X |
@@ -54,6 +54,11 @@ becomes **steering**: how far the cursor (or the right stick) sits off straight-
 turn command, and you settle onto a heading by pointing dead ahead. There is a dead zone
 around the player so a parked cursor holds your heading. `WASD` and the left stick are
 screen-relative in this mode: forward is wherever the camera is looking.
+
+Steering is **proportional**: the turn *rate* comes from how hard the device is pushed —
+stick deflection, or the cursor's distance from the player — so a nudge scans a room
+slowly and a full push spins you round. The response curve favours fine control near
+centre (`STEER_RESPONSE` in `src/main.ts`).
 
 **Fixed** is the classic twin-stick camera: north stays north, aiming is absolute — the
 cursor or stick names a world direction and you snap to it.
