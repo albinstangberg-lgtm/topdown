@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>topdown — twin-stick prototype</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #05060a;
+        overflow: hidden;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: #d8dae0;
+      }
+      #game {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        cursor: crosshair;
+      }
+      #boot {
+        position: fixed;
+        inset: auto 0 16px 0;
+        text-align: center;
+        font-size: 12px;
+        color: #6a7080;
+        pointer-events: none;
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="boot">WASD move · mouse aim · click/space fire · shift dash · gamepad START to join · F1 debug</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

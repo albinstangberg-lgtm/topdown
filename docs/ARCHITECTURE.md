@@ -1,0 +1,148 @@
+# Cores to build, and why
+
+Answering the actual question: *what should I build first for a top-down twin-stick
+shooter that becomes 4-player split-screen co-op?*
+
+The short version: **build the four-player assumption into the foundation now.**
+Retrofitting split screen onto a game that assumed one camera, one HUD and one input
+device is the single most expensive mistake available in this genre. Almost everything
+below is cheap on day one and brutal on day two hundred.
+
+Each core below maps to a file in `src/`, and each has a `CORE n` comment at the top of
+that file.
+
+---
+
+## The load-bearing eight
+
+### 1. Fixed-timestep loop — `src/core/loop.ts`
+
+Simulate in fixed slices, render with interpolation. Not for physics purity: it is the
+precondition for the same game running identically at 60Hz and 144Hz, for replays, and
+for any netcode you might want later. Retrofitting this once movement, cooldowns and AI
+all read a variable `dt` means touching every system you own.
+
+### 2. Device-agnostic input — `src/input/`
+
+The most important boundary in a local co-op game. A player consumes an `InputState`
+struct — move vector, aim, fire, dash. It does not know whether that came from a mouse
+or a stick. `InputSource` is the interface; keyboard and gamepad are two implementations.
+
+Consequences you get for free:
+- adding player 2 is binding a second source, not writing a second control path
+- drop-in join is a device asking to be claimed (`pendingJoins`)
+- rebinding, replays and AI-driven "players" all plug into the same seam
+
+The one place presentation leaks into the sim is mouse aiming, because a cursor is a
+screen position that needs a camera to become a world angle. That conversion is isolated
+in `Game.resolveAim` and nowhere else.
+
+### 3. World grid + collision — `src/world/`
+
+A tile grid, not a polygon soup. It buys O(1) collision lookups, near-free raycasts for
+the vision cone, and a level format you can generate or edit as text. Actors are circles,
+walls are boxes, movement is substepped so a dash cannot tunnel. `generateLevel` is a
+placeholder — nothing outside it knows how the grid got its shape, so a real level format
+drops in later without touching gameplay.
+
+### 4. Vision / line of sight — `src/vision/visibility.ts`
+
+The cone is the game. It is a visibility polygon: fan rays across the cone, keep where
+each stops, connect them. Neighbouring rays that disagree wildly mark a shadow edge, so
+we subdivide there instead of brute-forcing thousands of rays.
+
+Build it as a **shared primitive from the start**, because at least four things want it:
+the player's light, the darkness mask, enemy perception, and later AI cover-finding and
+stealth. Compute each light once per frame and reuse it across viewports — with four
+players that is a 4× saving that costs nothing to design in and is annoying to add later.
+
+### 5. Entities and pools — `src/sim/entities.ts`, `src/sim/pools.ts`
+
+Plain data in flat per-kind arrays. Not an ECS — at this size an ECS costs more than it
+returns. The rule that keeps the door open: systems hold ids, never cross-frame object
+references. Bullets and particles are fixed-capacity pools so the per-frame churn never
+allocates.
+
+### 6. Co-op state, not player state — `src/sim/player.ts`, `src/sim/world.ts`
+
+Decide early that "dead" is a *shared* problem. Here: a player at zero health goes
+**downed**, crawls, and a teammate revives them by standing close and holding a button;
+bleed out with someone still up and you respawn at the squad; the whole squad down is a
+run reset. Every one of those rules is about the group, and they are much harder to add
+once "player dies, player respawns" is baked into a dozen systems.
+
+### 7. Cameras and viewports — `src/render/camera.ts`, `src/render/viewport.ts`
+
+**Nothing may assume one screen.** Every draw call takes a viewport. The layout is
+derived from the live player count (full → side by side → quadrants). Each viewport gets
+its own camera, which follows its player biased toward where they are aiming so the cone
+gets the screen space rather than the wall behind them.
+
+The subtle one: viewports show a **fixed world height**, not a fixed zoom. A player in a
+quarter of the screen must not see a quarter of the world — that turns split screen into
+a handicap.
+
+### 8. Renderer + lighting composite — `src/render/renderer.ts`
+
+Draw order is the whole trick:
+
+1. floor, fully lit
+2. actors, fully lit — an enemy in the dark is skipped entirely, not drawn-then-hidden
+3. additive warm pass: what makes the cone read as light rather than as a hole
+4. darkness: one opaque layer with every visibility polygon punched out of it
+5. wall silhouettes on top, so blocks stay pure black everywhere
+6. HUD, in screen space, per viewport
+
+**Vision is shared across the squad.** Every viewport composites every player's light, so
+you light rooms for each other. That single decision is most of what makes co-op darkness
+social rather than four people playing alone next to each other.
+
+---
+
+## The supporting cores
+
+- **AI perception on the same primitive** (`src/sim/enemy.ts`) — an enemy sees you when
+  you are in its cone *and* it has line of sight. Symmetry with the player's vision is
+  what makes a light-and-shadow shooter fair and readable.
+- **A director, not a spawn table** (`GameWorld.updateDirector`) — population scales with
+  the number of players, and spawns are placed out of everyone's sight. Difficulty in a
+  drop-in co-op game has to be a function of squad size from the first line of it.
+- **HUD per viewport** (`src/render/hud.ts`) — anything drawn "at the top of the screen"
+  is a bug waiting for player 3. Off-screen teammate markers and downed alerts matter
+  more than health bars once the squad splits up.
+- **Debug view on day one** (`src/render/debug.ts`) — `F1`. Frame timings, entity counts,
+  AI states, collision grid. Build it before you need it.
+- **A headless smoke test** (`scripts/smoke.mjs`) — drives the real build in a browser and
+  asserts systems talk to each other. Cheap insurance for a codebase where everything is
+  coupled through one world object.
+
+---
+
+## What is deliberately not here yet
+
+In rough order of when it starts hurting:
+
+1. **Audio** — positional audio in split screen is its own design problem: four
+   listeners, one output. Decide early whether audio is per-player panned or a single
+   listener at the squad centroid.
+2. **Controller assignment / menus** — a real join flow (a lobby, "press START", colour
+   picking, pause that does not stop the other three players).
+3. **Level content pipeline** — replace `generateLevel` with authored levels; keep the
+   `TileMap` interface so nothing else changes.
+4. **Weapons as data** — `WEAPONS` is already a table; make it content, add pickups,
+   ammo economy, and per-player loadouts.
+5. **Spatial hash** — the enemy/bullet loops are O(n·m). Fine at these counts, and the
+   day it isn't, a uniform grid over `TILE` slots in behind the same call sites.
+6. **Netcode** — the fixed timestep and plain-data world are the two prerequisites, which
+   is why they are cores 1 and 5. Swap `Math.random` for the seeded `mulberry32` in
+   `core/math.ts` first: determinism is a habit, not a refactor.
+
+## Tuning knobs worth knowing
+
+| What | Where |
+| --- | --- |
+| Cone angle, range, player speed, dash, revive rules | `src/sim/player.ts` (top of file) |
+| How dark the dark is | `AMBIENT_DARKNESS` in `src/render/renderer.ts` |
+| Vision ray density and shadow-edge sharpness | `BASE_STEP`, `REFINE_THRESHOLD` in `src/vision/visibility.ts` |
+| World size, room count, enemies per player | `src/world/tilemap.ts`, `src/sim/world.ts` |
+| Zoom / world height per viewport | `VIEW_HEIGHT` in `src/render/camera.ts` |
