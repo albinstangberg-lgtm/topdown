@@ -10,12 +10,21 @@ import { TILE, type TileMap } from "./tilemap";
  *
  * Returns the distance to the first opaque tile, or `maxDist` if nothing was hit.
  */
+export type RayBlocker = "sight" | "shot";
+
 export function raycast(
   map: TileMap, ox: number, oy: number, dx: number, dy: number, maxDist: number,
+  blocker: RayBlocker = "sight",
 ): number {
+  // "sight" stops at opaque tiles, "shot" at solid ones. Glass is the tile where the
+  // two disagree, and an aim laser that ignored it would be lying to the player.
+  const blocks = blocker === "sight"
+    ? (x: number, y: number): boolean => map.isOpaque(x, y)
+    : (x: number, y: number): boolean => map.isSolid(x, y);
+
   let tx = Math.floor(ox / TILE);
   let ty = Math.floor(oy / TILE);
-  if (map.isOpaque(tx, ty)) return 0;
+  if (blocks(tx, ty)) return 0;
 
   const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
   const stepY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
@@ -37,12 +46,12 @@ export function raycast(
     if (tMaxX < tMaxY) {
       if (tMaxX > maxDist) return maxDist;
       tx += stepX;
-      if (map.isOpaque(tx, ty)) return tMaxX;
+      if (blocks(tx, ty)) return tMaxX;
       tMaxX += tDeltaX;
     } else {
       if (tMaxY > maxDist) return maxDist;
       ty += stepY;
-      if (map.isOpaque(tx, ty)) return tMaxY;
+      if (blocks(tx, ty)) return tMaxY;
       tMaxY += tDeltaY;
     }
   }

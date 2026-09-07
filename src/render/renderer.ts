@@ -1,6 +1,7 @@
 import { lerp, TAU } from "../core/math";
 import { TILE } from "../world/tilemap";
 import { tileDef } from "../world/tiles";
+import { raycast } from "../world/raycast";
 import type { GameWorld } from "../sim/world";
 import type { VisionLight } from "../vision/visibility";
 import type { Camera } from "./camera";
@@ -23,6 +24,15 @@ import type { Viewport } from "./viewport";
 const COLOR_FLOOR = "#cfc9b4";
 const COLOR_WALL = "#07070c";
 const AMBIENT_DARKNESS = 0.94; // 1 = pitch black outside the cones
+/**
+ * Flashlight strength. REVEAL is how much darkness the cone removes (1 = fully lit
+ * floor), GLOW is the additive warmth on top. Deliberately well under 1: a blown-out
+ * cone hides tracers, muzzle flashes and anything else drawn bright.
+ */
+const FLASHLIGHT_REVEAL = 0.55;
+const FLASHLIGHT_GLOW = 0.15;
+const HALO_REVEAL = 0.34;
+const HALO_GLOW = 0.04;
 
 export interface Bounds { x0: number; y0: number; x1: number; y1: number }
 
@@ -90,7 +100,6 @@ export class Renderer {
     this.drawLamps(ctx, world, bounds);
     this.drawParticles(ctx, world);
     this.drawActors(ctx, world, alpha);
-    this.drawBullets(ctx, world);
     this.drawWarmLight(ctx, world, bounds);
     ctx.restore();
 
@@ -98,6 +107,10 @@ export class Renderer {
 
     ctx.save();
     cam.applyTransform(ctx, vp);
+    // Aim lasers and tracers sit ON TOP of the darkness: a bullet you cannot see is a
+    // bullet you cannot learn from, and the whole point of a tracer is that it glows.
+    this.drawAimLines(ctx, world);
+    this.drawBullets(ctx, world);
     this.drawLightEdges(ctx, world);
     this.drawWalls(ctx, bounds, world);
     this.drawTeammateMarkers(ctx, world, vp);
@@ -231,7 +244,8 @@ export class Renderer {
       const x = lerp(p.prevX, p.x, alpha);
       const y = lerp(p.prevY, p.y, alpha);
       const body = p.downed ? "#6b6b6b" : (p.hurtFlash > 0.15 ? "#ffffff" : p.color);
-      drawBlockActor(ctx, x, y, p.facing, p.radius, body, "#ffffff", true);
+      // The barrel extends as the weapon comes up — stance is readable without UI.
+      drawBlockActor(ctx, x, y, p.facing, p.radius, body, "#ffffff", true, 0.45 + p.weaponUp * 0.55);
 
       if (p.muzzleFlash > 0) {
         const mx = x + Math.cos(p.facing) * (p.radius + 14);
@@ -289,8 +303,8 @@ export class Renderer {
   private drawWarmLight(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
     ctx.globalCompositeOperation = "lighter";
     for (const p of world.players) {
-      if (lightVisible(p.cone, b)) fillLight(ctx, p.cone, 0.30 * p.cone.intensity);
-      if (lightVisible(p.halo, b)) fillLight(ctx, p.halo, 0.07);
+      if (lightVisible(p.cone, b)) fillLight(ctx, p.cone, FLASHLIGHT_GLOW * p.cone.intensity);
+      if (lightVisible(p.halo, b)) fillLight(ctx, p.halo, HALO_GLOW);
     }
     for (const e of world.enemies) {
       if (lightVisible(e.cone, b)) fillLight(ctx, e.cone, 0.10 * e.cone.intensity);
@@ -324,8 +338,8 @@ export class Renderer {
     // Every player's vision is shared with the whole squad — you light rooms for
     // each other, which is the entire social point of co-op darkness.
     for (const p of world.players) {
-      if (lightVisible(p.cone, b)) eraseLight(lctx, p.cone, 1);
-      if (lightVisible(p.halo, b)) eraseLight(lctx, p.halo, 0.55);
+      if (lightVisible(p.cone, b)) eraseLight(lctx, p.cone, FLASHLIGHT_REVEAL);
+      if (lightVisible(p.halo, b)) eraseLight(lctx, p.halo, HALO_REVEAL);
     }
     for (const light of world.staticLights) {
       if (lightVisible(light, b)) eraseLight(lctx, light, 0.85);
@@ -343,6 +357,49 @@ export class Renderer {
     ctx.restore();
   }
 
+  /**
+   * The aim laser. It only exists while the weapon is up, which is what makes the
+   * weapon stance readable at a glance — and it stops where a bullet would stop, so
+   * it tells the truth about glass and cover.
+   */
+  private drawAimLines(ctx: CanvasRenderingContext2D, world: GameWorld): void {
+    ctx.globalCompositeOperation = "lighter";
+    for (const p of world.players) {
+      if (p.weaponUp <= 0.02 || p.downed) continue;
+
+      const cos = Math.cos(p.facing);
+      const sin = Math.sin(p.facing);
+      const mx = p.x + cos * (p.radius + 10);
+      const my = p.y + sin * (p.radius + 10);
+      const dist = raycast(world.map, mx, my, cos, sin, p.weapon.range, "shot");
+      const ex = mx + cos * dist;
+      const ey = my + sin * dist;
+
+      const strength = p.weaponUp * p.weaponUp;
+      const beam = ctx.createLinearGradient(mx, my, ex, ey);
+      beam.addColorStop(0, withAlpha(p.color, 0.5 * strength));
+      beam.addColorStop(1, withAlpha(p.color, 0.06 * strength));
+      ctx.strokeStyle = beam;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(mx, my);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+
+      // Reticle where the shot lands.
+      ctx.strokeStyle = withAlpha(p.color, 0.7 * strength);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ex, ey, 5, 0, TAU);
+      ctx.stroke();
+      ctx.fillStyle = withAlpha(p.color, 0.35 * strength);
+      ctx.beginPath();
+      ctx.arc(ex, ey, 2, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
   /** The bright rim where light meets a wall face. Cheap, and it sells the whole look. */
   private drawLightEdges(ctx: CanvasRenderingContext2D, world: GameWorld): void {
     ctx.globalCompositeOperation = "lighter";
@@ -354,7 +411,7 @@ export class Renderer {
       // sprite out. Only the far boundary — the part that hugs walls — is stroked.
       // The stroke fades on the same curve as the light itself, otherwise the rim
       // keeps drawing walls at the far end of the cone where nothing is actually lit.
-      ctx.strokeStyle = lightGradient(ctx, p.cone, "#fff0c8", 0.55);
+      ctx.strokeStyle = lightGradient(ctx, p.cone, "#fff0c8", 0.32);
       ctx.beginPath();
       ctx.moveTo(poly[2], poly[3]);
       for (let i = 4; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);
@@ -438,7 +495,7 @@ function withAlpha(hex: string, alpha: number): string {
 /** A blocky actor: body square, barrel stub, outline. Placeholder art, on purpose. */
 function drawBlockActor(
   ctx: CanvasRenderingContext2D, x: number, y: number, facing: number,
-  radius: number, body: string, outline: string, thickOutline = false,
+  radius: number, body: string, outline: string, thickOutline = false, barrel = 1,
 ): void {
   ctx.save();
   ctx.translate(x, y);
@@ -455,6 +512,6 @@ function drawBlockActor(
 
   // Barrel, always pointing along `facing` — the only readable direction cue on a block.
   ctx.fillStyle = outline;
-  ctx.fillRect(radius - 2, -3, 16, 6);
+  ctx.fillRect(radius - 2, -3, 16 * barrel, 6);
   ctx.restore();
 }

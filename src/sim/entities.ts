@@ -71,6 +71,10 @@ export interface Player {
   muzzleFlash: number;
   hurtFlash: number;
   kills: number;
+  /** 0 = weapon at rest, 1 = shouldered and ready. Only a raised weapon can fire. */
+  weaponUp: number;
+  /** Keeps the weapon up through brief lulls, so small aim corrections do not bob it. */
+  weaponHold: number;
   cone: VisionLight;
   halo: VisionLight;
 }

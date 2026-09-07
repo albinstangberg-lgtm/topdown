@@ -5,7 +5,7 @@ import { GameWorld } from "./sim/world";
 import { parseLevelText, type LevelData } from "./world/level";
 import { BUILTIN_LEVELS, PROCEDURAL, resolveLevel } from "./levels";
 import type { Player } from "./sim/entities";
-import { STEER_RATE, TURN_RATE, type AimCommand } from "./sim/player";
+import { STEER_RATE, TURN_RATE, WEAPON_RAISE_THRESHOLD, type AimCommand } from "./sim/player";
 import { clamp, damp } from "./core/math";
 import { emptyInput } from "./input/types";
 import { Camera, type CameraMode } from "./render/camera";
@@ -276,26 +276,29 @@ export class Game {
     if (this.cameraMode === "rotating") {
       if (!view) return null;
       const aim = this.screenAim(input, view.cam, view.vp);
-      // No deflection: hold this heading rather than drifting.
-      if (aim === null) return { angle: p.facing, turnRate: 0 };
+      // No deflection: hold this heading rather than drifting, weapon at rest.
+      if (aim === null) return { angle: p.facing, turnRate: 0, raise: false };
       // Screen angle is measured from straight up; the camera's angle is that direction.
-      // Turn rate scales with deflection, so a nudge scans and a full push spins.
+      // Turn rate scales with deflection, so a nudge scans and a full push spins, and
+      // the same deflection decides whether the weapon comes up.
       return {
         angle: view.cam.angle + aim.angle,
         turnRate: STEER_RATE * Math.pow(aim.strength, STEER_RESPONSE),
+        raise: aim.strength >= WEAPON_RAISE_THRESHOLD,
       };
     }
 
+    // Fixed camera keeps absolute aiming, which is a permanently shouldered weapon.
     if (input.aimMode === "stick") {
       if (input.aimX === 0 && input.aimY === 0) return null;
-      return { angle: Math.atan2(input.aimY, input.aimX), turnRate: TURN_RATE };
+      return { angle: Math.atan2(input.aimY, input.aimX), turnRate: TURN_RATE, raise: true };
     }
     if (!view) return null;
     const world = view.cam.screenToWorld(input.pointerX, input.pointerY, view.vp);
     const dx = world.x - p.x;
     const dy = world.y - p.y;
     if (dx * dx + dy * dy < 4) return null;
-    return { angle: Math.atan2(dy, dx), turnRate: TURN_RATE };
+    return { angle: Math.atan2(dy, dx), turnRate: TURN_RATE, raise: true };
   };
 
   /**

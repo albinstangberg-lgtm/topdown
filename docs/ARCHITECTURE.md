@@ -171,6 +171,10 @@ with the game.
   nothing about the simulation: it hands back a list of device ids and the shell binds
   them to players, which is the same seam drop-in join uses mid-match. The shell is a
   two-state machine (`menu` / `playing`) and that is the only thing it branches on.
+- **Weapon stance** (`updateWeaponStance` in `src/sim/player.ts`) — one float, `weaponUp`,
+  driven by the same aim deflection that steers. It gates firing, sets the barrel length
+  and gates the aim laser, so stance is readable from the world rather than from UI. The
+  timing is asymmetric on purpose: fast up, slow down.
 - **Debug view on day one** (`src/render/debug.ts`) — `F1`. Frame timings, entity counts,
   AI states, collision grid. Build it before you need it.
 - **A headless smoke test** (`scripts/smoke.mjs`) — drives the real build in a browser and
@@ -206,6 +210,8 @@ In rough order of when it starts hurting:
 | Tile types, and what each id means | `TILE_DEFS` in `src/world/tiles.ts` |
 | Cone angle, range, player speed, dash, revive rules | `src/sim/player.ts` (top of file) |
 | How dark the dark is | `AMBIENT_DARKNESS` in `src/render/renderer.ts` |
+| Flashlight brightness | `FLASHLIGHT_REVEAL` / `FLASHLIGHT_GLOW` in `src/render/renderer.ts` |
+| How hard you must push to raise the weapon | `WEAPON_RAISE_THRESHOLD` in `src/sim/player.ts` |
 | Vision ray density and shadow-edge sharpness | `BASE_STEP`, `REFINE_THRESHOLD` in `src/vision/visibility.ts` |
 | World size, room count, enemies per player | `src/world/tilemap.ts`, `src/sim/world.ts` |
 | Zoom / world height per viewport | `VIEW_HEIGHT` in `src/render/camera.ts` |

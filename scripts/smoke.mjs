@@ -225,6 +225,35 @@ check("mouse steering is proportional to distance from the player",
   `near ${nudge.toFixed(3)} rad, far ${shove.toFixed(3)} rad`);
 await camPage.mouse.move(640, 720 * 0.78 - 220);
 
+// Weapon stance: the gun only comes up when the aim device is actually pushed.
+await camPage.mouse.move(640, 720 * 0.78);        // cursor on the player = no deflection
+await camPage.waitForTimeout(900);
+const lowered = await camPage.evaluate(() => window.game.world.players[0].weaponUp);
+await camPage.mouse.move(640, 200);               // pushed well ahead
+await camPage.waitForTimeout(500);
+const raised = await camPage.evaluate(() => window.game.world.players[0].weaponUp);
+check("the weapon lowers on a neutral aim device and shoulders when pushed",
+  lowered < 0.02 && raised > 0.98, `down ${lowered.toFixed(2)}, up ${raised.toFixed(2)}`);
+
+// Firing with the gun down must not be swallowed: it raises, then shoots.
+const trigger = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  p.ammo = p.weapon.magazine;
+  p.reloadTimer = 0;
+  return p.ammo;
+});
+await camPage.mouse.move(640, 720 * 0.78);
+await camPage.waitForTimeout(900);
+await camPage.keyboard.down("Space");
+await camPage.waitForTimeout(60);
+const immediate = await camPage.evaluate(() => window.game.world.players[0].ammo);
+await camPage.waitForTimeout(500);
+const eventually = await camPage.evaluate(() => window.game.world.players[0].ammo);
+await camPage.keyboard.up("Space");
+check("a lowered weapon holds fire until it is up, rather than eating the input",
+  immediate === trigger && eventually < trigger,
+  `start ${trigger}, at 60ms ${immediate}, at 560ms ${eventually}`);
+
 const toggled = await camPage.evaluate(async () => {
   window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyC" }));
   await new Promise((r) => setTimeout(r, 200));
@@ -492,6 +521,31 @@ const glass = await levelPage.evaluate(async () => {
   }
   return { seenThroughGlass, movedThrough: p.x > (pane.tx + 1) * TILE, startX, endX: p.x };
 });
+// The aim laser stops at glass; bullets must agree with it.
+const glassStopsShots = await camPage.evaluate(async () => {
+  const w = window.game.world;
+  const m = w.map;
+  const TILE = 48;
+  let pane = null;
+  for (let ty = 0; ty < m.rows && !pane; ty++) {
+    for (let tx = 0; tx < m.cols; tx++) {
+      if (m.tileAt(tx, ty) === 5 && !m.isSolid(tx - 1, ty) && !m.isSolid(tx + 1, ty)) {
+        pane = { tx, ty };
+        break;
+      }
+    }
+  }
+  if (!pane) return "no glass pane";
+  const paneX = pane.tx * TILE;
+  w.bullets.spawn((pane.tx - 2) * TILE, (pane.ty + 0.5) * TILE, 0, 700, 10, "player", 0, 1, "#fff");
+  await new Promise((r) => setTimeout(r, 350));
+  const past = w.bullets.items.some((b) => b.active && b.x > paneX + TILE);
+  return { past };
+});
+check("bullets stop at glass, exactly where the aim laser ends",
+  typeof glassStopsShots === "object" && glassStopsShots.past === false,
+  JSON.stringify(glassStopsShots));
+
 check("glass blocks movement but not sight",
   typeof glass === "object" && glass.seenThroughGlass === true && glass.movedThrough === false,
   JSON.stringify(glass));

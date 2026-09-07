@@ -60,6 +60,18 @@ stick deflection, or the cursor's distance from the player — so a nudge scans 
 slowly and a full push spins you round. The response curve favours fine control near
 centre (`STEER_RESPONSE` in `src/main.ts`).
 
+## Weapon up / down
+
+The same deflection decides whether the gun is up. Push the aim stick (or move the
+cursor away from yourself) past `WEAPON_RAISE_THRESHOLD` and the weapon shoulders in
+0.16s, the barrel extends, and an **aim laser** projects to exactly where a bullet would
+stop — through glass it does not, because bullets do not either. Let go and it lowers
+after a short grace, taking the laser with it.
+
+**A lowered weapon cannot fire**, but the trigger raises it rather than eating the
+input, so a shot fired from rest lands as soon as the gun is up. The fixed camera keeps
+the weapon permanently shouldered, since absolute aiming has no deflection to read.
+
 **Fixed** is the classic twin-stick camera: north stays north, aiming is absolute — the
 cursor or stick names a world direction and you snap to it.
 

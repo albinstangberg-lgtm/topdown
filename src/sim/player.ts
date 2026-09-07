@@ -21,6 +21,16 @@ export const TURN_RATE = 14;
  * enough to spin round, slow enough not to be nauseating.
  */
 export const STEER_RATE = 3.4;
+/**
+ * Weapon up / down. The gun only comes up when you actually push the aim stick, which
+ * makes aiming a deliberate act rather than a permanent state — and gives the aim laser
+ * something to mean. Below the threshold the weapon rests and cannot fire.
+ */
+export const WEAPON_RAISE_THRESHOLD = 0.35;
+const WEAPON_RAISE_TIME = 0.16;
+const WEAPON_LOWER_TIME = 0.4;
+/** Grace after the stick recentres, so micro-corrections do not make the gun bob. */
+const WEAPON_HOLD = 0.45;
 const CONE_HALF_ANGLE = 0.46; // ~53 degree cone, matching the reference art
 const CONE_RANGE = 430;
 const HALO_RANGE = 96;       // small always-on glow so you can see your own feet
@@ -54,6 +64,8 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     muzzleFlash: 0,
     hurtFlash: 0,
     kills: 0,
+    weaponUp: 0,
+    weaponHold: 0,
     cone: makeLight("#ffe9b0", CONE_HALF_ANGLE, CONE_RANGE, 1),
     halo: makeLight("#9fb4d0", Math.PI, HALO_RANGE, 0.34),
   };
@@ -67,6 +79,8 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
 export interface AimCommand {
   angle: number;
   turnRate: number;
+  /** True when the aim device is pushed hard enough to shoulder the weapon. */
+  raise: boolean;
 }
 
 export interface PlayerDeps {
@@ -90,9 +104,13 @@ export function updatePlayer(
   p.hurtFlash = Math.max(0, p.hurtFlash - dt * 3);
 
   if (p.downed) {
+    p.weaponUp = 0;
+    p.weaponHold = 0;
     updateDowned(p, input, deps, dt);
     return;
   }
+
+  updateWeaponStance(p, aim, input, dt);
 
   // --- Aim -----------------------------------------------------------------
   if (aim !== null) {
@@ -138,10 +156,29 @@ export function updatePlayer(
     p.reloadTimer = w.reloadTime;
   } else {
     const wantsToFire = w.auto ? input.fire : input.firePressed;
-    if (wantsToFire && p.fireCooldown <= 0) fire(p, deps);
+    // A lowered weapon cannot fire — but pulling the trigger raises it (see
+    // updateWeaponStance), so the shot lands as soon as the gun is up rather than
+    // the input being swallowed.
+    if (wantsToFire && p.fireCooldown <= 0 && p.weaponUp >= 1) fire(p, deps);
   }
 
   syncLights(p);
+}
+
+/**
+ * Raise the weapon while the aim device is pushed (or the trigger is held), lower it
+ * otherwise. Asymmetric timing on purpose: snapping up fast feels responsive, dropping
+ * slowly keeps the gun available through quick re-aims.
+ */
+function updateWeaponStance(
+  p: Player, aim: AimCommand | null, input: InputState, dt: number,
+): void {
+  const wants = (aim?.raise ?? false) || input.fire;
+  p.weaponHold = wants ? WEAPON_HOLD : Math.max(0, p.weaponHold - dt);
+
+  const target = wants || p.weaponHold > 0 ? 1 : 0;
+  const rate = target > p.weaponUp ? 1 / WEAPON_RAISE_TIME : 1 / WEAPON_LOWER_TIME;
+  p.weaponUp = clamp(p.weaponUp + Math.sign(target - p.weaponUp) * rate * dt, 0, 1);
 }
 
 function fire(p: Player, deps: PlayerDeps): void {
