@@ -22,7 +22,9 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 
-await page.goto(URL, { waitUntil: "load" });
+// Combat checks run on the fixed camera: aiming is absolute there, so "point at the
+// enemy and shoot" is deterministic. The rotating camera gets its own checks below.
+await page.goto(`${URL}?camera=fixed`, { waitUntil: "load" });
 await page.waitForTimeout(500);
 
 check("boots without exceptions", errors.length === 0, errors.join(" | "));
@@ -106,6 +108,110 @@ const split = await page.evaluate(async () => {
   return g.world.players.length;
 });
 check("4 players render without errors", split === 4 && errors.length === 0, errors.join(" | "));
+
+// --- camera ------------------------------------------------------------------
+
+const camPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const camErrors = [];
+camPage.on("pageerror", (e) => camErrors.push(String(e)));
+await camPage.goto(`${URL}?level=showcase`, { waitUntil: "load" });
+await camPage.waitForTimeout(500);
+
+// Put the player in open floor and point the cursor dead ahead so steering is neutral.
+const openFloor = async () => camPage.evaluate(() => {
+  const p = window.game.world.players[0];
+  const T = 48;
+  p.x = 12.5 * T; p.y = 9.5 * T; p.prevX = p.x; p.prevY = p.y; p.vx = 0; p.vy = 0;
+  window.game.cameras[0].snapTo(p.x, p.y, p.facing);
+});
+await camPage.mouse.move(640, 720 * 0.78 - 220);
+await openFloor();
+await camPage.waitForTimeout(300);
+
+const anchored = await camPage.evaluate(() => {
+  const cam = window.game.cameras[0];
+  const vp = window.game.views[0];
+  const p = window.game.world.players[0];
+  // Where does the player actually land on screen?
+  const anchor = cam.anchorScreen(vp);
+  const dx = (p.x - cam.x) * cam.zoom;
+  const dy = (p.y - cam.y) * cam.zoom;
+  const r = cam.rotation;
+  const sx = anchor.x + dx * Math.cos(r) - dy * Math.sin(r);
+  const sy = anchor.y + dx * Math.sin(r) + dy * Math.cos(r);
+  return { mode: cam.mode, screenY: sy, screenX: sx, height: vp.h, width: vp.w };
+});
+check("rotating camera puts the player low on screen",
+  anchored.mode === "rotating" &&
+  anchored.screenY / anchored.height > 0.7 && anchored.screenY / anchored.height < 0.85 &&
+  Math.abs(anchored.screenX - anchored.width / 2) < 30,
+  JSON.stringify(anchored));
+
+// WASD must be camera-relative, or holding forward walks you sideways.
+const walk = async (key) => {
+  await openFloor();
+  await camPage.waitForTimeout(150);
+  const start = await camPage.evaluate(() => {
+    const p = window.game.world.players[0];
+    return { x: p.x, y: p.y, a: window.game.cameras[0].angle };
+  });
+  await camPage.keyboard.down(key);
+  await camPage.waitForTimeout(400);
+  await camPage.keyboard.up(key);
+  const end = await camPage.evaluate(() => {
+    const p = window.game.world.players[0];
+    return { x: p.x, y: p.y };
+  });
+  let rel = Math.atan2(end.y - start.y, end.x - start.x) - start.a;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+  return { deg: (rel * 180) / Math.PI, dist: Math.hypot(end.x - start.x, end.y - start.y) };
+};
+
+const forward = await walk("KeyW");
+const strafe = await walk("KeyD");
+check("movement is relative to the camera, not the world",
+  forward.dist > 40 && Math.abs(forward.deg) < 12 &&
+  strafe.dist > 40 && Math.abs(strafe.deg - 90) < 12,
+  `forward ${forward.deg.toFixed(1)}deg, strafe ${strafe.deg.toFixed(1)}deg`);
+
+// Aiming becomes steering: off-centre turns, dead ahead holds.
+const steerRight = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  const a0 = p.facing;
+  await new Promise((r) => setTimeout(r, 500));
+  return p.facing - a0;
+});
+await camPage.mouse.move(640 + 300, 720 * 0.78 - 80);
+const turned = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  const a0 = p.facing;
+  await new Promise((r) => setTimeout(r, 500));
+  let d = p.facing - a0;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+});
+await camPage.mouse.move(640, 720 * 0.78);
+const held = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  const a0 = p.facing;
+  await new Promise((r) => setTimeout(r, 500));
+  return Math.abs(p.facing - a0);
+});
+check("aim steers the view and settles when pointed dead ahead",
+  turned > 0.5 && held < 0.02 && Math.abs(steerRight) < 0.02,
+  `dead-ahead ${steerRight.toFixed(3)}, right ${turned.toFixed(3)}, deadzone ${held.toFixed(4)}`);
+
+const toggled = await camPage.evaluate(async () => {
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyC" }));
+  await new Promise((r) => setTimeout(r, 200));
+  const cam = window.game.cameras[0];
+  return { mode: cam.mode, rotation: cam.rotation };
+});
+check("C toggles back to the fixed camera",
+  toggled.mode === "fixed" && toggled.rotation === 0, JSON.stringify(toggled));
+check("camera page raised no exceptions", camErrors.length === 0, camErrors.join(" | "));
 
 // --- level import ------------------------------------------------------------
 

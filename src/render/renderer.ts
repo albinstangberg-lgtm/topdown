@@ -135,10 +135,12 @@ export class Renderer {
    */
   private drawWalls(ctx: CanvasRenderingContext2D, b: Bounds, world: GameWorld): void {
     const map = world.map;
-    const tx0 = Math.max(0, Math.floor(b.x0 / TILE));
-    const ty0 = Math.max(0, Math.floor(b.y0 / TILE));
-    const tx1 = Math.min(map.cols - 1, Math.ceil(b.x1 / TILE));
-    const ty1 = Math.min(map.rows - 1, Math.ceil(b.y1 / TILE));
+    // Deliberately NOT clamped to the map: out of bounds is solid, so filling it with
+    // the same black keeps the level from having a visible silhouette against the void.
+    const tx0 = Math.floor(b.x0 / TILE);
+    const ty0 = Math.floor(b.y0 / TILE);
+    const tx1 = Math.ceil(b.x1 / TILE);
+    const ty1 = Math.ceil(b.y1 / TILE);
 
     const crates: number[] = [];
     const panes: number[] = [];
@@ -147,8 +149,11 @@ export class Renderer {
     ctx.beginPath();
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
-        const id = map.tileAt(tx, ty);
-        const def = tileDef(id);
+        if (!map.inBounds(tx, ty)) {
+          ctx.rect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
+          continue;
+        }
+        const def = tileDef(map.tileAt(tx, ty));
         if (!def.solid) continue;
         if (def.key === "crate") { crates.push(tx, ty); continue; }
         if (!def.opaque) { panes.push(tx, ty); continue; }

@@ -7,7 +7,9 @@ import { makeLight } from "../vision/visibility";
 import { circleOverlap, pointInWall } from "../world/collision";
 import { computeVisibility, inCone, type VisionLight } from "../vision/visibility";
 import { hasLineOfSight } from "../world/raycast";
-import { createPlayer, damagePlayer, syncLights, updatePlayer, updateRevives } from "./player";
+import {
+  createPlayer, damagePlayer, syncLights, updatePlayer, updateRevives, type AimCommand,
+} from "./player";
 import { createEnemy, damageEnemy, updateEnemy } from "./enemy";
 import { BulletPool, ParticlePool } from "./pools";
 import type { Enemy, Player } from "./entities";
@@ -139,7 +141,7 @@ export class GameWorld {
   update(
     dt: number,
     inputOf: (p: Player) => InputState,
-    resolveAim: (p: Player, input: InputState) => number | null,
+    resolveAim: (p: Player, input: InputState) => AimCommand | null,
   ): void {
     this.time += dt;
     const deps = { map: this.map, bullets: this.bullets, particles: this.particles };

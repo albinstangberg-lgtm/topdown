@@ -30,14 +30,33 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 
 | Action | Keyboard + mouse | Gamepad |
 | --- | --- | --- |
-| Move | `WASD` | Left stick |
-| Aim | Mouse | Right stick |
+| Move | `WASD` (relative to the screen) | Left stick |
+| Steer / aim | Mouse | Right stick |
 | Fire | Left click / `Space` | RT / RB / A |
 | Dash | `Shift` | LT / B |
 | Revive teammate | Hold `E` | Hold X |
 | Join the game | — | `START` |
 
-Debug: `F1` overlay, `F2` collision grid, `Shift+R` restart, `[` / `]` change map.
+Debug: `F1` overlay, `F2` collision grid, `Shift+R` restart, `[` / `]` change map,
+`C` switch camera.
+
+## Camera
+
+Two modes, toggled with `C` or `?camera=rotating|fixed`.
+
+**Rotating** (default) is the claustrophobic one: the camera pivots *on the player*,
+turns to keep their facing pointing up the screen, and anchors them at 78% down the
+frame, so almost everything you can see is ahead of you.
+
+That changes how aiming has to work. A rotating camera follows your facing, so pointing
+at a fixed spot in the world would move the spot — you would spin forever. So aiming
+becomes **steering**: how far the cursor (or the right stick) sits off straight-up is a
+turn command, and you settle onto a heading by pointing dead ahead. There is a dead zone
+around the player so a parked cursor holds your heading. `WASD` and the left stick are
+screen-relative in this mode: forward is wherever the camera is looking.
+
+**Fixed** is the classic twin-stick camera: north stays north, aiming is absolute — the
+cursor or stick names a world direction and you snap to it.
 
 ## Local co-op
 

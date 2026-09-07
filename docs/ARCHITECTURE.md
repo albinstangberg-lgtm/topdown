@@ -83,12 +83,30 @@ once "player dies, player respawns" is baked into a dozen systems.
 
 **Nothing may assume one screen.** Every draw call takes a viewport. The layout is
 derived from the live player count (full → side by side → quadrants). Each viewport gets
-its own camera, which follows its player biased toward where they are aiming so the cone
-gets the screen space rather than the wall behind them.
+its own camera, its own rotation and its own anchor.
 
 The subtle one: viewports show a **fixed world height**, not a fixed zoom. A player in a
 quarter of the screen must not see a quarter of the world — that turns split screen into
 a handicap.
+
+Two camera modes, because they are two different games:
+
+- **rotating** — the camera pivots on the player, turns to keep their facing up the
+  screen, and anchors them low in the frame. Claustrophobic by construction: you can
+  only see where you are going.
+- **fixed** — north stays north, the camera follows with a look-ahead lean. Classic
+  twin-stick, and far easier to aim in.
+
+The mode is not just presentation, and this is the trap worth knowing about before you
+build it: **a rotating camera and absolute aiming cannot coexist.** The camera follows
+your facing, so a fixed world point you are aiming at rotates with the view, the error
+never closes, and you spin forever. So under rotation, aiming becomes a *steering*
+command — the offset of the cursor or stick from straight-up on screen is a turn rate,
+and it settles when you point dead ahead. Movement has to be rotated into world space for
+the same reason, or holding forward walks you sideways.
+
+Both conversions live in `Game.inputOf` and `Game.resolveAim`. The simulation still only
+ever receives world-space vectors and an aim command, and knows nothing about cameras.
 
 ### 8. Renderer + lighting composite — `src/render/renderer.ts`
 

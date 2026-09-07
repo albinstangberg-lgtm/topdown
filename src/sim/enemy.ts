@@ -16,8 +16,10 @@ import type { BulletPool, ParticlePool } from "./pools";
  */
 
 const CONE_HALF = 0.55;
-const CONE_RANGE = 430;
-const ATTACK_RANGE = 340;
+// Pulled in to match the tighter camera: an enemy that can shoot you from off-screen
+// is not a difficulty setting, it is a bug you feel.
+const CONE_RANGE = 300;
+const ATTACK_RANGE = 210;
 const SEPARATION = 34;
 
 export function createEnemy(id: number, x: number, y: number): Enemy {

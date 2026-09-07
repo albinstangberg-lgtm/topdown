@@ -13,9 +13,16 @@ const ACCEL = 18;            // exponential approach rate, not units/s^2
 const DASH_SPEED = 720;
 const DASH_TIME = 0.16;
 const DASH_COOLDOWN = 0.85;
-const TURN_RATE = 14;        // radians/second toward the aim direction
-const CONE_HALF_ANGLE = 0.42; // ~48 degree cone, matching the reference art
-const CONE_RANGE = 620;
+/** Radians/second toward the aim direction. Absolute aiming wants this fast. */
+export const TURN_RATE = 14;
+/**
+ * Radians/second when the camera rotates with you. Aiming is then a steering command
+ * rather than a point-at, so this doubles as the turn speed of the whole view — fast
+ * enough to spin round, slow enough not to be nauseating.
+ */
+export const STEER_RATE = 3.4;
+const CONE_HALF_ANGLE = 0.46; // ~53 degree cone, matching the reference art
+const CONE_RANGE = 430;
 const HALO_RANGE = 96;       // small always-on glow so you can see your own feet
 const BLEEDOUT = 30;
 const REVIVE_TIME = 2.2;
@@ -52,6 +59,16 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
   };
 }
 
+/**
+ * A resolved aim for one step: where to point, and how fast the player is allowed to
+ * swing to it. The rate is part of the command because it depends on the camera mode,
+ * which the simulation deliberately knows nothing about.
+ */
+export interface AimCommand {
+  angle: number;
+  turnRate: number;
+}
+
 export interface PlayerDeps {
   map: TileMap;
   bullets: BulletPool;
@@ -59,11 +76,12 @@ export interface PlayerDeps {
 }
 
 /**
- * One player, one simulation step. `aimAngle` is resolved by the game layer because
- * pointer aiming needs the camera — the sim itself stays screen-agnostic.
+ * One player, one simulation step. The aim is resolved by the game layer because both
+ * pointer aiming and a rotating camera need to know about the screen — the sim itself
+ * stays screen-agnostic.
  */
 export function updatePlayer(
-  p: Player, input: InputState, aimAngle: number | null, deps: PlayerDeps, dt: number,
+  p: Player, input: InputState, aim: AimCommand | null, deps: PlayerDeps, dt: number,
 ): void {
   p.prevX = p.x;
   p.prevY = p.y;
@@ -77,8 +95,8 @@ export function updatePlayer(
   }
 
   // --- Aim -----------------------------------------------------------------
-  if (aimAngle !== null) {
-    p.facing = rotateToward(p.facing, aimAngle, TURN_RATE * dt);
+  if (aim !== null) {
+    p.facing = rotateToward(p.facing, aim.angle, aim.turnRate * dt);
   } else if (input.moveX !== 0 || input.moveY !== 0) {
     // No aim input: face where you are walking, so the cone is never behind you.
     p.facing = rotateToward(p.facing, Math.atan2(input.moveY, input.moveX), TURN_RATE * 0.6 * dt);
