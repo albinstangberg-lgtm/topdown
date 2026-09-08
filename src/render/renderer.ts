@@ -99,6 +99,7 @@ export class Renderer {
 
     const bounds = cam.visibleBounds(vp);
     this.drawFloor(ctx, bounds);
+    this.drawExits(ctx, world, bounds);
     this.drawLamps(ctx, world, bounds);
     this.drawParticles(ctx, world);
     this.drawActors(ctx, world, alpha);
@@ -208,6 +209,23 @@ export class Renderer {
       ctx.lineTo(x + 2, y + TILE - 2);
       ctx.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
       ctx.stroke();
+    }
+  }
+
+  /**
+   * The exit, drawn as a lit pad. It is the one tile the players are looking for, so it
+   * gets a glow of its own rather than relying on someone's flashlight finding it.
+   */
+  private drawExits(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    if (world.map.exits.length === 0) return;
+    const t = 0.55 + 0.45 * Math.sin(performance.now() * 0.003);
+    for (const exit of world.map.exits) {
+      if (exit.x < b.x0 || exit.x > b.x1 || exit.y < b.y0 || exit.y > b.y1) continue;
+      ctx.fillStyle = `rgba(139,255,122,${0.10 + t * 0.10})`;
+      ctx.fillRect(exit.x - TILE / 2, exit.y - TILE / 2, TILE, TILE);
+      ctx.strokeStyle = `rgba(139,255,122,${0.35 + t * 0.35})`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(exit.x - TILE / 2 + 3, exit.y - TILE / 2 + 3, TILE - 6, TILE - 6);
     }
   }
 

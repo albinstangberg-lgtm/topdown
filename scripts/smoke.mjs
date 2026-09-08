@@ -33,35 +33,35 @@ check("player 1 exists", await page.evaluate(() => window.game.world.players.len
 // The director spawns on a timer; give it a moment before poking at enemies.
 await page.waitForFunction(() => window.game.world.enemies.length > 0, null, { timeout: 8000 });
 
-// Bullets damage enemies: park one right in front of the player and shoot it.
-// Aim FIRST and let it settle, then place the target along wherever the player is
-// actually facing — deriving the position from a fixed screen offset made this flaky,
-// because the cursor's world position depends on a camera that is still damping.
-await page.mouse.move(640 + 220, 360);
-await page.waitForTimeout(400);
+// Bullets damage enemies. Deliberately fires the bullet directly rather than going
+// through aiming: two earlier versions of this check were flaky because the shot
+// depended on the cursor, a damping camera and whatever wall happened to be in front.
+// Aiming has its own checks; this one is about damage and kill accounting.
 const killed = await page.evaluate(async () => {
   const w = window.game.world;
   const p = w.players[0];
   const e = w.enemies[0] ?? null;
   if (!e) return "no enemy spawned";
-  e.x = p.x + Math.cos(p.facing) * 90;
-  e.y = p.y + Math.sin(p.facing) * 90;
-  e.health = 20;
-  const before = w.enemies.length;
-  return { before, id: e.id };
-});
-check("an enemy is on the field", typeof killed === "object", String(killed));
 
-if (typeof killed === "object") {
-  await page.keyboard.down("Space");
-  await page.waitForTimeout(700);
-  await page.keyboard.up("Space");
-  const after = await page.evaluate((id) => ({
-    gone: !window.game.world.enemies.some((e) => e.id === id),
-    kills: window.game.world.players[0].kills,
-  }), killed.id);
-  check("player bullets kill enemies", after.gone, `kills=${after.kills}`);
-}
+  // Put the target somewhere with room around it, then shoot from a clear side.
+  const spot = w.map.mostOpenPoint();
+  e.x = spot.x; e.y = spot.y; e.prevX = e.x; e.prevY = e.y; e.health = 20;
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const from = dirs
+    .map(([dx, dy]) => ({ dx, dy, x: spot.x - dx * 60, y: spot.y - dy * 60 }))
+    .find((c) => !w.map.isSolidAt(c.x, c.y));
+  if (!from) return "nowhere clear to shoot from";
+
+  const kills = p.kills;
+  for (let i = 0; i < 3; i++) {
+    w.bullets.spawn(from.x, from.y, Math.atan2(from.dy, from.dx), 800, 12, "player", p.id, 1, "#fff");
+  }
+  await new Promise((r) => setTimeout(r, 400));
+  return { gone: !w.enemies.some((x) => x.id === e.id), kills, after: p.kills };
+});
+check("player bullets kill enemies, and the kill is credited",
+  typeof killed === "object" && killed.gone && killed.after === killed.kills + 1,
+  JSON.stringify(killed));
 
 // AI perception: an enemy with the player in its cone and clear line of sight
 // must leave patrol on its own.
@@ -119,6 +119,18 @@ const camErrors = [];
 camPage.on("pageerror", (e) => camErrors.push(String(e)));
 await camPage.goto(`${URL}?level=showcase&players=1`, { waitUntil: "load" });
 await camPage.waitForTimeout(500);
+const quietField = () => camPage.evaluate(() => {
+  const w = window.game.world;
+  w.mode = "story";                 // story + zero spawn zones = no reinforcements
+  w.map.spawnZones.length = 0;
+  w.enemies.length = 0;
+  const p = w.players[0];
+  p.health = p.maxHealth;
+  p.downed = false;
+  p.stance = "stand";
+  p.stanceTimer = 0;
+});
+await quietField();
 
 // Put the player in open floor and point the cursor dead ahead so steering is neutral.
 const openFloor = async () => camPage.evaluate(() => {
@@ -339,6 +351,7 @@ check("you can shoot from the floor", proneFire.after < proneFire.before,
   JSON.stringify(proneFire));
 
 // Lean: the eye slides sideways, the collision body does not, and a wall stops it.
+await quietField();
 const lean = await camPage.evaluate(async () => {
   const p = window.game.world.players[0];
   const m = window.game.world.map;
@@ -386,6 +399,7 @@ check("leaning moves where you look and shoot, but never the body or into a wall
   JSON.stringify(lean));
 
 // Manual reload: tops up a partial magazine, ignores a full one, works prone.
+await quietField();
 const reload = await camPage.evaluate(async () => {
   const p = window.game.world.players[0];
   const press = () => {
@@ -429,6 +443,7 @@ check("manual reload tops up a partial magazine, and only when it should",
   JSON.stringify(reload));
 
 // Weapon stance: the gun only comes up when the aim device is actually pushed.
+await quietField();
 await camPage.mouse.move(640, 720 * 0.78);        // cursor on the player = no deflection
 await camPage.waitForTimeout(900);
 const lowered = await camPage.evaluate(() => window.game.world.players[0].weaponUp);
@@ -502,7 +517,12 @@ await padPage.waitForTimeout(200);
 await padStartPress();                      // pad takes slot 2
 await padPage.keyboard.press("Enter");      // keyboard ready
 await padPage.waitForTimeout(200);
-await padStartPress();                      // pad ready -> match starts
+await padStartPress();                      // pad ready -> mode select
+await padPage.waitForTimeout(300);
+await padPage.keyboard.down("KeyD");        // highlight SURVIVAL
+await padPage.waitForTimeout(200);
+await padPage.keyboard.up("KeyD");
+await padPage.keyboard.press("Enter");      // deploy
 await padPage.waitForTimeout(500);
 const joined = await padPage.evaluate(() => ({
   players: window.game.world.players.length,
@@ -647,8 +667,8 @@ const atBoot = await lobbyPage.evaluate(() => ({
   slots: window.game.lobby.slots.length,
   hintHidden: document.getElementById("boot").hidden,
 }));
-check("the game boots into the menu with nobody playing",
-  atBoot.phase === "menu" && atBoot.players === 0 && atBoot.slots === 0 && atBoot.hintHidden,
+check("the game boots into the lobby with nobody playing",
+  atBoot.phase === "lobby" && atBoot.players === 0 && atBoot.slots === 0 && atBoot.hintHidden,
   JSON.stringify(atBoot));
 
 await lobbyPage.keyboard.press("Enter");
@@ -659,7 +679,7 @@ const slots = await lobbyPage.evaluate(() => ({
   slots: window.game.lobby.slots.map((s) => `${s.sourceId}:${s.ready}`),
 }));
 check("ENTER and START each claim a slot, and claiming does not start the match",
-  slots.phase === "menu" && slots.slots.join(",") === "kbm:false,pad0:false",
+  slots.phase === "lobby" && slots.slots.join(",") === "kbm:false,pad0:false",
   JSON.stringify(slots));
 
 // Backing out: one press un-readies, the next leaves the lobby entirely.
@@ -685,16 +705,133 @@ await padStart();                                        // pad ready -> everyon
 await lobbyPage.waitForTimeout(500);
 const started = await lobbyPage.evaluate(() => ({
   phase: window.game.phase,
-  players: window.game.world.players.length,
-  views: window.game.views.length,
-  sources: window.game.world.players.map((p) => p.sourceId),
-  hintShown: !document.getElementById("boot").hidden,
+  roster: window.game.lobby.slots.length,
 }));
-check("the match starts only once every joined player is ready",
-  oneReady === "menu" && started.phase === "playing" && started.players === 2 &&
-  started.views === 2 && started.hintShown,
+check("the lobby hands off to mode select once every joined player is ready",
+  oneReady === "lobby" && started.phase === "mode" && started.roster === 2,
   `${oneReady} then ${JSON.stringify(started)}`);
 check("lobby page raised no exceptions", lobbyErrors.length === 0, lobbyErrors.join(" | "));
+
+// --- campaign ----------------------------------------------------------------
+
+const storyPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const storyErrors = [];
+storyPage.on("pageerror", (e) => storyErrors.push(String(e)));
+await storyPage.goto(URL, { waitUntil: "load" });
+await storyPage.evaluate(() => localStorage.removeItem("topdown.campaign.sector-7"));
+await storyPage.reload({ waitUntil: "load" });
+await storyPage.waitForTimeout(600);
+
+// Walk the whole flow the way a person does: join, ready, story, deploy.
+await storyPage.keyboard.press("Enter");        // claim a slot
+await storyPage.waitForTimeout(200);
+await storyPage.keyboard.press("Enter");        // ready -> mode select
+await storyPage.waitForTimeout(300);
+const atMode = await storyPage.evaluate(() => window.game.phase);
+await storyPage.keyboard.press("Enter");        // STORY is the first card
+await storyPage.waitForTimeout(300);
+const atMissions = await storyPage.evaluate(() => ({
+  phase: window.game.phase,
+  index: window.game.missionSelect.index,
+}));
+check("story mode leads to the mission map, survival does not",
+  atMode === "mode" && atMissions.phase === "missions" && atMissions.index === 0,
+  `${atMode} -> ${JSON.stringify(atMissions)}`);
+
+// Locked missions must refuse to deploy.
+const locked = await storyPage.evaluate(async () => {
+  const g = window.game;
+  g.missionSelect.index = g.missionSelect.campaign.missions.findIndex((m) => m.requires.length > 0);
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "Enter" }));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "Enter" }));
+  await new Promise((r) => setTimeout(r, 400));
+  const phase = g.phase;
+  g.missionSelect.index = 0;
+  return { picked: g.missionSelect.campaign.missions[1].id, phase };
+});
+check("a locked mission cannot be deployed", locked.phase === "missions",
+  JSON.stringify(locked));
+
+await storyPage.keyboard.press("Enter");        // deploy mission 1
+await storyPage.waitForTimeout(600);
+const deployed = await storyPage.evaluate(() => {
+  const w = window.game.world;
+  return {
+    phase: window.game.phase,
+    mode: w.mode,
+    map: w.map.name,
+    placedZombies: w.map.enemySpawns.length,
+    enemiesNow: w.enemies.length,
+    zones: w.map.spawnZones.length,
+    exits: w.map.exits.length,
+  };
+});
+check("a story mission loads with its placed zombies, zones and exit",
+  deployed.phase === "playing" && deployed.mode === "story" &&
+  deployed.placedZombies > 0 && deployed.enemiesNow === deployed.placedZombies &&
+  deployed.zones > 0 && deployed.exits > 0,
+  JSON.stringify(deployed));
+
+// The director in a story map may only use the authored zones.
+const zoneOnly = await storyPage.evaluate(async () => {
+  const w = window.game.world;
+  const zones = w.map.spawnZones;
+  w.enemies.length = 0;
+
+  // Enemies start walking the moment they exist, so record where each one APPEARED
+  // rather than where it has got to by the end of the sample.
+  const seen = new Map();
+  const t0 = performance.now();
+  while (performance.now() - t0 < 5000) {
+    for (const e of w.enemies) {
+      if (!seen.has(e.id)) seen.set(e.id, { x: e.x, y: e.y });
+    }
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  const spawns = [...seen.values()];
+  const offZone = spawns.filter(
+    (p) => !zones.some((z) => Math.hypot(z.x - p.x, z.y - p.y) < 1),
+  );
+  return { zoneCount: zones.length, spawned: spawns.length, offZone: offZone.length };
+});
+check("story reinforcements only come from spawn zones",
+  zoneOnly.spawned > 0 && zoneOnly.offZone === 0, JSON.stringify(zoneOnly));
+
+// Extraction: stand the living squad on the exit and the mission completes.
+const extracted = await storyPage.evaluate(async () => {
+  const w = window.game.world;
+  const exit = w.map.exits[0];
+  const p = w.players[0];
+  p.x = exit.x; p.y = exit.y; p.prevX = p.x; p.prevY = p.y;
+  await new Promise((r) => setTimeout(r, 1500));
+  return {
+    phase: window.game.phase,
+    completed: [...window.game.completed],
+    notice: window.game.missionSelect.notice,
+  };
+});
+check("standing the squad on the exit completes the mission and returns to the map",
+  extracted.phase === "missions" && extracted.completed.includes("outpost") &&
+  extracted.notice.includes("COMPLETE"),
+  JSON.stringify(extracted));
+
+// Completing one mission unlocks the ones that required it, and it survives a reload.
+await storyPage.reload({ waitUntil: "load" });
+await storyPage.waitForTimeout(500);
+const persisted = await storyPage.evaluate(() => {
+  const g = window.game;
+  const missions = g.missionSelect.campaign.missions;
+  const unlocked = missions
+    .filter((m) => m.requires.every((r) => g.completed.has(r)))
+    .map((m) => m.id);
+  return { completed: [...g.completed], unlocked };
+});
+check("progress persists and unlocks the missions that required it",
+  persisted.completed.includes("outpost") &&
+  persisted.unlocked.includes("substation") && persisted.unlocked.includes("glasshouse") &&
+  !persisted.unlocked.includes("vault"),
+  JSON.stringify(persisted));
+check("campaign page raised no exceptions", storyErrors.length === 0, storyErrors.join(" | "));
 
 // --- level import ------------------------------------------------------------
 

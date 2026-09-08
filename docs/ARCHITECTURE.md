@@ -165,6 +165,17 @@ with the game.
 - **HUD per viewport** (`src/render/hud.ts`) — anything drawn "at the top of the screen"
   is a bug waiting for player 3. Off-screen teammate markers and downed alerts matter
   more than health bars once the squad splits up.
+- **The campaign** (`src/campaign/campaign.ts`, `src/menu/missionSelect.ts`) — a mission
+  is a map plus two things the map cannot know: where its node sits on the select screen
+  and which missions must be finished first. Unlocks are *requirements*, not an ordered
+  list, so the campaign is a graph: one mission can open two, and a later one can wait
+  for both. Progress is a set of completed ids in localStorage. Menu navigation scores
+  nodes by direction rather than using a fixed order, so adding a mission needs no menu
+  changes at all.
+- **Modes** (`GameMode` in `src/sim/world.ts`) — survival and story differ in exactly two
+  places: what the director is allowed to do, and whether there is an objective. Every
+  other system is untouched by the distinction, which is the test of whether a "mode" is
+  really a mode or a second game.
 - **The lobby** (`src/menu/lobby.ts`) — the join flow, and the one screen that has to
   work before anybody has agreed which controller they are holding. START/ENTER claims
   a slot, again readies, B/ESC backs out, everyone ready starts the match. It knows

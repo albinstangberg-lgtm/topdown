@@ -39,6 +39,7 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Reload | `R` | X |
 | Revive teammate | Hold `F` | Hold Y |
 | Join the game | `ENTER` in the lobby | `START` in the lobby |
+| Menus | `WASD` / arrows, `ENTER`, `ESC` | stick or D-pad, `START`, `B` |
 
 Debug: `F1` overlay, `F2` collision grid, `Shift+R` restart, `[` / `]` change map,
 `C` switch camera.
@@ -145,17 +146,46 @@ To work on the split-screen layout without four controllers plugged in, open
 `?players=4`. That skips the lobby entirely and starts with four players, the extra
 three inert but fully rendered — which is also how the test suite drives the game.
 
+## Modes
+
+The lobby hands off to a mode select:
+
+**Story** is the campaign — hand-made missions on a mission map. Finish one and it
+unlocks whatever required it, and you come back to the map after every mission, won or
+lost. Missions have placed zombies you can learn, spawn zones so reinforcements are not
+always the same, and a safe room to reach. Progress is kept in `localStorage`.
+
+**Survival** is the endless one: a fresh procedural layout every run and a director that
+never stops. No exit, no objective — last as long as you can.
+
+The starter campaign, *Sector 7*, lives in `src/campaign/campaign.ts`: four missions as
+glyph art, each with a node position on the mission map and a list of missions it
+requires. Adding one is an entry in that array — the mission select screen has no
+per-mission code in it.
+
 ## Maps
 
-Levels are 2D arrays of tile ids — `0` floor, `1` wall, `2` player spawn, `3` enemy
-spawn, `4` crate, `5` glass, `6` lamp:
+Levels are 2D arrays of tile ids — `0` floor, `1` wall, `2` player spawn, `3` zombie,
+`4` crate, `5` glass, `6` lamp, `7` exit, `8` spawn zone:
 
 ```
 [1,1,1,1,1,1,1],
 [1,0,0,0,0,0,1],
 [1,2,0,0,0,3,1],
-[1,0,0,4,0,0,1],
+[1,0,0,4,0,8,1],
+[1,7,0,0,0,0,1],
 [1,1,1,1,1,1,1],
+```
+
+or the same thing as glyph art, which is how the campaign missions are written:
+
+```
+#######
+#.....#
+#P...E#
+#..X.Z#
+#>....#
+#######
 ```
 
 Paint one in the **editor** (`/editor.html`) and hit ▶ Play, drop a `.json` onto the game

@@ -15,6 +15,8 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `4` | `X` | Crate | yes | yes | cover; same rules as a wall, drawn as an object on the floor |
 | `5` | `G` | Glass | yes | **no** | blocks the body, not the eye — see and shoot through it |
 | `6` | `L` | Lamp | no | no | a static light; its visibility polygon is solved once at load, not per frame |
+| `7` | `>` | Exit | no | no | the safe room. Get the whole living squad standing on it to finish a story mission |
+| `8` | `Z` | Spawn zone | no | no | the director draws from these, picking a different one each time and never in sight |
 
 `solid` and `opaque` are separate flags on purpose. Collision asks "solid?", the vision
 raycast asks "opaque?". Glass is the tile that proves the two are different questions;
@@ -103,8 +105,15 @@ cannot drift out of sync with the game — there is only one definition of what 
 
 - **Players**: authored `2` tiles first, one per player in grid order. With no `2` tiles,
   players spawn beside the squad, and the first player at the most open point on the map.
-- **Enemies**: authored `3` tiles first, and only ones far enough from every player that
-  nobody watches an enemy appear. With no `3` tiles, any floor tile that passes the same
-  clearance test. On a small map the clearance shrinks rather than starving the level.
+- **Zombies (`3`)**: one enemy per tile, placed when the map loads, never replaced.
+  This is the part of an encounter a player can learn.
+- **Spawn zones (`8`)**: where reinforcements come from. The director shuffles them and
+  only uses one that nobody can currently see, so pressure arrives from a different door
+  each time. In a **story** map those are the *only* places an enemy may appear — a map
+  with no zones is a fixed encounter and stops spawning once the placed zombies are
+  dead. **Survival** falls back to any floor tile when no zone is clear.
+- **Exits (`7`)**: a story mission ends when every living player stands on an exit tile
+  together for 0.8s. Downed players do not block it. A map with no exit has no
+  objective, which is exactly what survival is.
 - **Restart** (`Shift+R`, or a squad wipe): an authored level restarts as itself; a
   procedural one rerolls, because there is nothing to be faithful to.

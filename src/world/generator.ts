@@ -67,10 +67,12 @@ export function generateLevel(cols: number, rows: number, seed = 1337): LevelDat
   }
   for (let i = 1; i < roomList.length; i++) {
     const r = roomList[i];
+    // A starting population of zombies, plus zones the director draws from later.
     const count = 1 + Math.floor(rand() * 2);
     for (let n = 0; n < count; n++) {
       set(r.x + 1 + Math.floor(rand() * (r.w - 2)), r.y + 1 + Math.floor(rand() * (r.h - 2)), 3);
     }
+    set(r.x + 1 + Math.floor(rand() * (r.w - 2)), r.y + 1 + Math.floor(rand() * (r.h - 2)), 8);
     if (rand() < 0.4) {
       set(r.x + Math.floor(r.w / 2), r.y + Math.floor(r.h / 2), 6);
     }

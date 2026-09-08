@@ -75,6 +75,29 @@ export function drawHud(
   ctx.fillStyle = "rgba(150,158,175,0.75)";
   ctx.fillText(`kills ${p.kills}`, pad, vp.h - pad - 14);
 
+  // Extraction. Shown to everyone, because it is a squad condition, not a personal one.
+  const obj = world.objective;
+  if (obj.needed > 0) {
+    const onExit = world.map.isExitAt(p.x, p.y);
+    ctx.textAlign = "center";
+    ctx.font = "700 13px ui-monospace, monospace";
+    ctx.fillStyle = obj.onExit === obj.needed ? "#8bff7a" : onExit ? "#ffd257" : "rgba(200,210,228,0.75)";
+    ctx.fillText(
+      obj.onExit === obj.needed
+        ? "EXTRACTING…"
+        : `SQUAD AT THE EXIT  ${obj.onExit}/${obj.needed}`,
+      vp.w / 2, vp.h * 0.14,
+    );
+    if (obj.progress > 0) {
+      const barW = Math.min(180, vp.w * 0.3);
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(vp.w / 2 - barW / 2, vp.h * 0.14 + 12, barW, 5);
+      ctx.fillStyle = "#8bff7a";
+      ctx.fillRect(vp.w / 2 - barW / 2, vp.h * 0.14 + 12, barW * obj.progress, 5);
+    }
+    ctx.textAlign = "left";
+  }
+
   if (p.downed) {
     ctx.textAlign = "center";
     ctx.font = "700 16px ui-monospace, monospace";

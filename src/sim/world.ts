@@ -26,11 +26,23 @@ const MAP_COLS = 56;
 const MAP_ROWS = 42;
 /** How far from every player an enemy has to spawn — never pop in inside someone's cone. */
 const SPAWN_CLEARANCE = 620;
-/** Enemies alive on the field, per player. Local co-op difficulty knob. */
+/** Survival: enemies alive on the field, per player. The local co-op difficulty knob. */
 const ENEMIES_PER_PLAYER = 5;
+/** Story: how much pressure the director adds ON TOP of the zombies you placed. */
+const ZONE_ENEMIES_PER_PLAYER = 3;
+/** Seconds the whole squad has to stand on the exit before the mission ends. */
+const EXIT_DWELL = 0.8;
+
+/**
+ * Survival is the endless procedural mode. Story runs an authored map with placed
+ * zombies, spawn zones for variety, and an exit to reach. The only differences live
+ * in the director and the objective — everything else is the same game.
+ */
+export type GameMode = "survival" | "story";
 
 export interface GameEvent {
-  kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level";
+  kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level"
+      | "missionComplete" | "missionFailed";
   x?: number;
   y?: number;
   text?: string;
@@ -47,15 +59,21 @@ export class GameWorld {
   /** Lamps baked into the level. Static, so their visibility is solved once on load. */
   readonly staticLights: VisionLight[] = [];
 
+  mode: GameMode = "survival";
+  /** Live extraction state, for the HUD: how many of the living squad are on the exit. */
+  readonly objective = { onExit: 0, needed: 0, progress: 0 };
+
   time = 0;
+  private exitTimer = 0;
   private nextEnemyId = 1;
   private spawnTimer = 2;
   /** Grace period once the whole squad is down, so the wipe reads as a moment. */
   private wipeTimer = 0;
   private seed: number;
 
-  constructor(level?: LevelData, seed = 1337) {
+  constructor(level?: LevelData, seed = 1337, mode: GameMode = "survival") {
     this.seed = seed;
+    this.mode = mode;
     this.map = buildTileMap(level ?? generateLevel(MAP_COLS, MAP_ROWS, seed));
     this.bakeStaticLights();
   }
@@ -69,6 +87,10 @@ export class GameWorld {
     this.map = buildTileMap(level);
     this.bakeStaticLights();
     this.enemies.length = 0;
+    this.exitTimer = 0;
+    this.objective.onExit = 0;
+    this.objective.needed = 0;
+    this.objective.progress = 0;
     for (const b of this.bullets.items) b.active = false;
     for (const p of this.particles.items) p.active = false;
     this.time = 0;
@@ -95,7 +117,18 @@ export class GameWorld {
       p.exhausted = false;
       syncLights(p);
     });
+    this.populateAuthoredEnemies();
     this.events.push({ kind: "level", text: level.name });
+  }
+
+  /**
+   * Hand-placed zombies go down once, where the author put them. They are the part of
+   * the encounter you can learn; the director's zone spawns are the part you cannot.
+   */
+  private populateAuthoredEnemies(): void {
+    for (const spot of this.map.enemySpawns) {
+      this.enemies.push(createEnemy(this.nextEnemyId++, spot.x, spot.y));
+    }
   }
 
   /** Lamp tiles never move, so solve their visibility polygons once instead of per frame. */
@@ -168,6 +201,7 @@ export class GameWorld {
     this.particles.update(dt);
     this.updateDirector(dt);
     this.updateBleedout(dt);
+    this.updateObjective(dt);
 
     // Vision is recomputed once per step and shared by all viewports.
     for (const p of this.players) {
@@ -267,11 +301,16 @@ export class GameWorld {
   /** CORE 9 — a director, not a spawn table: population scales with the squad. */
   private updateDirector(dt: number): void {
     if (this.players.length === 0) return;
-    const cap = ENEMIES_PER_PLAYER * this.players.length;
+    const story = this.mode === "story";
+    // A story map with no zones is a fixed encounter — respect the author and stop.
+    if (story && this.map.spawnZones.length === 0) return;
+
+    const perPlayer = story ? ZONE_ENEMIES_PER_PLAYER : ENEMIES_PER_PLAYER;
+    const cap = perPlayer * this.players.length;
     this.spawnTimer -= dt;
     if (this.enemies.length >= cap || this.spawnTimer > 0) return;
 
-    this.spawnTimer = Math.max(0.6, 2.2 - this.time * 0.004);
+    this.spawnTimer = story ? 3.4 : Math.max(0.6, 2.2 - this.time * 0.004);
     const spot = this.enemySpawn();
     if (spot) this.enemies.push(createEnemy(this.nextEnemyId++, spot.x, spot.y));
   }
@@ -281,21 +320,57 @@ export class GameWorld {
    * cases far enough away that nobody watches one appear. A small map may legitimately
    * have nowhere valid, in which case we simply do not spawn this tick.
    */
+  /**
+   * Spawn zones first, in a shuffled order so pressure does not always arrive from the
+   * same door. Survival falls back to any floor tile; story does not — an authored map
+   * only ever spawns where the author said it could.
+   */
   private enemySpawn(): { x: number; y: number } | null {
-    const authored = this.map.enemySpawns;
-    if (authored.length > 0) {
-      const start = Math.floor(Math.random() * authored.length);
-      for (let i = 0; i < authored.length; i++) {
-        const spot = authored[(start + i) % authored.length];
+    const zones = this.map.spawnZones;
+    if (zones.length > 0) {
+      const start = Math.floor(Math.random() * zones.length);
+      for (let i = 0; i < zones.length; i++) {
+        const spot = zones[(start + i) % zones.length];
         if (this.clearOfPlayers(spot.x, spot.y)) return spot;
       }
+      // Every zone is currently in someone's lap: wait rather than cheat.
+      if (this.mode === "story") return null;
     }
+    if (this.mode === "story") return null;
     for (let attempt = 0; attempt < 30; attempt++) {
       const spot = this.map.randomWalkable();
       if (!spot) return null;
       if (this.clearOfPlayers(spot.x, spot.y)) return spot;
     }
     return null;
+  }
+
+  /**
+   * Extraction. The whole LIVING squad has to be standing on the exit together for a
+   * moment — downed players do not block it, so a wipe-in-progress can still be saved
+   * by the last one standing reaching the safe room.
+   */
+  private updateObjective(dt: number): void {
+    if (this.mode !== "story" || this.map.exits.length === 0) return;
+
+    let alive = 0;
+    let onExit = 0;
+    for (const p of this.players) {
+      if (p.downed) continue;
+      alive++;
+      if (this.map.isExitAt(p.x, p.y)) onExit++;
+    }
+    this.objective.onExit = onExit;
+    this.objective.needed = alive;
+
+    if (alive > 0 && onExit === alive) this.exitTimer += dt;
+    else this.exitTimer = Math.max(0, this.exitTimer - dt * 2);
+
+    this.objective.progress = Math.min(1, this.exitTimer / EXIT_DWELL);
+    if (this.exitTimer >= EXIT_DWELL) {
+      this.exitTimer = 0;
+      this.events.push({ kind: "missionComplete", text: this.map.name });
+    }
   }
 
   private clearOfPlayers(x: number, y: number): boolean {
@@ -319,8 +394,14 @@ export class GameWorld {
       // the run. Device bindings and scores survive — only the level restarts.
       this.wipeTimer += dt;
       if (this.wipeTimer >= 3) {
-        this.events.push({ kind: "wipe", text: "SQUAD WIPED — restarting" });
-        this.restart();
+        // Survival restarts on the spot; story hands the squad back to mission select.
+        if (this.mode === "story") {
+          this.events.push({ kind: "missionFailed", text: this.map.name });
+          this.wipeTimer = 0;
+        } else {
+          this.events.push({ kind: "wipe", text: "SQUAD WIPED — restarting" });
+          this.restart();
+        }
       }
       return;
     }

@@ -1,5 +1,6 @@
 import type { InputManager } from "../input/manager";
 import { PLAYER_COLORS } from "../sim/player";
+import { drawScrim, pulse as uiPulse, roundRect, setSpacing } from "./ui";
 
 /**
  * CORE 16 — The lobby.
@@ -71,19 +72,8 @@ export class Lobby {
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // Scrim, so the level drifting behind stays atmosphere and not noise. A little
-    // darker through the middle band, where all the text lives.
-    ctx.fillStyle = "rgba(6,7,12,0.74)";
-    ctx.fillRect(0, 0, width, height);
-    const veil = ctx.createLinearGradient(0, 0, 0, height);
-    veil.addColorStop(0, "rgba(6,7,12,0)");
-    veil.addColorStop(0.28, "rgba(6,7,12,0.55)");
-    veil.addColorStop(0.75, "rgba(6,7,12,0.55)");
-    veil.addColorStop(1, "rgba(6,7,12,0)");
-    ctx.fillStyle = veil;
-    ctx.fillRect(0, 0, width, height);
-
-    const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.005);
+    drawScrim(ctx, width, height);
+    const pulse = uiPulse();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
@@ -188,18 +178,4 @@ export class Lobby {
 
 function startLabel(kind: "keyboard" | "gamepad"): string {
   return kind === "keyboard" ? "PRESS ENTER" : "PRESS START";
-}
-
-/** letterSpacing is Chromium-only and silently ignored elsewhere — worth it, not required. */
-function setSpacing(ctx: CanvasRenderingContext2D, value: string): void {
-  const c = ctx as CanvasRenderingContext2D & { letterSpacing?: string };
-  if ("letterSpacing" in c) c.letterSpacing = value;
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number,
-): void {
-  ctx.beginPath();
-  if (typeof ctx.roundRect === "function") ctx.roundRect(x, y, w, h, r);
-  else ctx.rect(x, y, w, h);
 }

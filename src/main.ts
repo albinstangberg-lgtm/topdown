@@ -14,6 +14,12 @@ import { layoutViewports, type Viewport } from "./render/viewport";
 import { drawBanner, drawHud, drawSplitBorders } from "./render/hud";
 import { DebugOverlay } from "./render/debug";
 import { Lobby, MAX_PLAYERS } from "./menu/lobby";
+import { ModeSelect } from "./menu/modeSelect";
+import { MissionSelect } from "./menu/missionSelect";
+import {
+  CAMPAIGN, loadProgress, missionLevel, saveProgress, type Mission,
+} from "./campaign/campaign";
+import type { GameMode } from "./sim/world";
 import { computeVisibility, makeLight } from "./vision/visibility";
 
 /** Cursor distance from the player, in CSS pixels, below which steering is neutral. */
@@ -31,8 +37,14 @@ const MENU_PAN_SECONDS = 9;
 /** World units visible vertically behind the menu — wider than gameplay, on purpose. */
 const MENU_VIEW_HEIGHT = 900;
 
-/** Menu or match. Everything the shell does branches on exactly this. */
-export type Phase = "menu" | "playing";
+/**
+ * Where the shell is. Everything it does branches on exactly this:
+ *   lobby    — devices claim slots and ready up
+ *   mode     — story or survival
+ *   missions — the campaign map, returned to after every mission
+ *   playing  — a match is running
+ */
+export type Phase = "lobby" | "mode" | "missions" | "playing";
 
 /**
  * Game shell: owns the loop, the input manager, the world, and one camera per player.
@@ -54,8 +66,14 @@ export class Game {
   private readonly loop: GameLoop;
 
   /** Public so the smoke tests and the debug console can see where the shell is. */
-  phase: Phase = "menu";
+  phase: Phase = "lobby";
   readonly lobby = new Lobby();
+  readonly modeSelect = new ModeSelect();
+  readonly missionSelect = new MissionSelect(CAMPAIGN);
+  /** Device ids that came out of the lobby, in slot order. */
+  private roster: string[] = [];
+  readonly completed = loadProgress(CAMPAIGN);
+  private activeMission: Mission | null = null;
   private readonly menuCam = new Camera();
   private readonly menuLight = makeLight("#ffe0a8", Math.PI, 760, 0.9);
   private readonly menuFocus = { x: 0, y: 0 };
@@ -88,9 +106,15 @@ export class Game {
     const requestedPlayers = params.get("players");
     if (requestedPlayers !== null) {
       const n = clamp(Number(requestedPlayers) || 1, 1, MAX_PLAYERS);
-      const ids = ["kbm"];
-      for (let i = 1; i < n; i++) ids.push(`dummy${i}`);
-      this.startMatch(ids);
+      this.roster = ["kbm"];
+      for (let i = 1; i < n; i++) this.roster.push(`dummy${i}`);
+
+      const missionId = params.get("mission");
+      const mission = missionId
+        ? CAMPAIGN.missions.find((m) => m.id === missionId) ?? null
+        : null;
+      if (mission) this.launchMission(mission);
+      else this.beginMatch(level ?? undefined, "survival");
     } else {
       this.relayout();
     }
@@ -101,8 +125,10 @@ export class Game {
       if (e.code === "F1") { e.preventDefault(); this.debug.toggle(); }
       if (e.code === "F2") { e.preventDefault(); this.debug.showCollision = !this.debug.showCollision; }
       if (e.code === "KeyR" && e.shiftKey) this.world.restart();
-      if (e.code === "BracketLeft") this.cycleLevel(-1);
-      if (e.code === "BracketRight") this.cycleLevel(1);
+      const cycleAllowed = this.phase === "lobby" ||
+        (this.phase === "playing" && this.world.mode === "survival");
+      if (e.code === "BracketLeft" && cycleAllowed) this.cycleLevel(-1);
+      if (e.code === "BracketRight" && cycleAllowed) this.cycleLevel(1);
       if (e.code === "KeyC" && !e.ctrlKey && !e.metaKey) this.toggleCameraMode();
     });
     this.onResize();
@@ -202,14 +228,55 @@ export class Game {
     this.relayout();
   }
 
-  /** Bind each lobby device to a player and drop into the match. */
-  private startMatch(sourceIds: string[]): void {
-    for (const id of sourceIds) this.addPlayerFor(id);
+  /** Players are created once, on the first match, then reused across missions. */
+  private ensurePlayers(): void {
+    if (this.world.players.length > 0) return;
+    for (const id of this.roster) this.addPlayerFor(id);
+  }
+
+  private beginMatch(level: LevelData | undefined, mode: GameMode): void {
+    this.world.mode = mode;
+    this.ensurePlayers();
+    if (level) this.loadLevel(level);
+    else this.world.restart();
     this.phase = "playing";
     this.relayout();
     this.renderer.ambientLights = [];
     const hint = document.getElementById("boot");
     if (hint) { hint.hidden = false; hint.classList.add("show"); }
+  }
+
+  private launchMission(mission: Mission): void {
+    this.activeMission = mission;
+    this.beginMatch(missionLevel(mission), "story");
+  }
+
+  /** Back to the campaign map after a mission ends, won or lost. */
+  private returnToMissions(notice: string): void {
+    this.missionSelect.setNotice(notice);
+    this.missionSelect.focusNext(this.completed);
+    this.activeMission = null;
+    this.phase = "missions";
+  }
+
+  /**
+   * Menus are driven by everyone in the roster, not just player one — on a couch that
+   * is what people expect, and it means a keyboard-less player can still navigate.
+   */
+  private menuInput(): { x: number; y: number; confirm: boolean; cancel: boolean } {
+    let x = 0;
+    let y = 0;
+    let confirm = false;
+    let cancel = false;
+    const ids = this.roster.length > 0 ? this.roster : ["kbm"];
+    for (const id of ids) {
+      const state = this.input.get(id);
+      if (Math.abs(state.moveX) > Math.abs(x)) x = state.moveX;
+      if (Math.abs(state.moveY) > Math.abs(y)) y = state.moveY;
+      if (state.startPressed) confirm = true;
+      if (state.cancelPressed) cancel = true;
+    }
+    return { x, y, confirm, cancel };
   }
 
   private toggleCameraMode(): void {
@@ -334,10 +401,8 @@ export class Game {
   private update(dt: number): void {
     this.input.update();
 
-    if (this.phase === "menu") {
-      if (this.lobby.update(this.input)) {
-        this.startMatch(this.lobby.slots.map((s) => s.sourceId));
-      }
+    if (this.phase !== "playing") {
+      this.updateMenus(dt);
       if (this.banner.time > 0) this.banner.time -= dt;
       return;
     }
@@ -345,6 +410,39 @@ export class Game {
     this.world.update(dt, this.inputOf, this.resolveAim);
     this.drainEvents();
     if (this.banner.time > 0) this.banner.time -= dt;
+  }
+
+  private updateMenus(dt: number): void {
+    const menu = this.menuInput();
+
+    if (this.phase === "lobby") {
+      if (this.lobby.update(this.input)) {
+        this.roster = this.lobby.slots.map((s) => s.sourceId);
+        this.modeSelect.reset();
+        this.phase = "mode";
+      }
+      return;
+    }
+
+    if (this.phase === "mode") {
+      if (menu.cancel) { this.phase = "lobby"; return; }
+      const chosen = this.modeSelect.update(menu.x, menu.confirm, dt);
+      if (chosen === "survival") this.beginMatch(undefined, "survival");
+      else if (chosen === "story") {
+        this.missionSelect.focusNext(this.completed);
+        this.phase = "missions";
+      }
+      return;
+    }
+
+    if (this.phase === "missions") {
+      if (menu.cancel) { this.modeSelect.reset(); this.phase = "mode"; return; }
+      const aspect = this.renderer.width / Math.max(1, this.renderer.height);
+      const mission = this.missionSelect.update(
+        menu.x, menu.y, menu.confirm, dt, this.completed, aspect,
+      );
+      if (mission) this.launchMission(mission);
+    }
   }
 
   private drainEvents(): void {
@@ -358,6 +456,14 @@ export class Game {
         this.shakeAll(1);
         if (ev.text) this.setBanner(ev.text);
         this.relayout();
+      } else if (ev.kind === "missionComplete") {
+        if (this.activeMission) {
+          this.completed.add(this.activeMission.id);
+          saveProgress(CAMPAIGN, this.completed);
+        }
+        this.returnToMissions("MISSION COMPLETE");
+      } else if (ev.kind === "missionFailed") {
+        this.returnToMissions("MISSION FAILED");
       } else if (ev.kind === "level" && ev.text) {
         this.setBanner(ev.text);
       } else if (ev.text) {
@@ -425,15 +531,19 @@ export class Game {
 
     renderer.beginFrame();
     renderer.renderViewport(world, vp, this.menuCam, 0);
-    this.lobby.draw(
-      renderer.ctx, renderer.width, renderer.height, renderer.dpr,
-      world.map.name, this.cameraMode,
-    );
+    const { ctx, width: w, height: h, dpr } = renderer;
+    if (this.phase === "lobby") {
+      this.lobby.draw(ctx, w, h, dpr, world.map.name, this.cameraMode);
+    } else if (this.phase === "mode") {
+      this.modeSelect.draw(ctx, w, h, dpr, this.roster.length);
+    } else {
+      this.missionSelect.draw(ctx, w, h, dpr, this.completed);
+    }
   }
 
   private render(alpha: number, frameDt: number): void {
     const { world, renderer } = this;
-    if (this.phase === "menu") { this.renderMenu(frameDt); return; }
+    if (this.phase !== "playing") { this.renderMenu(frameDt); return; }
     if (this.views.length !== Math.max(1, world.players.length)) this.relayout();
 
     for (let i = 0; i < this.views.length; i++) {

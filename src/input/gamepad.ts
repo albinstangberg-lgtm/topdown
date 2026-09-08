@@ -54,6 +54,15 @@ export class GamepadSource implements InputSource {
     const ax = gp.axes;
     [out.moveX, out.moveY] = applyDeadzone(ax[0] ?? 0, ax[1] ?? 0);
 
+    // D-pad falls back into the movement vector when the stick is centred, so it works
+    // for menus and for walking without either of them needing to know about it.
+    if (out.moveX === 0 && out.moveY === 0) {
+      const pad = gp.buttons;
+      const dx = (pad[15]?.pressed ? 1 : 0) - (pad[14]?.pressed ? 1 : 0);
+      const dy = (pad[13]?.pressed ? 1 : 0) - (pad[12]?.pressed ? 1 : 0);
+      if (dx !== 0 || dy !== 0) [out.moveX, out.moveY] = clampMagnitude(dx, dy, 1);
+    }
+
     const [rx, ry] = applyDeadzone(ax[2] ?? 0, ax[3] ?? 0);
     out.aimMode = "stick";
     if (rx !== 0 || ry !== 0) {

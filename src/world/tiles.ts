@@ -10,7 +10,7 @@
  * "blocking" flag is the kind of shortcut that costs a refactor later.
  */
 
-export type SpawnKind = "player" | "enemy";
+export type SpawnKind = "player" | "enemy" | "zone";
 
 export interface TileDef {
   id: number;
@@ -22,6 +22,8 @@ export interface TileDef {
   spawn?: SpawnKind;
   /** Emits a static light at the centre of the tile, with this radius in world units. */
   light?: number;
+  /** Standing on this with the whole squad completes a story mission. */
+  exit?: boolean;
   /** Editor palette colour. */
   color: string;
   /** Single character for the compact text form of a level. */
@@ -36,14 +38,18 @@ export const TILE_DEFS: readonly TileDef[] = [
     color: "#15161f", glyph: "#", hint: "blocks movement and sight — casts shadows" },
   { id: 2, key: "player", name: "Player spawn", solid: false, opaque: false, spawn: "player",
     color: "#ffd257", glyph: "P", hint: "players spawn here in order; falls back to open floor" },
-  { id: 3, key: "enemy", name: "Enemy spawn", solid: false, opaque: false, spawn: "enemy",
-    color: "#ff6b6b", glyph: "E", hint: "the director spawns enemies at these, out of sight" },
+  { id: 3, key: "enemy", name: "Zombie", solid: false, opaque: false, spawn: "enemy",
+    color: "#ff6b6b", glyph: "E", hint: "one zombie, placed here at map start. Never respawns" },
   { id: 4, key: "crate", name: "Crate", solid: true, opaque: true,
     color: "#6b5334", glyph: "X", hint: "cover — same rules as a wall, drawn as a block" },
   { id: 5, key: "glass", name: "Glass", solid: true, opaque: false,
     color: "#5ad2ff", glyph: "G", hint: "blocks movement, NOT sight — you can see (and shoot past) through it" },
   { id: 6, key: "lamp", name: "Lamp", solid: false, opaque: false, light: 250,
     color: "#ffe9b0", glyph: "L", hint: "static light — permanently lit area, computed once on load" },
+  { id: 7, key: "exit", name: "Exit", solid: false, opaque: false, exit: true,
+    color: "#8bff7a", glyph: ">", hint: "the safe room. Get the whole squad standing on it to finish the mission" },
+  { id: 8, key: "spawnZone", name: "Spawn zone", solid: false, opaque: false, spawn: "zone",
+    color: "#9a5ad2", glyph: "Z", hint: "the director draws from these, picking a different one each time and never in sight" },
 ];
 
 export const TILE_FLOOR = 0;

@@ -21,7 +21,12 @@ export class TileMap {
   private readonly opaqueMask: Uint8Array;
 
   readonly playerSpawns: Point[] = [];
+  /** Hand-placed enemies. One zombie each, put down once when the map loads. */
   readonly enemySpawns: Point[] = [];
+  /** Zones the director draws from, so pressure comes from a different door each time. */
+  readonly spawnZones: Point[] = [];
+  /** Exit tiles. A map with none simply has no objective — that is survival. */
+  readonly exits: Point[] = [];
   readonly lamps: { x: number; y: number; range: number }[] = [];
   /** Tile indices you can stand on, for random placement. */
   private walkable: number[] = [];
@@ -53,6 +58,8 @@ export class TileMap {
   refresh(): void {
     this.playerSpawns.length = 0;
     this.enemySpawns.length = 0;
+    this.spawnZones.length = 0;
+    this.exits.length = 0;
     this.lamps.length = 0;
     this.walkable = [];
 
@@ -68,6 +75,8 @@ export class TileMap {
         const c = this.tileCenter(tx, ty);
         if (def.spawn === "player") this.playerSpawns.push(c);
         else if (def.spawn === "enemy") this.enemySpawns.push(c);
+        else if (def.spawn === "zone") this.spawnZones.push(c);
+        if (def.exit) this.exits.push(c);
         if (def.light) this.lamps.push({ x: c.x, y: c.y, range: def.light });
       }
     }
@@ -95,6 +104,10 @@ export class TileMap {
 
   isSolidAt(x: number, y: number): boolean {
     return this.isSolid(Math.floor(x / TILE), Math.floor(y / TILE));
+  }
+
+  isExitAt(x: number, y: number): boolean {
+    return tileDef(this.tileAt(Math.floor(x / TILE), Math.floor(y / TILE))).exit === true;
   }
 
   tileCenter(tx: number, ty: number): Point {
