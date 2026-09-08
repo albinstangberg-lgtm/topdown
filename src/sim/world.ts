@@ -86,6 +86,10 @@ export class GameWorld {
       p.reviveProgress = 0;
       p.ammo = p.weapon.magazine;
       p.reloadTimer = 0;
+      p.stance = "stand";
+      p.stanceTimer = 0;
+      p.stamina = p.maxStamina;
+      p.exhausted = false;
       syncLights(p);
     });
     this.events.push({ kind: "level", text: level.name });
@@ -329,6 +333,10 @@ export class GameWorld {
         p.health = p.maxHealth * 0.4;
         p.reviveProgress = 0;
         p.ammo = p.weapon.magazine;
+        p.stance = "stand";
+        p.stanceTimer = 0;
+        p.stamina = p.maxStamina;
+        p.exhausted = false;
       }
     }
   }

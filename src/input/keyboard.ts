@@ -21,7 +21,7 @@ export class KeyboardMouseSource implements InputSource {
 
   // Edge tracking lives in the source so the sim only ever sees clean booleans.
   private prevFire = false;
-  private prevDash = false;
+  private prevDive = false;
   private prevInteract = false;
   private prevStart = false;
   private prevCancel = false;
@@ -96,22 +96,23 @@ export class KeyboardMouseSource implements InputSource {
 
     // Movement reads held keys only; everything edge-triggered reads the latch too.
     const fire = this.mouseDown || this.mouseTapped || this.hit("Space");
-    const dash = this.hit("ShiftLeft") || this.hit("ShiftRight");
+    const sprint = k.has("ShiftLeft") || k.has("ShiftRight");
+    const dive = this.hit("ControlLeft") || this.hit("ControlRight") || this.hit("KeyC");
     const interact = k.has("KeyE");
     const start = this.hit("Enter") || this.hit("NumpadEnter");
     const cancel = this.hit("Escape") || this.hit("Backspace");
 
     out.fire = fire;
     out.firePressed = fire && !this.prevFire;
-    out.dash = dash;
-    out.dashPressed = dash && !this.prevDash;
+    out.sprint = sprint;
+    out.divePressed = dive && !this.prevDive;
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
     out.startPressed = start && !this.prevStart;
     out.cancelPressed = cancel && !this.prevCancel;
 
     this.prevFire = fire;
-    this.prevDash = dash;
+    this.prevDive = dive;
     this.prevInteract = interact;
     this.prevStart = start;
     this.prevCancel = cancel;

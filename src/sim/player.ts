@@ -8,11 +8,42 @@ import type { BulletPool, ParticlePool } from "./pools";
 
 export const PLAYER_COLORS = ["#ffd257", "#5ad2ff", "#ff7ba8", "#8bff7a"];
 
-const SPEED = 235;
+/**
+ * Movement tuning. The baseline used to be 235; walking is now 70% of that and
+ * sprinting 110%, which makes the default pace deliberate and turns sprint into a
+ * resource you spend rather than the way you always travel.
+ */
+const WALK_SPEED = 165;      // 0.70 x the old 235
+const SPRINT_SPEED = 259;    // 1.10 x the old 235
 const ACCEL = 18;            // exponential approach rate, not units/s^2
-const DASH_SPEED = 720;
-const DASH_TIME = 0.16;
-const DASH_COOLDOWN = 0.85;
+
+/**
+ * Stamina. Only sprinting drains it. Run it to zero and sprint locks out until it
+ * recovers past EXHAUST_FLOOR, so the punishment for over-sprinting is being stuck at
+ * walking pace at the worst possible moment.
+ */
+const STAMINA_MAX = 100;
+const SPRINT_DRAIN = 26;     // per second
+const STAMINA_REGEN = 20;    // per second
+const STAMINA_DELAY = 0.7;   // pause before regen starts
+const EXHAUST_FLOOR = 25;    // stamina needed to sprint again after hitting zero
+/**
+ * A dive costs stamina too. Not strictly asked for, but a free dive next to a metered
+ * sprint makes the dive the obvious way to travel. Set to 0 to decouple them.
+ */
+const DIVE_STAMINA_COST = 25;
+
+/**
+ * The dive. You launch, you land on the floor, and you have to get up — roughly 2.3
+ * seconds of commitment in total. PRONE_TIME is the one to tune for feel.
+ */
+const DIVE_SPEED = 900;
+const DIVE_TIME = 0.3;
+const PRONE_TIME = 1.5;
+const STAND_TIME = 0.45;
+const DIVE_COOLDOWN = 0.8;   // starts once you are back on your feet
+/** Turning on the floor is slower — a prone body pivots badly. */
+const PRONE_TURN_SCALE = 0.55;
 /** Radians/second toward the aim direction. Absolute aiming wants this fast. */
 export const TURN_RATE = 14;
 /**
@@ -57,10 +88,15 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     ammo: WEAPONS.smg.magazine,
     fireCooldown: 0,
     reloadTimer: 0,
-    dashTimer: 0,
-    dashCooldown: 0,
-    dashDirX: 0,
-    dashDirY: 0,
+    stance: "stand",
+    stanceTimer: 0,
+    diveDirX: 0,
+    diveDirY: 0,
+    diveCooldown: 0,
+    stamina: STAMINA_MAX,
+    maxStamina: STAMINA_MAX,
+    staminaDelay: 0,
+    exhausted: false,
     muzzleFlash: 0,
     hurtFlash: 0,
     kills: 0,
@@ -106,6 +142,8 @@ export function updatePlayer(
   if (p.downed) {
     p.weaponUp = 0;
     p.weaponHold = 0;
+    p.stance = "stand";
+    p.stanceTimer = 0;
     updateDowned(p, input, deps, dt);
     return;
   }
@@ -114,36 +152,39 @@ export function updatePlayer(
 
   // --- Aim -----------------------------------------------------------------
   if (aim !== null) {
-    p.facing = rotateToward(p.facing, aim.angle, aim.turnRate * dt);
+    p.facing = rotateToward(p.facing, aim.angle, aim.turnRate * turnScale(p) * dt);
   } else if (input.moveX !== 0 || input.moveY !== 0) {
     // No aim input: face where you are walking, so the cone is never behind you.
     p.facing = rotateToward(p.facing, Math.atan2(input.moveY, input.moveX), TURN_RATE * 0.6 * dt);
   }
 
   // --- Move ----------------------------------------------------------------
-  p.dashCooldown = Math.max(0, p.dashCooldown - dt);
-  if (input.dashPressed && p.dashCooldown <= 0 && (input.moveX !== 0 || input.moveY !== 0)) {
-    const len = Math.hypot(input.moveX, input.moveY);
-    p.dashDirX = input.moveX / len;
-    p.dashDirY = input.moveY / len;
-    p.dashTimer = DASH_TIME;
-    p.dashCooldown = DASH_COOLDOWN;
-    deps.particles.burst(p.x, p.y, 8, 120, "#ffffff", 0.25, 2);
-  }
+  const sprinting = updateStanceAndStamina(p, input, deps, dt);
 
-  if (p.dashTimer > 0) {
-    p.dashTimer -= dt;
-    p.vx = p.dashDirX * DASH_SPEED;
-    p.vy = p.dashDirY * DASH_SPEED;
+  if (p.stance === "dive") {
+    // Decelerating launch, so the dive covers ground and then puts you down.
+    const t = 1 - p.stanceTimer / DIVE_TIME;
+    const speed = DIVE_SPEED * Math.max(0, 1 - t);
+    p.vx = p.diveDirX * speed;
+    p.vy = p.diveDirY * speed;
+  } else if (p.stance === "stand") {
+    const speed = sprinting ? SPRINT_SPEED : WALK_SPEED;
+    p.vx = damp(p.vx, input.moveX * speed, ACCEL, dt);
+    p.vy = damp(p.vy, input.moveY * speed, ACCEL, dt);
   } else {
-    p.vx = damp(p.vx, input.moveX * SPEED, ACCEL, dt);
-    p.vy = damp(p.vy, input.moveY * SPEED, ACCEL, dt);
+    // On the floor or getting up: you are going nowhere.
+    p.vx = damp(p.vx, 0, 16, dt);
+    p.vy = damp(p.vy, 0, 16, dt);
   }
 
   const moved = moveCircle(deps.map, p.x, p.y, p.radius, p.vx * dt, p.vy * dt);
   p.x = moved.x;
   p.y = moved.y;
-  if (moved.hitWall && p.dashTimer > 0) p.dashTimer = 0;
+  // Diving into a wall still puts you on the floor — you just do not get the distance.
+  if (moved.hitWall && p.stance === "dive") {
+    p.vx = 0;
+    p.vy = 0;
+  }
 
   // --- Shoot ---------------------------------------------------------------
   const w = p.weapon;
@@ -159,7 +200,7 @@ export function updatePlayer(
     // A lowered weapon cannot fire — but pulling the trigger raises it (see
     // updateWeaponStance), so the shot lands as soon as the gun is up rather than
     // the input being swallowed.
-    if (wantsToFire && p.fireCooldown <= 0 && p.weaponUp >= 1) fire(p, deps);
+    if (wantsToFire && p.fireCooldown <= 0 && p.weaponUp >= 1 && canFire(p)) fire(p, deps);
   }
 
   syncLights(p);
@@ -173,12 +214,84 @@ export function updatePlayer(
 function updateWeaponStance(
   p: Player, aim: AimCommand | null, input: InputState, dt: number,
 ): void {
-  const wants = (aim?.raise ?? false) || input.fire;
+  const wants = canFire(p) && ((aim?.raise ?? false) || input.fire);
   p.weaponHold = wants ? WEAPON_HOLD : Math.max(0, p.weaponHold - dt);
 
   const target = wants || p.weaponHold > 0 ? 1 : 0;
   const rate = target > p.weaponUp ? 1 / WEAPON_RAISE_TIME : 1 / WEAPON_LOWER_TIME;
   p.weaponUp = clamp(p.weaponUp + Math.sign(target - p.weaponUp) * rate * dt, 0, 1);
+}
+
+/** You can shoot standing or lying down, but not mid-dive and not while getting up. */
+export function canFire(p: Player): boolean {
+  return p.stance === "stand" || p.stance === "prone";
+}
+
+function turnScale(p: Player): number {
+  if (p.stance === "dive") return 0;            // committed to the launch direction
+  if (p.stance === "prone") return PRONE_TURN_SCALE;
+  if (p.stance === "standUp") return 0.4;
+  return 1;
+}
+
+/**
+ * The stance machine and the stamina meter, which are coupled: a dive costs stamina,
+ * and sprinting is the only thing that drains it. Returns whether the player is
+ * actually sprinting this step.
+ */
+function updateStanceAndStamina(
+  p: Player, input: InputState, deps: PlayerDeps, dt: number,
+): boolean {
+  p.diveCooldown = Math.max(0, p.diveCooldown - dt);
+
+  // --- stance transitions ---
+  if (p.stance !== "stand") {
+    p.stanceTimer -= dt;
+    if (p.stanceTimer <= 0) {
+      if (p.stance === "dive") {
+        p.stance = "prone";
+        p.stanceTimer = PRONE_TIME;
+        deps.particles.burst(p.x, p.y, 10, 90, "#c9c3ae", 0.4, 3);
+      } else if (p.stance === "prone") {
+        p.stance = "standUp";
+        p.stanceTimer = STAND_TIME;
+      } else {
+        p.stance = "stand";
+        p.stanceTimer = 0;
+        p.diveCooldown = DIVE_COOLDOWN;
+      }
+    }
+  } else if (
+    input.divePressed && p.diveCooldown <= 0 &&
+    p.stamina >= DIVE_STAMINA_COST && (input.moveX !== 0 || input.moveY !== 0)
+  ) {
+    const len = Math.hypot(input.moveX, input.moveY);
+    p.diveDirX = input.moveX / len;
+    p.diveDirY = input.moveY / len;
+    p.stance = "dive";
+    p.stanceTimer = DIVE_TIME;
+    p.stamina = Math.max(0, p.stamina - DIVE_STAMINA_COST);
+    p.staminaDelay = STAMINA_DELAY;
+    deps.particles.burst(p.x, p.y, 8, 140, "#ffffff", 0.25, 2);
+  }
+
+  // --- stamina ---
+  const moving = input.moveX !== 0 || input.moveY !== 0;
+  const sprinting =
+    p.stance === "stand" && input.sprint && moving && !p.exhausted && p.stamina > 0;
+
+  if (sprinting) {
+    p.stamina = Math.max(0, p.stamina - SPRINT_DRAIN * dt);
+    p.staminaDelay = STAMINA_DELAY;
+    if (p.stamina <= 0) p.exhausted = true;
+  } else if (p.staminaDelay > 0) {
+    p.staminaDelay -= dt;
+  } else if (p.stamina < p.maxStamina) {
+    p.stamina = Math.min(p.maxStamina, p.stamina + STAMINA_REGEN * dt);
+  }
+  if (p.exhausted && p.stamina >= EXHAUST_FLOOR) p.exhausted = false;
+
+  return sprinting;
 }
 
 function fire(p: Player, deps: PlayerDeps): void {
@@ -209,8 +322,8 @@ function fire(p: Player, deps: PlayerDeps): void {
 function updateDowned(p: Player, input: InputState, deps: PlayerDeps, dt: number): void {
   p.bleedout -= dt;
   // Crawling: slow, no weapon, cone shrinks to a stub.
-  p.vx = damp(p.vx, input.moveX * SPEED * 0.35, 10, dt);
-  p.vy = damp(p.vy, input.moveY * SPEED * 0.35, 10, dt);
+  p.vx = damp(p.vx, input.moveX * WALK_SPEED * 0.35, 10, dt);
+  p.vy = damp(p.vy, input.moveY * WALK_SPEED * 0.35, 10, dt);
   const moved = moveCircle(deps.map, p.x, p.y, p.radius, p.vx * dt, p.vy * dt);
   p.x = moved.x;
   p.y = moved.y;
@@ -240,6 +353,8 @@ export function updateRevives(
       target.reviveProgress = 0;
       target.health = target.maxHealth * 0.5;
       target.ammo = target.weapon.magazine;
+      target.stamina = target.maxStamina * 0.5;
+      target.exhausted = false;
       return target;
     }
   }
@@ -272,4 +387,7 @@ export function syncLights(p: Player): void {
   p.halo.range = HALO_RANGE;
 }
 
-export const PLAYER_TUNING = { SPEED, DASH_COOLDOWN, BLEEDOUT, REVIVE_TIME, REVIVE_RANGE };
+export const PLAYER_TUNING = {
+  WALK_SPEED, SPRINT_SPEED, STAMINA_MAX, SPRINT_DRAIN,
+  DIVE_TIME, PRONE_TIME, STAND_TIME, BLEEDOUT, REVIVE_TIME, REVIVE_RANGE,
+};

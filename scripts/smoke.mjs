@@ -225,6 +225,116 @@ check("mouse steering is proportional to distance from the player",
   `near ${nudge.toFixed(3)} rad, far ${shove.toFixed(3)} rad`);
 await camPage.mouse.move(640, 720 * 0.78 - 220);
 
+// --- movement ----------------------------------------------------------------
+
+// Speed is read off the velocity vector rather than displacement, so a wall in the
+// way cannot make the measurement lie.
+const speedWhile = async (keys) => {
+  await camPage.evaluate(() => {
+    const p = window.game.world.players[0];
+    p.stance = "stand"; p.stanceTimer = 0; p.stamina = p.maxStamina; p.exhausted = false;
+    p.vx = 0; p.vy = 0;
+  });
+  for (const k of keys) await camPage.keyboard.down(k);
+  await camPage.waitForTimeout(400);                 // let the ramp settle
+  const v = await camPage.evaluate(() => {
+    const p = window.game.world.players[0];
+    return { speed: Math.hypot(p.vx, p.vy), stamina: p.stamina };
+  });
+  for (const k of keys) await camPage.keyboard.up(k);
+  await camPage.waitForTimeout(150);
+  return v;
+};
+
+await camPage.mouse.move(640, 720 * 0.78 - 220);     // dead ahead: no steering
+const walking = await speedWhile(["KeyW"]);
+const sprinting = await speedWhile(["KeyW", "ShiftLeft"]);
+check("walk is 70% and sprint 110% of the old baseline speed",
+  Math.abs(walking.speed - 165) < 6 && Math.abs(sprinting.speed - 259) < 8,
+  `walk ${walking.speed.toFixed(0)}u/s, sprint ${sprinting.speed.toFixed(0)}u/s`);
+check("only sprinting drains stamina",
+  walking.stamina >= 99.5 && sprinting.stamina < 95,
+  `walking ${walking.stamina.toFixed(0)}, sprinting ${sprinting.stamina.toFixed(0)}`);
+
+// Run the tank dry and confirm sprint locks out until stamina recovers.
+const exhaustion = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  p.stance = "stand"; p.stamina = 6; p.exhausted = false;
+  return { start: p.stamina };
+});
+await camPage.keyboard.down("KeyW");
+await camPage.keyboard.down("ShiftLeft");
+await camPage.waitForTimeout(600);
+const drained = await camPage.evaluate(() => {
+  const p = window.game.world.players[0];
+  return { exhausted: p.exhausted, stamina: p.stamina, speed: Math.hypot(p.vx, p.vy) };
+});
+await camPage.keyboard.up("ShiftLeft");
+await camPage.keyboard.up("KeyW");
+check("running out of stamina locks sprint back down to walking pace",
+  drained.exhausted === true && drained.stamina < 1 && drained.speed < 175,
+  `${JSON.stringify(exhaustion)} -> ${JSON.stringify(drained)}`);
+
+// The dive: launch, land, get up — and you cannot shoot mid-flight.
+const dive = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  p.stance = "stand"; p.stanceTimer = 0; p.diveCooldown = 0;
+  p.stamina = p.maxStamina; p.exhausted = false;
+  p.ammo = p.weapon.magazine;
+
+  const seen = [];
+  const t0 = performance.now();
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyW" }));
+  await new Promise((r) => setTimeout(r, 120));
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "ControlLeft" }));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "ControlLeft" }));
+
+  let firedMidDive = false;
+  let movedWhileProne = 0;
+  let proneAt = null;
+  while (performance.now() - t0 < 2900) {
+    if (seen.length === 0 || seen[seen.length - 1].stance !== p.stance) {
+      seen.push({ stance: p.stance, at: (performance.now() - t0) / 1000 });
+    }
+    if (p.stance === "dive") {
+      const ammo = p.ammo;
+      p.fireCooldown = 0;
+      if (p.ammo < ammo) firedMidDive = true;
+    }
+    if (p.stance === "prone") {
+      if (proneAt === null) proneAt = { x: p.x, y: p.y };
+      movedWhileProne = Math.max(movedWhileProne, Math.hypot(p.x - proneAt.x, p.y - proneAt.y));
+    }
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW" }));
+  return { seen, firedMidDive, movedWhileProne, stamina: p.stamina };
+});
+const order = dive.seen.map((s) => s.stance).join(">");
+const proneStart = dive.seen.find((s) => s.stance === "prone");
+const standUp = dive.seen.find((s) => s.stance === "standUp");
+const proneLength = standUp && proneStart ? standUp.at - proneStart.at : 0;
+check("a dive puts you on the floor for ~1.5s and then stands you back up",
+  order === "stand>dive>prone>standUp>stand" &&
+  Math.abs(proneLength - 1.5) < 0.2 && dive.movedWhileProne < 4,
+  `${order}, prone ${proneLength.toFixed(2)}s, drift ${dive.movedWhileProne.toFixed(1)}u`);
+
+// You can shoot lying down — that is the point of the dive.
+const proneFire = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  p.stance = "prone"; p.stanceTimer = 4; p.ammo = p.weapon.magazine; p.reloadTimer = 0;
+  p.weaponUp = 1; p.weaponHold = 1;
+  const before = p.ammo;
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }));
+  await new Promise((r) => setTimeout(r, 400));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space" }));
+  const after = p.ammo;
+  p.stance = "stand"; p.stanceTimer = 0;
+  return { before, after };
+});
+check("you can shoot from the floor", proneFire.after < proneFire.before,
+  JSON.stringify(proneFire));
+
 // Weapon stance: the gun only comes up when the aim device is actually pushed.
 await camPage.mouse.move(640, 720 * 0.78);        // cursor on the player = no deflection
 await camPage.waitForTimeout(900);
@@ -345,13 +455,14 @@ check("right stick deflection sets the turn rate",
 
 const padButtons = await padPage.evaluate(async () => {
   const p = window.game.world.players[1];
-  const before = p.dashCooldown;
-  window.__pad.buttons[6].pressed = true;   // LT = dash
-  window.__pad.axes[0] = 1;                 // needs a direction to dash in
+  p.stance = "stand"; p.stanceTimer = 0; p.diveCooldown = 0; p.stamina = p.maxStamina;
+  window.__pad.buttons[6].pressed = true;   // LT = dive
+  window.__pad.axes[0] = 1;                 // needs a direction to dive in
   await new Promise((r) => setTimeout(r, 200));
   window.__pad.buttons[6].pressed = false;
   window.__pad.axes[0] = 0;
-  const dashed = p.dashCooldown > before;
+  const dashed = p.stance === "dive" || p.stance === "prone";
+  p.stance = "stand"; p.stanceTimer = 0;    // do not leave the next check on the floor
 
   const ammo = p.ammo;
   window.__pad.buttons[7] = { pressed: true, value: 1, touched: true }; // RT = fire
@@ -359,7 +470,7 @@ const padButtons = await padPage.evaluate(async () => {
   window.__pad.buttons[7] = { pressed: false, value: 0, touched: false };
   return { dashed, fired: p.ammo < ammo };
 });
-check("gamepad trigger fires and LT dashes",
+check("gamepad trigger fires and LT dives",
   padButtons.dashed && padButtons.fired, JSON.stringify(padButtons));
 check("gamepad page raised no exceptions", padErrors.length === 0, padErrors.join(" | "));
 

@@ -32,8 +32,10 @@ export interface InputState {
 
   fire: boolean;
   firePressed: boolean;
-  dash: boolean;
-  dashPressed: boolean;
+  /** Held. Costs stamina, moves you faster, and is the only thing that drains it. */
+  sprint: boolean;
+  /** Tapped. Commits you to a dive that ends on the floor. */
+  divePressed: boolean;
   interact: boolean;
   interactPressed: boolean;
   /** Used only by the join flow (START / Enter). */
@@ -50,7 +52,7 @@ export function emptyInput(): InputState {
     aimStrength: 0,
     pointerX: 0, pointerY: 0,
     fire: false, firePressed: false,
-    dash: false, dashPressed: false,
+    sprint: false, divePressed: false,
     interact: false,
     interactPressed: false,
     startPressed: false,

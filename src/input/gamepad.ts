@@ -18,7 +18,7 @@ export class GamepadSource implements InputSource {
   readonly label: string;
 
   private prevFire = false;
-  private prevDash = false;
+  private prevDive = false;
   private prevInteract = false;
   private prevStart = false;
   private prevCancel = false;
@@ -43,7 +43,7 @@ export class GamepadSource implements InputSource {
       out.moveX = 0; out.moveY = 0;
       out.aimStrength = 0;
       out.fire = false; out.firePressed = false;
-      out.dash = false; out.dashPressed = false;
+      out.sprint = false; out.divePressed = false;
       out.interact = false; out.interactPressed = false;
       out.startPressed = false; out.cancelPressed = false;
       return;
@@ -71,22 +71,23 @@ export class GamepadSource implements InputSource {
     const rightTrigger = gp.buttons[7]?.value ?? 0;
 
     const fire = rightTrigger > 0.35 || btn(5) || btn(0);
-    const dash = btn(6) || btn(1) || btn(10);
+    const sprint = btn(10) || btn(4);         // L3 or LB, held
+    const dive = btn(1) || btn(6);            // B or LT, tapped
     const interact = btn(2);
     const start = btn(9) || btn(8);
     const cancel = btn(1);                    // B / circle
 
     out.fire = fire;
     out.firePressed = fire && !this.prevFire;
-    out.dash = dash;
-    out.dashPressed = dash && !this.prevDash;
+    out.sprint = sprint;
+    out.divePressed = dive && !this.prevDive;
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
     out.startPressed = start && !this.prevStart;
     out.cancelPressed = cancel && !this.prevCancel;
 
     this.prevFire = fire;
-    this.prevDash = dash;
+    this.prevDive = dive;
     this.prevInteract = interact;
     this.prevStart = start;
     this.prevCancel = cancel;

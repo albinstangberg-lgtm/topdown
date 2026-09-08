@@ -2,6 +2,8 @@ import { lerp, TAU } from "../core/math";
 import { TILE } from "../world/tilemap";
 import { tileDef } from "../world/tiles";
 import { raycast } from "../world/raycast";
+import { PLAYER_TUNING } from "../sim/player";
+import type { Player } from "../sim/entities";
 import type { GameWorld } from "../sim/world";
 import type { VisionLight } from "../vision/visibility";
 import type { Camera } from "./camera";
@@ -244,8 +246,12 @@ export class Renderer {
       const x = lerp(p.prevX, p.x, alpha);
       const y = lerp(p.prevY, p.y, alpha);
       const body = p.downed ? "#6b6b6b" : (p.hurtFlash > 0.15 ? "#ffffff" : p.color);
-      // The barrel extends as the weapon comes up — stance is readable without UI.
-      drawBlockActor(ctx, x, y, p.facing, p.radius, body, "#ffffff", true, 0.45 + p.weaponUp * 0.55);
+      // The barrel extends as the weapon comes up and the body flattens as you go to
+      // the floor — both stances are readable off the world, without UI.
+      drawBlockActor(
+        ctx, x, y, p.facing, p.radius, body, "#ffffff", true,
+        0.45 + p.weaponUp * 0.55, proneAmount(p),
+      );
 
       if (p.muzzleFlash > 0) {
         const mx = x + Math.cos(p.facing) * (p.radius + 14);
@@ -493,25 +499,41 @@ function withAlpha(hex: string, alpha: number): string {
 }
 
 /** A blocky actor: body square, barrel stub, outline. Placeholder art, on purpose. */
+/** 0 upright, 1 flat on the floor. Ramps through the dive and the scramble back up. */
+function proneAmount(p: Player): number {
+  const t = PLAYER_TUNING;
+  switch (p.stance) {
+    case "dive": return 1 - Math.min(1, Math.max(0, p.stanceTimer / t.DIVE_TIME));
+    case "prone": return 1;
+    case "standUp": return Math.min(1, Math.max(0, p.stanceTimer / t.STAND_TIME));
+    default: return 0;
+  }
+}
+
 function drawBlockActor(
   ctx: CanvasRenderingContext2D, x: number, y: number, facing: number,
   radius: number, body: string, outline: string, thickOutline = false, barrel = 1,
+  prone = 0,
 ): void {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(facing);
 
+  // A body on the floor reads from above as longer along its facing and narrower across.
+  const halfLen = radius * (1 + 0.55 * prone);
+  const halfWid = radius * (1 - 0.42 * prone);
+
   ctx.fillStyle = "rgba(0,0,0,0.35)";
-  ctx.fillRect(-radius + 3, -radius + 4, radius * 2, radius * 2);
+  ctx.fillRect(-halfLen + 3, -halfWid + 4, halfLen * 2, halfWid * 2);
 
   ctx.fillStyle = body;
-  ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
+  ctx.fillRect(-halfLen, -halfWid, halfLen * 2, halfWid * 2);
   ctx.strokeStyle = outline;
   ctx.lineWidth = thickOutline ? 2.5 : 1.5;
-  ctx.strokeRect(-radius, -radius, radius * 2, radius * 2);
+  ctx.strokeRect(-halfLen, -halfWid, halfLen * 2, halfWid * 2);
 
   // Barrel, always pointing along `facing` — the only readable direction cue on a block.
   ctx.fillStyle = outline;
-  ctx.fillRect(radius - 2, -3, 16 * barrel, 6);
+  ctx.fillRect(halfLen - 2, -3, 16 * barrel, 6);
   ctx.restore();
 }

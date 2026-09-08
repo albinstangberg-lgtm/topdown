@@ -53,9 +53,19 @@ export function drawHud(
     ctx.fillRect(pad, pad + 34, barW * t, 3);
   }
 
-  // Dash cooldown pip
-  ctx.fillStyle = p.dashCooldown > 0 ? "rgba(255,255,255,0.18)" : "rgba(120,200,255,0.85)";
-  ctx.fillRect(pad, pad + 42, 46, 4);
+  // Stamina. Goes amber while draining and red once you have run yourself out.
+  const staminaW = barW * 0.72;
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(pad, pad + 42, staminaW, 5);
+  ctx.fillStyle = p.exhausted
+    ? "rgba(255,110,110,0.9)"
+    : p.stamina < p.maxStamina ? "rgba(255,206,110,0.9)" : "rgba(120,200,255,0.8)";
+  ctx.fillRect(pad, pad + 42, staminaW * (p.stamina / p.maxStamina), 5);
+
+  if (p.stance !== "stand") {
+    ctx.fillStyle = "rgba(255,206,110,0.9)";
+    ctx.fillText(p.stance === "standUp" ? "GETTING UP" : "PRONE", pad, pad + 54);
+  }
 
   ctx.fillStyle = "rgba(150,158,175,0.75)";
   ctx.fillText(`kills ${p.kills}`, pad, vp.h - pad - 14);

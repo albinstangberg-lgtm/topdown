@@ -11,6 +11,13 @@ import type { VisionLight } from "../vision/visibility";
 
 export type Team = "player" | "enemy";
 
+/**
+ * The movement state machine. A dive is a commitment: you launch, you land on the
+ * floor, and you have to get up again. That commitment is the tactical cost that
+ * makes it a decision rather than a dodge you spam.
+ */
+export type Stance = "stand" | "dive" | "prone" | "standUp";
+
 export interface WeaponDef {
   name: string;
   /** Shots per second. */
@@ -64,10 +71,19 @@ export interface Player {
   ammo: number;
   fireCooldown: number;
   reloadTimer: number;
-  dashTimer: number;
-  dashCooldown: number;
-  dashDirX: number;
-  dashDirY: number;
+  /** Where the body is: upright, mid-dive, on the floor, or getting back up. */
+  stance: Stance;
+  /** Seconds left in the current stance. Unused while standing. */
+  stanceTimer: number;
+  diveDirX: number;
+  diveDirY: number;
+  diveCooldown: number;
+  stamina: number;
+  maxStamina: number;
+  /** Counts down before stamina starts coming back, so tapping sprint is not free. */
+  staminaDelay: number;
+  /** Ran the tank dry — sprint stays locked out until stamina recovers past a floor. */
+  exhausted: boolean;
   muzzleFlash: number;
   hurtFlash: number;
   kills: number;

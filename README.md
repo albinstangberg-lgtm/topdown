@@ -33,7 +33,8 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Move | `WASD` (relative to the screen) | Left stick |
 | Steer / aim | Mouse (rate scales with distance) | Right stick (rate scales with push) |
 | Fire | Left click / `Space` | RT / RB / A |
-| Dash | `Shift` | LT / B |
+| Sprint (hold) | `Shift` | L3 / LB |
+| Dive (tap) | `Ctrl` / `C` | B / LT |
 | Revive teammate | Hold `E` | Hold X |
 | Join the game | — | `START` |
 
@@ -59,6 +60,33 @@ Steering is **proportional**: the turn *rate* comes from how hard the device is 
 stick deflection, or the cursor's distance from the player — so a nudge scans a room
 slowly and a full push spins you round. The response curve favours fine control near
 centre (`STEER_RESPONSE` in `src/main.ts`).
+
+## Movement
+
+Paced for something slower and more tactical than a bullet-hell twin-stick.
+
+| | speed | notes |
+| --- | --- | --- |
+| Walk | 165 u/s | the default. 70% of the old baseline |
+| Sprint | 259 u/s | 110% of the old baseline, costs stamina |
+
+**Stamina** (100, drains 26/s, regenerates 20/s after a 0.7s pause) is drained by
+sprinting and nothing else. Run it to zero and sprint locks out entirely until it
+recovers past 25 — so over-sprinting leaves you walking at the worst possible moment.
+
+**Dive** is a commitment, not a dodge. You launch in your movement direction, land
+**prone**, and have to get back up: 0.3s of flight, 1.5s on the floor, 0.45s standing —
+about 2.3 seconds in total. You can shoot lying down, and turn (slowly), but you cannot
+move, and you cannot shoot mid-flight or while scrambling up. Diving into a wall still
+puts you on the floor; you just do not get the distance.
+
+A dive also costs 25 stamina. That coupling was my call rather than yours — a free dive
+next to a metered sprint makes diving the obvious way to travel. Set
+`DIVE_STAMINA_COST` to 0 in `src/sim/player.ts` to decouple them.
+
+All of it is named constants at the top of `src/sim/player.ts`: `WALK_SPEED`,
+`SPRINT_SPEED`, `SPRINT_DRAIN`, `STAMINA_REGEN`, `EXHAUST_FLOOR`, `DIVE_SPEED`,
+`DIVE_TIME`, `PRONE_TIME`, `STAND_TIME`, `DIVE_COOLDOWN`.
 
 ## Weapon up / down
 

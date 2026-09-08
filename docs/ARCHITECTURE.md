@@ -171,6 +171,11 @@ with the game.
   nothing about the simulation: it hands back a list of device ids and the shell binds
   them to players, which is the same seam drop-in join uses mid-match. The shell is a
   two-state machine (`menu` / `playing`) and that is the only thing it branches on.
+- **Movement stance** (`updateStanceAndStamina` in `src/sim/player.ts`) — a four-state
+  machine (`stand` / `dive` / `prone` / `standUp`) plus a stamina meter. Every rule that
+  matters hangs off the stance: what you can fire, how fast you turn, whether you move
+  at all. Keeping it as one enum rather than a pile of booleans is what stops "can I
+  shoot right now?" from becoming five separate conditions scattered across the file.
 - **Weapon stance** (`updateWeaponStance` in `src/sim/player.ts`) — one float, `weaponUp`,
   driven by the same aim deflection that steers. It gates firing, sets the barrel length
   and gates the aim laser, so stance is readable from the world rather than from UI. The
