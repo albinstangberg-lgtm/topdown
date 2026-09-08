@@ -335,6 +335,49 @@ const proneFire = await camPage.evaluate(async () => {
 check("you can shoot from the floor", proneFire.after < proneFire.before,
   JSON.stringify(proneFire));
 
+// Manual reload: tops up a partial magazine, ignores a full one, works prone.
+const reload = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  const press = () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyR" }));
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyR" }));
+  };
+  const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  p.stance = "stand"; p.stanceTimer = 0; p.reloadTimer = 0;
+  p.ammo = 7;
+  press();
+  await settle(120);
+  const started = p.reloadTimer > 0;
+  await settle(p.weapon.reloadTime * 1000 + 250);
+  const topped = p.ammo;
+
+  // A full magazine should not cost you a reload you did not need.
+  press();
+  await settle(150);
+  const wastedOnFull = p.reloadTimer > 0;
+
+  // On the floor you can still reload.
+  p.stance = "prone"; p.stanceTimer = 4; p.ammo = 5;
+  press();
+  await settle(150);
+  const proneReload = p.reloadTimer > 0;
+
+  // Mid-dive you cannot.
+  p.reloadTimer = 0; p.ammo = 5;
+  p.stance = "dive"; p.stanceTimer = 0.3;
+  press();
+  await settle(100);
+  const diveReload = p.reloadTimer > 0;
+
+  p.stance = "stand"; p.stanceTimer = 0; p.reloadTimer = 0; p.ammo = p.weapon.magazine;
+  return { started, topped, magazine: p.weapon.magazine, wastedOnFull, proneReload, diveReload };
+});
+check("manual reload tops up a partial magazine, and only when it should",
+  reload.started && reload.topped === reload.magazine && !reload.wastedOnFull &&
+  reload.proneReload && !reload.diveReload,
+  JSON.stringify(reload));
+
 // Weapon stance: the gun only comes up when the aim device is actually pushed.
 await camPage.mouse.move(640, 720 * 0.78);        // cursor on the player = no deflection
 await camPage.waitForTimeout(900);

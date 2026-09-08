@@ -19,6 +19,7 @@ export class GamepadSource implements InputSource {
 
   private prevFire = false;
   private prevDive = false;
+  private prevReload = false;
   private prevInteract = false;
   private prevStart = false;
   private prevCancel = false;
@@ -43,7 +44,7 @@ export class GamepadSource implements InputSource {
       out.moveX = 0; out.moveY = 0;
       out.aimStrength = 0;
       out.fire = false; out.firePressed = false;
-      out.sprint = false; out.divePressed = false;
+      out.sprint = false; out.divePressed = false; out.reloadPressed = false;
       out.interact = false; out.interactPressed = false;
       out.startPressed = false; out.cancelPressed = false;
       return;
@@ -73,6 +74,7 @@ export class GamepadSource implements InputSource {
     const fire = rightTrigger > 0.35 || btn(5) || btn(0);
     const sprint = btn(10) || btn(4);         // L3 or LB, held
     const dive = btn(1) || btn(6);            // B or LT, tapped
+    const reload = btn(3);                    // Y / triangle
     const interact = btn(2);
     const start = btn(9) || btn(8);
     const cancel = btn(1);                    // B / circle
@@ -81,6 +83,7 @@ export class GamepadSource implements InputSource {
     out.firePressed = fire && !this.prevFire;
     out.sprint = sprint;
     out.divePressed = dive && !this.prevDive;
+    out.reloadPressed = reload && !this.prevReload;
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
     out.startPressed = start && !this.prevStart;
@@ -88,6 +91,7 @@ export class GamepadSource implements InputSource {
 
     this.prevFire = fire;
     this.prevDive = dive;
+    this.prevReload = reload;
     this.prevInteract = interact;
     this.prevStart = start;
     this.prevCancel = cancel;

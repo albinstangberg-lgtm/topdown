@@ -22,6 +22,7 @@ export class KeyboardMouseSource implements InputSource {
   // Edge tracking lives in the source so the sim only ever sees clean booleans.
   private prevFire = false;
   private prevDive = false;
+  private prevReload = false;
   private prevInteract = false;
   private prevStart = false;
   private prevCancel = false;
@@ -98,6 +99,9 @@ export class KeyboardMouseSource implements InputSource {
     const fire = this.mouseDown || this.mouseTapped || this.hit("Space");
     const sprint = k.has("ShiftLeft") || k.has("ShiftRight");
     const dive = this.hit("ControlLeft") || this.hit("ControlRight") || this.hit("KeyC");
+    // Shift+R restarts the level, so a shifted R is not a reload.
+    const shifted = k.has("ShiftLeft") || k.has("ShiftRight");
+    const reload = this.hit("KeyR") && !shifted;
     const interact = k.has("KeyE");
     const start = this.hit("Enter") || this.hit("NumpadEnter");
     const cancel = this.hit("Escape") || this.hit("Backspace");
@@ -106,6 +110,7 @@ export class KeyboardMouseSource implements InputSource {
     out.firePressed = fire && !this.prevFire;
     out.sprint = sprint;
     out.divePressed = dive && !this.prevDive;
+    out.reloadPressed = reload && !this.prevReload;
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
     out.startPressed = start && !this.prevStart;
@@ -113,6 +118,7 @@ export class KeyboardMouseSource implements InputSource {
 
     this.prevFire = fire;
     this.prevDive = dive;
+    this.prevReload = reload;
     this.prevInteract = interact;
     this.prevStart = start;
     this.prevCancel = cancel;

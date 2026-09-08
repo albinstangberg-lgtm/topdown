@@ -36,6 +36,8 @@ export interface InputState {
   sprint: boolean;
   /** Tapped. Commits you to a dive that ends on the floor. */
   divePressed: boolean;
+  /** Tapped. Tops the magazine up early, rather than waiting to run dry. */
+  reloadPressed: boolean;
   interact: boolean;
   interactPressed: boolean;
   /** Used only by the join flow (START / Enter). */
@@ -52,7 +54,7 @@ export function emptyInput(): InputState {
     aimStrength: 0,
     pointerX: 0, pointerY: 0,
     fire: false, firePressed: false,
-    sprint: false, divePressed: false,
+    sprint: false, divePressed: false, reloadPressed: false,
     interact: false,
     interactPressed: false,
     startPressed: false,

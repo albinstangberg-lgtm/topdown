@@ -194,7 +194,11 @@ export function updatePlayer(
     p.reloadTimer -= dt;
     if (p.reloadTimer <= 0) p.ammo = w.magazine;
   } else if (p.ammo <= 0) {
-    p.reloadTimer = w.reloadTime;
+    // Running dry still reloads on its own — the manual button is for topping up
+    // before you need it, which is the decision worth having.
+    startReload(p, deps);
+  } else if (input.reloadPressed && p.ammo < w.magazine && canFire(p)) {
+    startReload(p, deps);
   } else {
     const wantsToFire = w.auto ? input.fire : input.firePressed;
     // A lowered weapon cannot fire — but pulling the trigger raises it (see
@@ -220,6 +224,11 @@ function updateWeaponStance(
   const target = wants || p.weaponHold > 0 ? 1 : 0;
   const rate = target > p.weaponUp ? 1 / WEAPON_RAISE_TIME : 1 / WEAPON_LOWER_TIME;
   p.weaponUp = clamp(p.weaponUp + Math.sign(target - p.weaponUp) * rate * dt, 0, 1);
+}
+
+function startReload(p: Player, deps: PlayerDeps): void {
+  p.reloadTimer = p.weapon.reloadTime;
+  deps.particles.burst(p.x, p.y, 4, 55, "#8d8677", 0.45, 2);
 }
 
 /** You can shoot standing or lying down, but not mid-dive and not while getting up. */

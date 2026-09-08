@@ -35,6 +35,7 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Fire | Left click / `Space` | RT / RB / A |
 | Sprint (hold) | `Shift` | L3 / LB |
 | Dive (tap) | `Ctrl` / `C` | B / LT |
+| Reload | `R` | Y |
 | Revive teammate | Hold `E` | Hold X |
 | Join the game | — | `START` |
 
@@ -87,6 +88,14 @@ next to a metered sprint makes diving the obvious way to travel. Set
 All of it is named constants at the top of `src/sim/player.ts`: `WALK_SPEED`,
 `SPRINT_SPEED`, `SPRINT_DRAIN`, `STAMINA_REGEN`, `EXHAUST_FLOOR`, `DIVE_SPEED`,
 `DIVE_TIME`, `PRONE_TIME`, `STAND_TIME`, `DIVE_COOLDOWN`.
+
+## Reloading
+
+`R` (or `Y`) tops up a partial magazine. It is refused when the magazine is already
+full, and while you are mid-dive or getting up — but it works fine lying prone. Running
+dry still reloads automatically, so the manual button is for reloading *before* you need
+to, which is the decision worth having in a firefight. A reload in progress keeps
+running through a dive rather than being cancelled.
 
 ## Weapon up / down
 
