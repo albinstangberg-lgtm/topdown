@@ -42,7 +42,7 @@ export type GameMode = "survival" | "story";
 
 export interface GameEvent {
   kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level"
-      | "missionComplete" | "missionFailed";
+      | "floorCleared" | "missionComplete" | "missionFailed";
   x?: number;
   y?: number;
   text?: string;
@@ -60,8 +60,16 @@ export class GameWorld {
   readonly staticLights: VisionLight[] = [];
 
   mode: GameMode = "survival";
-  /** Live extraction state, for the HUD: how many of the living squad are on the exit. */
-  readonly objective = { onExit: 0, needed: 0, progress: 0 };
+  /**
+   * Live objective state for the HUD: what the squad is standing on, how many of them
+   * are on it, and how far through the dwell they are.
+   */
+  readonly objective = {
+    kind: "none" as "none" | "exit" | "stairs",
+    onExit: 0,
+    needed: 0,
+    progress: 0,
+  };
 
   time = 0;
   private exitTimer = 0;
@@ -83,11 +91,12 @@ export class GameWorld {
    * keep their device bindings, colours and score) and simply re-placed on the new grid,
    * which is what makes hot-loading a map from the editor feel instant.
    */
-  loadLevel(level: LevelData): void {
+  loadLevel(level: LevelData, opts: { keepSquad?: boolean } = {}): void {
     this.map = buildTileMap(level);
     this.bakeStaticLights();
     this.enemies.length = 0;
     this.exitTimer = 0;
+    this.objective.kind = "none";
     this.objective.onExit = 0;
     this.objective.needed = 0;
     this.objective.progress = 0;
@@ -102,19 +111,26 @@ export class GameWorld {
       p.x = spawn.x; p.y = spawn.y;
       p.prevX = p.x; p.prevY = p.y;
       p.vx = 0; p.vy = 0;
-      p.health = p.maxHealth;
+      // Climbing a floor carries your condition with you — that is the whole point of
+      // a building being one mission rather than six. A fresh mission heals you up.
+      if (!opts.keepSquad) {
+        p.health = p.maxHealth;
+        p.ammo = p.weapon.magazine;
+        p.stamina = p.maxStamina;
+        p.exhausted = false;
+      } else if (p.downed) {
+        // Nobody gets left behind on the stairs: the downed come up at low health.
+        p.health = p.maxHealth * 0.35;
+      }
       p.downed = false;
       p.bleedout = 0;
       p.reviveProgress = 0;
-      p.ammo = p.weapon.magazine;
       p.reloadTimer = 0;
       p.stance = "stand";
       p.stanceTimer = 0;
       p.lean = 0;
       p.eyeX = p.x;
       p.eyeY = p.y;
-      p.stamina = p.maxStamina;
-      p.exhausted = false;
       syncLights(p);
     });
     this.populateAuthoredEnemies();
@@ -144,7 +160,10 @@ export class GameWorld {
   }
 
   addPlayer(sourceId: string): Player {
-    const spawn = this.playerSpawn(this.players.length);
+    const index = this.players.length;
+    const spawn = this.map.playerSpawns.length > 0 || index === 0
+      ? this.playerSpawn(index)
+      : this.spawnNearSquad(index);
     const p = createPlayer(this.players.length, sourceId, spawn.x, spawn.y);
     this.players.push(p);
     this.events.push({ kind: "join", x: p.x, y: p.y, text: `P${p.id + 1} joined` });
@@ -152,25 +171,44 @@ export class GameWorld {
   }
 
   /**
-   * Player spawn priority: the level's own player-spawn tiles first (one per player,
-   * in grid order), then next to the squad, then the most open floor the map has.
+   * Where player `index` starts on the CURRENT map: their authored spawn tile, or the
+   * most open floor if the map has none.
+   *
+   * Deliberately does not look at where anybody currently is. It used to fall back to
+   * "somewhere near the squad", which is right for a player joining a match in progress
+   * and very wrong when loading a new map — on a floor with no spawn tiles it placed
+   * everyone at their coordinates from the previous floor, which could be outside the
+   * new map entirely. Joining near the squad is `spawnNearSquad`, used only by addPlayer.
    */
   private playerSpawn(index: number): { x: number; y: number } {
     const authored = this.map.playerSpawns;
     if (authored.length > 0) return authored[index % authored.length];
 
-    if (this.players.length > 0) {
-      const host = this.players[0];
-      for (let i = 0; i < 24; i++) {
-        const a = randRange(0, Math.PI * 2);
-        const d = randRange(30, 110);
-        const x = host.x + Math.cos(a) * d;
-        const y = host.y + Math.sin(a) * d;
-        if (!pointInWall(this.map, x, y)) return { x, y };
-      }
-      return { x: host.x, y: host.y };
+    const open = this.map.mostOpenPoint();
+    if (index === 0) return open;
+    // Fan the rest out around it rather than stacking them on one tile.
+    for (let i = 0; i < 24; i++) {
+      const a = randRange(0, Math.PI * 2);
+      const d = randRange(30, 110);
+      const x = open.x + Math.cos(a) * d;
+      const y = open.y + Math.sin(a) * d;
+      if (!pointInWall(this.map, x, y)) return { x, y };
     }
-    return this.map.mostOpenPoint();
+    return open;
+  }
+
+  /** A spot beside the squad, for a player joining a match already in progress. */
+  private spawnNearSquad(index: number): { x: number; y: number } {
+    const host = this.players[0];
+    if (!host) return this.playerSpawn(index);
+    for (let i = 0; i < 24; i++) {
+      const a = randRange(0, Math.PI * 2);
+      const d = randRange(30, 110);
+      const x = host.x + Math.cos(a) * d;
+      const y = host.y + Math.sin(a) * d;
+      if (!pointInWall(this.map, x, y)) return { x, y };
+    }
+    return { x: host.x, y: host.y };
   }
 
   /**
@@ -351,25 +389,37 @@ export class GameWorld {
    * by the last one standing reaching the safe room.
    */
   private updateObjective(dt: number): void {
-    if (this.mode !== "story" || this.map.exits.length === 0) return;
+    if (this.mode !== "story") return;
+
+    // Stairs win over an exit: a floor with a way up is not the end of the building.
+    const kind = this.map.stairs.length > 0 ? "stairs"
+      : this.map.exits.length > 0 ? "exit" : "none";
+    this.objective.kind = kind;
+    if (kind === "none") return;
 
     let alive = 0;
-    let onExit = 0;
+    let onIt = 0;
     for (const p of this.players) {
       if (p.downed) continue;
       alive++;
-      if (this.map.isExitAt(p.x, p.y)) onExit++;
+      const standing = kind === "stairs"
+        ? this.map.isStairsAt(p.x, p.y)
+        : this.map.isExitAt(p.x, p.y);
+      if (standing) onIt++;
     }
-    this.objective.onExit = onExit;
+    this.objective.onExit = onIt;
     this.objective.needed = alive;
 
-    if (alive > 0 && onExit === alive) this.exitTimer += dt;
+    if (alive > 0 && onIt === alive) this.exitTimer += dt;
     else this.exitTimer = Math.max(0, this.exitTimer - dt * 2);
 
     this.objective.progress = Math.min(1, this.exitTimer / EXIT_DWELL);
     if (this.exitTimer >= EXIT_DWELL) {
       this.exitTimer = 0;
-      this.events.push({ kind: "missionComplete", text: this.map.name });
+      this.events.push({
+        kind: kind === "stairs" ? "floorCleared" : "missionComplete",
+        text: this.map.name,
+      });
     }
   }
 

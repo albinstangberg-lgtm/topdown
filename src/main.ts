@@ -17,7 +17,7 @@ import { Lobby, MAX_PLAYERS } from "./menu/lobby";
 import { ModeSelect } from "./menu/modeSelect";
 import { MissionSelect } from "./menu/missionSelect";
 import {
-  CAMPAIGN, loadProgress, missionLevel, saveProgress, type Mission,
+  CAMPAIGN, floorCount, loadProgress, missionLevel, saveProgress, type Mission,
 } from "./campaign/campaign";
 import type { GameMode } from "./sim/world";
 import { computeVisibility, makeLight } from "./vision/visibility";
@@ -74,6 +74,8 @@ export class Game {
   private roster: string[] = [];
   readonly completed = loadProgress(CAMPAIGN);
   private activeMission: Mission | null = null;
+  /** Which floor of the active mission is loaded, 0-based. */
+  private activeFloor = 0;
   private readonly menuCam = new Camera();
   private readonly menuLight = makeLight("#ffe0a8", Math.PI, 760, 0.9);
   private readonly menuFocus = { x: 0, y: 0 };
@@ -248,7 +250,34 @@ export class Game {
 
   private launchMission(mission: Mission): void {
     this.activeMission = mission;
-    this.beginMatch(missionLevel(mission), "story");
+    this.activeFloor = 0;
+    this.beginMatch(missionLevel(mission, 0), "story");
+    if (floorCount(mission) > 1) this.setBanner(`FLOOR 1 / ${floorCount(mission)}`);
+  }
+
+  /**
+   * Up a floor. The squad carries its health, ammo and stamina with it — a building is
+   * one continuous run, so the stairs are a checkpoint in tension, not in condition.
+   */
+  private advanceFloor(): void {
+    const mission = this.activeMission;
+    if (!mission) return;
+    this.activeFloor++;
+    if (this.activeFloor >= floorCount(mission)) {
+      this.completeMission();
+      return;
+    }
+    this.world.loadLevel(missionLevel(mission, this.activeFloor), { keepSquad: true });
+    this.relayout();
+    this.setBanner(`FLOOR ${this.activeFloor + 1} / ${floorCount(mission)}`);
+  }
+
+  private completeMission(): void {
+    if (this.activeMission) {
+      this.completed.add(this.activeMission.id);
+      saveProgress(CAMPAIGN, this.completed);
+    }
+    this.returnToMissions("MISSION COMPLETE");
   }
 
   /** Back to the campaign map after a mission ends, won or lost. */
@@ -256,6 +285,7 @@ export class Game {
     this.missionSelect.setNotice(notice);
     this.missionSelect.focusNext(this.completed);
     this.activeMission = null;
+    this.activeFloor = 0;
     this.phase = "missions";
   }
 
@@ -456,12 +486,10 @@ export class Game {
         this.shakeAll(1);
         if (ev.text) this.setBanner(ev.text);
         this.relayout();
+      } else if (ev.kind === "floorCleared") {
+        this.advanceFloor();
       } else if (ev.kind === "missionComplete") {
-        if (this.activeMission) {
-          this.completed.add(this.activeMission.id);
-          saveProgress(CAMPAIGN, this.completed);
-        }
-        this.returnToMissions("MISSION COMPLETE");
+        this.completeMission();
       } else if (ev.kind === "missionFailed") {
         this.returnToMissions("MISSION FAILED");
       } else if (ev.kind === "level" && ev.text) {

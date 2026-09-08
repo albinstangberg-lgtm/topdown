@@ -17,6 +17,13 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `6` | `L` | Lamp | no | no | a static light; its visibility polygon is solved once at load, not per frame |
 | `7` | `>` | Exit | no | no | the safe room. Get the whole living squad standing on it to finish a story mission |
 | `8` | `Z` | Spawn zone | no | no | the director draws from these, picking a different one each time and never in sight |
+| `9` | `^` | Stairs | no | no | the way up. The whole squad standing on it loads the mission's next floor |
+| `10` | `C` | Car | yes | yes | a wreck. Cover you cannot see through — author them as 2×2 blocks |
+| `11` | `W` | Window | yes | **no** | see and shoot through, nobody walks through — and the director can put a zombie there, climbing in |
+| `12` | `R` | Reception desk | yes | **no** | waist-high counter: blocks bodies, you shoot over it |
+| `13` | `c` | Cubicle wall | yes | yes | office partition. **Lowercase c** — `C` is a car |
+| `14` | `f` | Flare | no | no | a big red static light you can stand on |
+| `15` | `D` | Elevator door | yes | yes | closed lift doors. Scenery — use `^` for a floor you can actually take |
 
 `solid` and `opaque` are separate flags on purpose. Collision asks "solid?", the vision
 raycast asks "opaque?". Glass is the tile that proves the two are different questions;
@@ -115,5 +122,30 @@ cannot drift out of sync with the game — there is only one definition of what 
 - **Exits (`7`)**: a story mission ends when every living player stands on an exit tile
   together for 0.8s. Downed players do not block it. A map with no exit has no
   objective, which is exactly what survival is.
+- **Stairs (`9`)**: the same rule, but it loads the mission's next floor instead of
+  ending it. Stairs take priority over exits, so a floor with both is never the last
+  one — put exits only on the top floor.
+
+## Multi-floor missions
+
+A mission carries a list of floors, bottom first:
+
+```ts
+{
+  id: "tower",
+  name: "Vertical Slice",
+  floors: [groundFloor, secondFloor, /* … */ roof],
+}
+```
+
+Floors are ordinary maps. The only thing joining them is that all but the last have
+stairs (`^`) and the last has an exit (`>`). The squad **carries its health, ammo and
+stamina up**, which is what makes a building one continuous run rather than several
+missions in a row; anyone downed comes up at 35% health rather than being left behind.
+A wipe restarts the mission from the ground floor.
+
+Each floor places players at its own `P` tiles. A floor with none drops the squad at its
+most open point — but authoring the arrival deliberately is much better, because the
+player should arrive where they would have come out.
 - **Restart** (`Shift+R`, or a squad wipe): an authored level restarts as itself; a
   procedural one rerolls, because there is nothing to be faithful to.

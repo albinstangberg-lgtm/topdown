@@ -27,6 +27,8 @@ export class TileMap {
   readonly spawnZones: Point[] = [];
   /** Exit tiles. A map with none simply has no objective — that is survival. */
   readonly exits: Point[] = [];
+  /** Stairs. A floor with these sends the squad up instead of ending the mission. */
+  readonly stairs: Point[] = [];
   readonly lamps: { x: number; y: number; range: number }[] = [];
   /** Tile indices you can stand on, for random placement. */
   private walkable: number[] = [];
@@ -60,6 +62,7 @@ export class TileMap {
     this.enemySpawns.length = 0;
     this.spawnZones.length = 0;
     this.exits.length = 0;
+    this.stairs.length = 0;
     this.lamps.length = 0;
     this.walkable = [];
 
@@ -70,13 +73,27 @@ export class TileMap {
         this.solidMask[i] = def.solid ? 1 : 0;
         this.opaqueMask[i] = def.opaque ? 1 : 0;
 
-        if (def.solid) continue;
+        // A SOLID tile can still be a spawn point — a window is the case that matters.
+        // Nothing can stand inside it, so the spawn lands on the open tile next to it.
+        if (def.solid) {
+          if (def.spawn === "zone") {
+            const beside = this.firstOpenNeighbour(tx, ty);
+            if (beside) this.spawnZones.push(beside);
+          }
+          if (def.light) {
+            const c = this.tileCenter(tx, ty);
+            this.lamps.push({ x: c.x, y: c.y, range: def.light });
+          }
+          continue;
+        }
+
         this.walkable.push(i);
         const c = this.tileCenter(tx, ty);
         if (def.spawn === "player") this.playerSpawns.push(c);
         else if (def.spawn === "enemy") this.enemySpawns.push(c);
         else if (def.spawn === "zone") this.spawnZones.push(c);
         if (def.exit) this.exits.push(c);
+        if (def.stairs) this.stairs.push(c);
         if (def.light) this.lamps.push({ x: c.x, y: c.y, range: def.light });
       }
     }
@@ -108,6 +125,20 @@ export class TileMap {
 
   isExitAt(x: number, y: number): boolean {
     return tileDef(this.tileAt(Math.floor(x / TILE), Math.floor(y / TILE))).exit === true;
+  }
+
+  isStairsAt(x: number, y: number): boolean {
+    return tileDef(this.tileAt(Math.floor(x / TILE), Math.floor(y / TILE))).stairs === true;
+  }
+
+  /** The first walkable tile orthogonally adjacent to this one, if any. */
+  private firstOpenNeighbour(tx: number, ty: number): Point | null {
+    const around = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (const [dx, dy] of around) {
+      if (!this.inBounds(tx + dx, ty + dy)) continue;
+      if (!tileDef(this.tileAt(tx + dx, ty + dy)).solid) return this.tileCenter(tx + dx, ty + dy);
+    }
+    return null;
   }
 
   tileCenter(tx: number, ty: number): Point {

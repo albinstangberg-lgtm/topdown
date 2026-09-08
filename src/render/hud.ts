@@ -77,22 +77,24 @@ export function drawHud(
 
   // Extraction. Shown to everyone, because it is a squad condition, not a personal one.
   const obj = world.objective;
-  if (obj.needed > 0) {
-    const onExit = world.map.isExitAt(p.x, p.y);
+  if (obj.needed > 0 && obj.kind !== "none") {
+    const stairs = obj.kind === "stairs";
+    const standing = stairs ? world.map.isStairsAt(p.x, p.y) : world.map.isExitAt(p.x, p.y);
+    const all = obj.onExit === obj.needed;
     ctx.textAlign = "center";
     ctx.font = "700 13px ui-monospace, monospace";
-    ctx.fillStyle = obj.onExit === obj.needed ? "#8bff7a" : onExit ? "#ffd257" : "rgba(200,210,228,0.75)";
+    ctx.fillStyle = all ? "#8bff7a" : standing ? "#ffd257" : "rgba(200,210,228,0.75)";
     ctx.fillText(
-      obj.onExit === obj.needed
-        ? "EXTRACTING…"
-        : `SQUAD AT THE EXIT  ${obj.onExit}/${obj.needed}`,
+      all
+        ? (stairs ? "MOVING UP…" : "EXTRACTING…")
+        : `SQUAD ${stairs ? "AT THE STAIRS" : "AT THE EXIT"}  ${obj.onExit}/${obj.needed}`,
       vp.w / 2, vp.h * 0.14,
     );
     if (obj.progress > 0) {
       const barW = Math.min(180, vp.w * 0.3);
       ctx.fillStyle = "rgba(0,0,0,0.55)";
       ctx.fillRect(vp.w / 2 - barW / 2, vp.h * 0.14 + 12, barW, 5);
-      ctx.fillStyle = "#8bff7a";
+      ctx.fillStyle = stairs ? "#5ad2ff" : "#8bff7a";
       ctx.fillRect(vp.w / 2 - barW / 2, vp.h * 0.14 + 12, barW * obj.progress, 5);
     }
     ctx.textAlign = "left";

@@ -11,8 +11,9 @@ import { parseLevelText, type LevelData } from "../world/level";
  * The maps are glyph art on purpose. It is the same importer the editor and the game
  * use, so anything you paint in the editor can be pasted straight in here.
  *
- *   # wall   . floor   P player spawn   E zombie (placed)   Z spawn zone
- *   X crate  G glass   L lamp           > exit
+ *   # wall   . floor      P player spawn   E zombie (placed)   Z spawn zone
+ *   X crate  G glass      L lamp           > exit                ^ stairs / next floor
+ *   C car    W window     R reception      c cubicle (lowercase)  f flare   D lift door
  */
 
 export interface Mission {
@@ -23,7 +24,11 @@ export interface Mission {
   node: { x: number; y: number };
   /** Mission ids that must be complete first. Empty means available from the start. */
   requires: string[];
-  source: string;
+  /**
+   * The floors of the mission, bottom first. Most missions are one floor; a building
+   * is several, joined by stairs tiles, played as one continuous run.
+   */
+  floors: string[];
 }
 
 export interface Campaign {
@@ -37,12 +42,156 @@ export const CAMPAIGN: Campaign = {
   name: "Sector 7",
   missions: [
     {
+      id: "tower",
+      name: "Vertical Slice",
+      brief: "Six floors, bottom to roof. Light the flare and wait for the pickup.",
+      node: { x: 0.1, y: 0.5 },
+      requires: [],
+      floors: [
+`
+#############
+#...........#
+#....E......#
+#..........Z#
+#...........#
+#.....E.....#
+#...........#
+#....X......#
+#...........#
+#......PP...#
+#......PP...#
+#...........#
+#....E....X.#
+#.###.......#
+#.##^.......#
+#.###.......#
+#...........#
+#Z....E.....#
+#...........#
+#..X.......Z#
+#############
+`,
+`
+#############
+#......#..PP#
+#..E...#..PP#
+#...........#
+#......#....#
+#..Z...#..E.#
+########....#
+#......#....#
+#...E..#..Z.#
+#...........#
+#......#....#
+#..X...#..E.#
+########....#
+#......#....#
+#..Z...#.X..#
+#...E..#....#
+##.##.##....#
+#...........#
+#.....E.....#
+#^.........Z#
+#############
+`,
+`
+##################################
+#Z...........Z..........Z.......Z#
+#................................#
+#..CC....CC.......CC.......CC....#
+#..CC....CC.......CC.......CC....#
+#.......E........................#
+#....CC.......CC.......CC........#
+#....CC.......CC.......CC........#
+#..........E.....................#
+^................................#
+^..............E.................#
+#................................#
+#....CC.......CC.......CC...PP...#
+#....CC.......CC.......CC...PP...#
+#........E.......................#
+#..CC....CC.......CC.......CC....#
+#..CC....CC.......CC.......CC....#
+#............E...................#
+#Z...........Z..........Z.......Z#
+##################################
+`,
+`
+#####^##^#####
+#............#
+#..E.........#
+####.........#
+#..#......E..#
+#..#.........#
+#..#.........#
+####....E....#
+#........R...#
+WZ.......RPPZW
+WZ.......RPPZW
+#........R...#
+####.........#
+#..#.........#
+#..#...E.....#
+#..#.........#
+#..#.........#
+####.........#
+#............#
+#.....ZZ..E..#
+######WW######
+`,
+`
+#####D##D#####
+#c..........c#
+#c....E.....c#
+#c..c....c..c#
+#cccc....cccc#
+WZ..........ZW
+WZ....E.....ZW
+#..cc....cc..#
+#...c....c...#
+#...c..E.c...#
+#cccc....cccc#
+WZ..........ZW
+WZ...E......ZW
+WZ..........ZW
+#cccc.......ZW
+#...c.....ccc#
+#...c..E..c.c#
+#..cc.....c.c#
+#...........c#
+#.....E.....c#
+####WW^^WW####
+`,
+`
+############
+#....Z.....#
+#..........#
+#.....E....#
+#..........#
+#...>>>....#
+#...>f>....#
+#...>>>....#
+#..........#
+#Z...E....Z#
+#..........#
+#..........#
+#....E.....#
+#..........#
+#..........#
+#.........E#
+#....PP....#
+#....Z.....#
+############
+`,
+      ],
+    },
+    {
       id: "outpost",
       name: "Cold Start",
       brief: "Power's out. Cross the outpost and reach the safe room.",
-      node: { x: 0.16, y: 0.5 },
-      requires: [],
-      source: `
+      node: { x: 0.34, y: 0.5 },
+      requires: ["tower"],
+      floors: [`
 ########################
 #....#........#........#
 #.PP.#...E....#....Z...#
@@ -57,15 +206,15 @@ export const CAMPAIGN: Campaign = {
 #....##########...>>...#
 #.................>>...#
 ########################
-`,
+`],
     },
     {
       id: "substation",
       name: "The Substation",
       brief: "Two ways through. Neither is quiet.",
-      node: { x: 0.4, y: 0.26 },
+      node: { x: 0.55, y: 0.26 },
       requires: ["outpost"],
-      source: `
+      floors: [`
 ##########################
 #.PP...#........#.......Z#
 #.PP...#...E....#........#
@@ -80,15 +229,15 @@ export const CAMPAIGN: Campaign = {
 #......#........#...>>...#
 #...L..G........G...>>...#
 ##########################
-`,
+`],
     },
     {
       id: "glasshouse",
       name: "Glasshouse",
       brief: "You can see them coming. That is not the same as being safe.",
-      node: { x: 0.4, y: 0.74 },
+      node: { x: 0.55, y: 0.74 },
       requires: ["outpost"],
-      source: `
+      floors: [`
 ########################
 #.PP.#GGGGGGGGGG#....Z.#
 #.PP.#..........#......#
@@ -104,15 +253,15 @@ export const CAMPAIGN: Campaign = {
 #........#....#...>>...#
 #...E....#..L.#...>>...#
 ########################
-`,
+`],
     },
     {
       id: "vault",
       name: "The Vault",
       brief: "Everything left in the sector is in here with you.",
-      node: { x: 0.68, y: 0.5 },
+      node: { x: 0.78, y: 0.5 },
       requires: ["substation", "glasshouse"],
-      source: `
+      floors: [`
 ############################
 #.PP......#Z......Z#.......#
 #.PP......#........#..E....#
@@ -128,13 +277,21 @@ export const CAMPAIGN: Campaign = {
 #..E...G...........G...>>..#
 #......#....X......#...>>..#
 ############################
-`,
+`],
     },
   ],
 };
 
-export function missionLevel(mission: Mission): LevelData {
-  return parseLevelText(mission.source, mission.name).level;
+export function missionLevel(mission: Mission, floor = 0): LevelData {
+  const index = Math.max(0, Math.min(floor, mission.floors.length - 1));
+  const name = mission.floors.length > 1
+    ? `${mission.name} · Floor ${index + 1}`
+    : mission.name;
+  return parseLevelText(mission.floors[index], name).level;
+}
+
+export function floorCount(mission: Mission): number {
+  return mission.floors.length;
 }
 
 /** Available means every requirement is already ticked off. */

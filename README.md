@@ -158,15 +158,21 @@ always the same, and a safe room to reach. Progress is kept in `localStorage`.
 **Survival** is the endless one: a fresh procedural layout every run and a director that
 never stops. No exit, no objective — last as long as you can.
 
-The starter campaign, *Sector 7*, lives in `src/campaign/campaign.ts`: four missions as
+The starter campaign, *Sector 7*, lives in `src/campaign/campaign.ts`: five missions as
 glyph art, each with a node position on the mission map and a list of missions it
 requires. Adding one is an entry in that array — the mission select screen has no
 per-mission code in it.
 
+The opening mission, **Vertical Slice**, is a six-floor building: car park, service
+corridors, the street outside, lobby, cubicle floor, roof. Stairs (`^`) join the floors
+and the squad carries its condition up, so it plays as one continuous climb. See
+[docs/LEVELS.md](docs/LEVELS.md#multi-floor-missions).
+
 ## Maps
 
 Levels are 2D arrays of tile ids — `0` floor, `1` wall, `2` player spawn, `3` zombie,
-`4` crate, `5` glass, `6` lamp, `7` exit, `8` spawn zone:
+`4` crate, `5` glass, `6` lamp, `7` exit, `8` spawn zone, `9` stairs, plus scenery
+(`10` car, `11` window, `12` reception desk, `13` cubicle, `14` flare, `15` lift door):
 
 ```
 [1,1,1,1,1,1,1],

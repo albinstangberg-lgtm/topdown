@@ -100,6 +100,7 @@ export class Renderer {
     const bounds = cam.visibleBounds(vp);
     this.drawFloor(ctx, bounds);
     this.drawExits(ctx, world, bounds);
+    this.drawStairs(ctx, world, bounds);
     this.drawLamps(ctx, world, bounds);
     this.drawParticles(ctx, world);
     this.drawActors(ctx, world, alpha);
@@ -163,8 +164,8 @@ export class Renderer {
     const tx1 = Math.ceil(b.x1 / TILE);
     const ty1 = Math.ceil(b.y1 / TILE);
 
-    const crates: number[] = [];
-    const panes: number[] = [];
+    // Walls are one batched black path; everything else is furniture with its own look.
+    const props: Record<string, number[]> = { crate: [], glass: [], car: [], reception: [], cubicle: [], door: [] };
 
     ctx.fillStyle = COLOR_WALL;
     ctx.beginPath();
@@ -176,16 +177,16 @@ export class Renderer {
         }
         const def = tileDef(map.tileAt(tx, ty));
         if (!def.solid) continue;
-        if (def.key === "crate") { crates.push(tx, ty); continue; }
-        if (!def.opaque) { panes.push(tx, ty); continue; }
+        const bucket = def.prop ?? (def.key === "crate" ? "crate" : def.key === "glass" ? "glass" : null);
+        if (bucket && props[bucket]) { props[bucket].push(tx, ty); continue; }
         ctx.rect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
       }
     }
     ctx.fill();
 
-    for (let i = 0; i < crates.length; i += 2) {
-      const x = crates[i] * TILE;
-      const y = crates[i + 1] * TILE;
+    for (let i = 0; i < props.crate.length; i += 2) {
+      const x = props.crate[i] * TILE;
+      const y = props.crate[i + 1] * TILE;
       ctx.fillStyle = "#0b0b10";
       ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
       ctx.fillStyle = "#241c12";
@@ -195,9 +196,86 @@ export class Renderer {
       ctx.strokeRect(x + 4, y + 4, TILE - 8, TILE - 8);
     }
 
-    for (let i = 0; i < panes.length; i += 2) {
-      const x = panes[i] * TILE;
-      const y = panes[i + 1] * TILE;
+    // A car: dark body filling the tile, a lighter roof panel, and a windscreen band.
+    // Cars are authored as 2x2 blocks, and drawing each tile the same way still reads
+    // as one vehicle because the roof panel lines up across the seam.
+    for (let i = 0; i < props.car.length; i += 2) {
+      const x = props.car[i] * TILE;
+      const y = props.car[i + 1] * TILE;
+      ctx.fillStyle = "#0b0b10";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = "#2a1a1c";
+      ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+      ctx.fillStyle = "#3d2a2c";
+      ctx.fillRect(x + 7, y + 7, TILE - 14, TILE - 14);
+      ctx.fillStyle = "rgba(120,170,190,0.22)";
+      ctx.fillRect(x + 7, y + 12, TILE - 14, 7);
+      ctx.strokeStyle = "rgba(190,120,110,0.25)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 2, y + 2, TILE - 4, TILE - 4);
+    }
+
+    // Reception counter: solid but see-over, so it is drawn low and warm rather than
+    // as a silhouette. Anything you can shoot across should not look like a wall.
+    for (let i = 0; i < props.reception.length; i += 2) {
+      const x = props.reception[i] * TILE;
+      const y = props.reception[i + 1] * TILE;
+      ctx.fillStyle = "rgba(60,42,22,0.85)";
+      ctx.fillRect(x + 1, y + 1, TILE - 2, TILE - 2);
+      ctx.fillStyle = "rgba(150,112,58,0.75)";
+      ctx.fillRect(x + 1, y + 1, TILE - 2, 9);
+      ctx.strokeStyle = "rgba(210,170,110,0.4)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
+    }
+
+    // Cubicle partition: opaque, so it gets a solid core, but a fabric-grey one with a
+    // capped top edge to read as office furniture rather than architecture.
+    for (let i = 0; i < props.cubicle.length; i += 2) {
+      const x = props.cubicle[i] * TILE;
+      const y = props.cubicle[i + 1] * TILE;
+      ctx.fillStyle = "#0b0b10";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = "#2b332b";
+      ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+      ctx.fillStyle = "rgba(150,170,150,0.3)";
+      ctx.fillRect(x + 3, y + 3, TILE - 6, 5);
+    }
+
+    // Lift doors and window frames: metal with a centre seam.
+    for (let i = 0; i < props.door.length; i += 2) {
+      const tx = props.door[i];
+      const ty = props.door[i + 1];
+      const x = tx * TILE;
+      const y = ty * TILE;
+      const isWindow = tileDef(map.tileAt(tx, ty)).key === "window";
+      if (isWindow) {
+        ctx.fillStyle = "rgba(90,210,255,0.10)";
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.strokeStyle = "rgba(140,225,255,0.5)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
+        ctx.beginPath();
+        ctx.moveTo(x + TILE / 2, y + 2);
+        ctx.lineTo(x + TILE / 2, y + TILE - 2);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = "#0b0b10";
+        ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+        ctx.fillStyle = "#28323d";
+        ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+        ctx.strokeStyle = "rgba(140,180,210,0.35)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x + TILE / 2, y + 4);
+        ctx.lineTo(x + TILE / 2, y + TILE - 4);
+        ctx.stroke();
+      }
+    }
+
+    for (let i = 0; i < props.glass.length; i += 2) {
+      const x = props.glass[i] * TILE;
+      const y = props.glass[i + 1] * TILE;
       ctx.fillStyle = "rgba(90,210,255,0.10)";
       ctx.fillRect(x, y, TILE, TILE);
       ctx.strokeStyle = "rgba(140,225,255,0.45)";
@@ -229,10 +307,50 @@ export class Renderer {
     }
   }
 
+  /** The way up, marked as clearly as the exit — you are meant to be looking for it. */
+  private drawStairs(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    if (world.map.stairs.length === 0) return;
+    const t = 0.55 + 0.45 * Math.sin(performance.now() * 0.003);
+    for (const step of world.map.stairs) {
+      if (step.x < b.x0 || step.x > b.x1 || step.y < b.y0 || step.y > b.y1) continue;
+      ctx.fillStyle = `rgba(90,210,255,${0.10 + t * 0.10})`;
+      ctx.fillRect(step.x - TILE / 2, step.y - TILE / 2, TILE, TILE);
+      ctx.strokeStyle = `rgba(140,225,255,${0.35 + t * 0.35})`;
+      ctx.lineWidth = 2;
+      // Three rising treads, so it reads as "up" and not just "a blue square".
+      for (let i = 0; i < 3; i++) {
+        const y = step.y + TILE * 0.22 - i * 9;
+        const w = TILE * 0.34 - i * 3;
+        ctx.beginPath();
+        ctx.moveTo(step.x - w, y);
+        ctx.lineTo(step.x + w, y);
+        ctx.stroke();
+      }
+    }
+  }
+
   /** Lamps are part of the level, so they get a fixture drawn where the tile sits. */
   private drawLamps(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
     for (const lamp of world.map.lamps) {
       if (lamp.x < b.x0 || lamp.x > b.x1 || lamp.y < b.y0 || lamp.y > b.y1) continue;
+      const def = tileDef(world.map.tileAt(
+        Math.floor(lamp.x / TILE), Math.floor(lamp.y / TILE),
+      ));
+      if (def.key === "flare") {
+        // A burning flare: a hot core with a flickering halo, not a tidy fixture.
+        const flicker = 0.75 + 0.25 * Math.sin(performance.now() * 0.02 + lamp.x);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = `rgba(255,110,60,${0.22 * flicker})`;
+        ctx.beginPath();
+        ctx.arc(lamp.x, lamp.y, 26 * flicker, 0, TAU);
+        ctx.fill();
+        ctx.fillStyle = `rgba(255,220,180,${0.9 * flicker})`;
+        ctx.beginPath();
+        ctx.arc(lamp.x, lamp.y, 6, 0, TAU);
+        ctx.fill();
+        ctx.globalCompositeOperation = "source-over";
+        continue;
+      }
       ctx.fillStyle = "rgba(255,236,180,0.95)";
       ctx.fillRect(lamp.x - 7, lamp.y - 7, 14, 14);
       ctx.strokeStyle = "rgba(120,100,60,0.8)";

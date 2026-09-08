@@ -747,12 +747,12 @@ const locked = await storyPage.evaluate(async () => {
   await new Promise((r) => setTimeout(r, 400));
   const phase = g.phase;
   g.missionSelect.index = 0;
-  return { picked: g.missionSelect.campaign.missions[1].id, phase };
+  return { phase };
 });
 check("a locked mission cannot be deployed", locked.phase === "missions",
   JSON.stringify(locked));
 
-await storyPage.keyboard.press("Enter");        // deploy mission 1
+await storyPage.keyboard.press("Enter");        // deploy the first mission
 await storyPage.waitForTimeout(600);
 const deployed = await storyPage.evaluate(() => {
   const w = window.game.world;
@@ -763,13 +763,14 @@ const deployed = await storyPage.evaluate(() => {
     placedZombies: w.map.enemySpawns.length,
     enemiesNow: w.enemies.length,
     zones: w.map.spawnZones.length,
-    exits: w.map.exits.length,
+    stairs: w.map.stairs.length,
+    objective: w.objective.kind,
   };
 });
-check("a story mission loads with its placed zombies, zones and exit",
+check("a story mission loads with its placed zombies, zones and a way onward",
   deployed.phase === "playing" && deployed.mode === "story" &&
   deployed.placedZombies > 0 && deployed.enemiesNow === deployed.placedZombies &&
-  deployed.zones > 0 && deployed.exits > 0,
+  deployed.zones > 0 && deployed.stairs > 0 && deployed.objective === "stairs",
   JSON.stringify(deployed));
 
 // The director in a story map may only use the authored zones.
@@ -797,25 +798,57 @@ const zoneOnly = await storyPage.evaluate(async () => {
 check("story reinforcements only come from spawn zones",
   zoneOnly.spawned > 0 && zoneOnly.offZone === 0, JSON.stringify(zoneOnly));
 
-// Extraction: stand the living squad on the exit and the mission completes.
-const extracted = await storyPage.evaluate(async () => {
+// Climbing: the stairs load the next floor and the squad's condition comes with it.
+const climbed = await storyPage.evaluate(async () => {
   const w = window.game.world;
-  const exit = w.map.exits[0];
   const p = w.players[0];
-  p.x = exit.x; p.y = exit.y; p.prevX = p.x; p.prevY = p.y;
-  await new Promise((r) => setTimeout(r, 1500));
+  const before = { map: w.map.name, x: p.x, y: p.y };
+  p.health = 41;
+  p.ammo = 7;
+  p.stamina = 33;
+
+  const step = w.map.stairs[0];
+  p.x = step.x; p.y = step.y; p.prevX = p.x; p.prevY = p.y;
+  await new Promise((r) => setTimeout(r, 1400));
   return {
-    phase: window.game.phase,
-    completed: [...window.game.completed],
-    notice: window.game.missionSelect.notice,
+    before: before.map,
+    after: w.map.name,
+    health: p.health,
+    ammo: p.ammo,
+    stamina: Math.round(p.stamina),
+    inBounds: p.x >= 0 && p.y >= 0 && p.x <= w.map.worldWidth && p.y <= w.map.worldHeight,
+    solid: w.map.isSolidAt(p.x, p.y),
   };
 });
-check("standing the squad on the exit completes the mission and returns to the map",
-  extracted.phase === "missions" && extracted.completed.includes("outpost") &&
-  extracted.notice.includes("COMPLETE"),
-  JSON.stringify(extracted));
+check("stairs move the squad up a floor, carrying its condition",
+  climbed.before !== climbed.after && climbed.after.includes("Floor 2") &&
+  climbed.health === 41 && climbed.ammo === 7 && climbed.inBounds && !climbed.solid,
+  JSON.stringify(climbed));
 
-// Completing one mission unlocks the ones that required it, and it survives a reload.
+// Climb the rest of the building and extract off the roof.
+const topped = await storyPage.evaluate(async () => {
+  const g = window.game;
+  const visited = [g.world.map.name];
+  for (let i = 0; i < 8; i++) {
+    const w = g.world;
+    const target = w.map.stairs[0] ?? w.map.exits[0];
+    if (!target || g.phase !== "playing") break;
+    const p = w.players[0];
+    p.health = p.maxHealth;
+    p.downed = false;
+    p.x = target.x; p.y = target.y; p.prevX = p.x; p.prevY = p.y;
+    await new Promise((r) => setTimeout(r, 1300));
+    if (g.phase === "playing" && !visited.includes(w.map.name)) visited.push(w.map.name);
+  }
+  return { visited, phase: g.phase, completed: [...g.completed] };
+});
+// The previous check already took us to floor 2, so this climbs the remaining four.
+check("the whole building can be climbed, and the roof ends the mission",
+  topped.visited.some((n) => n.includes("Floor 6")) && topped.visited.length === 5 &&
+  topped.phase === "missions" && topped.completed.includes("tower"),
+  JSON.stringify(topped));
+
+// Progress persists across a reload and opens what required it.
 await storyPage.reload({ waitUntil: "load" });
 await storyPage.waitForTimeout(500);
 const persisted = await storyPage.evaluate(() => {
@@ -827,10 +860,26 @@ const persisted = await storyPage.evaluate(() => {
   return { completed: [...g.completed], unlocked };
 });
 check("progress persists and unlocks the missions that required it",
-  persisted.completed.includes("outpost") &&
-  persisted.unlocked.includes("substation") && persisted.unlocked.includes("glasshouse") &&
+  persisted.completed.includes("tower") && persisted.unlocked.includes("outpost") &&
   !persisted.unlocked.includes("vault"),
   JSON.stringify(persisted));
+
+// A single-floor mission still ends on its exit tile rather than stairs.
+await storyPage.goto(`${URL}?players=1&mission=outpost`, { waitUntil: "load" });
+await storyPage.waitForTimeout(600);
+const singleFloor = await storyPage.evaluate(async () => {
+  const w = window.game.world;
+  const kind = w.objective.kind;
+  const p = w.players[0];
+  const exit = w.map.exits[0];
+  p.x = exit.x; p.y = exit.y; p.prevX = p.x; p.prevY = p.y;
+  await new Promise((r) => setTimeout(r, 1400));
+  return { kind, phase: window.game.phase };
+});
+check("a one-floor mission still extracts on its exit",
+  singleFloor.kind === "exit" && singleFloor.phase === "missions",
+  JSON.stringify(singleFloor));
+
 check("campaign page raised no exceptions", storyErrors.length === 0, storyErrors.join(" | "));
 
 // --- level import ------------------------------------------------------------

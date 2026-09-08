@@ -24,6 +24,10 @@ export interface TileDef {
   light?: number;
   /** Standing on this with the whole squad completes a story mission. */
   exit?: boolean;
+  /** Standing on this with the whole squad moves the mission to its next floor. */
+  stairs?: boolean;
+  /** Purely visual variant — the renderer draws it as furniture, not as a wall face. */
+  prop?: "car" | "reception" | "cubicle" | "door";
   /** Editor palette colour. */
   color: string;
   /** Single character for the compact text form of a level. */
@@ -50,6 +54,20 @@ export const TILE_DEFS: readonly TileDef[] = [
     color: "#8bff7a", glyph: ">", hint: "the safe room. Get the whole squad standing on it to finish the mission" },
   { id: 8, key: "spawnZone", name: "Spawn zone", solid: false, opaque: false, spawn: "zone",
     color: "#9a5ad2", glyph: "Z", hint: "the director draws from these, picking a different one each time and never in sight" },
+  { id: 9, key: "stairs", name: "Stairs / next floor", solid: false, opaque: false, stairs: true,
+    color: "#5ad2ff", glyph: "^", hint: "the way up. Get the whole squad on it to move to the next floor" },
+  { id: 10, key: "car", name: "Car", solid: true, opaque: true, prop: "car",
+    color: "#7a4a4a", glyph: "C", hint: "a wreck. Blocks movement and sight, so it is cover" },
+  { id: 11, key: "window", name: "Window", solid: true, opaque: false, spawn: "zone", prop: "door",
+    color: "#5ad2ff", glyph: "W", hint: "see and shoot through, but nobody walks through — and zombies climb in here" },
+  { id: 12, key: "reception", name: "Reception desk", solid: true, opaque: false, prop: "reception",
+    color: "#8a6a3a", glyph: "R", hint: "waist-high counter: blocks bodies, you see and shoot over it" },
+  { id: 13, key: "cubicle", name: "Cubicle wall", solid: true, opaque: true, prop: "cubicle",
+    color: "#4a5a4a", glyph: "c", hint: "office partition. Blocks movement and sight (note: lowercase c)" },
+  { id: 14, key: "flare", name: "Flare", solid: false, opaque: false, light: 300,
+    color: "#ff7a4a", glyph: "f", hint: "a burning flare — a big red static light you can stand on" },
+  { id: 15, key: "elevator", name: "Elevator door", solid: true, opaque: true, prop: "door",
+    color: "#3a4a5a", glyph: "D", hint: "closed lift doors. Scenery — use ^ for the floor you can actually take" },
 ];
 
 export const TILE_FLOOR = 0;

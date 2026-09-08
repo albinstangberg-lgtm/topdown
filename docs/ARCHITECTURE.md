@@ -172,6 +172,13 @@ with the game.
   for both. Progress is a set of completed ids in localStorage. Menu navigation scores
   nodes by direction rather than using a fixed order, so adding a mission needs no menu
   changes at all.
+- **Floors** (`Mission.floors`, `Game.advanceFloor`) — a mission is a stack of maps, and
+  the objective system decides which end it is: a floor with stairs sends the squad up,
+  a floor with only an exit ends the mission. That is one branch, not a level-streaming
+  system, because the maps are small enough to just load. The squad's condition is
+  carried across the load and its position is not — reusing "spawn near the squad" for
+  a map load put players outside the new map entirely, which is worth remembering as
+  the shape of bug that hides in a fallback.
 - **Modes** (`GameMode` in `src/sim/world.ts`) — survival and story differ in exactly two
   places: what the director is allowed to do, and whether there is an objective. Every
   other system is untouched by the distinction, which is the test of whether a "mode" is
