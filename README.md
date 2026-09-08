@@ -32,8 +32,8 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | --- | --- | --- |
 | Move | `WASD` (relative to the screen) | Left stick |
 | Steer / aim | Mouse (rate scales with distance) | Right stick (rate scales with push) |
-| Fire | Left click / `Space` | RT / A |
-| Sprint (hold) | `Shift` | L3 |
+| Fire | Left click / `Space` | RT |
+| Sprint (hold) | `Shift` | A / L3 |
 | Dive (tap) | `Ctrl` / `C` | B / LT |
 | Lean left / right | `Q` / `E` | LB / RB |
 | Reload | `R` | X |

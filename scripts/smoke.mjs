@@ -577,6 +577,31 @@ const padButtons = await padPage.evaluate(async () => {
 });
 check("gamepad trigger fires and LT dives",
   padButtons.dashed && padButtons.fired, JSON.stringify(padButtons));
+
+// A is sprint now, not fire.
+const padSprint = await padPage.evaluate(async () => {
+  const p = window.game.world.players[1];
+  p.stance = "stand"; p.stanceTimer = 0; p.stamina = p.maxStamina; p.exhausted = false;
+  p.ammo = p.weapon.magazine; p.reloadTimer = 0; p.vx = 0; p.vy = 0;
+  const ammoBefore = p.ammo;
+
+  window.__pad.axes[1] = -1;                  // left stick forward
+  await new Promise((r) => setTimeout(r, 400));
+  const walkSpeed = Math.hypot(p.vx, p.vy);
+
+  window.__pad.buttons[0].pressed = true;     // A
+  await new Promise((r) => setTimeout(r, 450));
+  const sprintSpeed = Math.hypot(p.vx, p.vy);
+  const stamina = p.stamina;
+  window.__pad.buttons[0].pressed = false;
+  window.__pad.axes[1] = 0;
+  return { walkSpeed, sprintSpeed, stamina, ammoBefore, ammoAfter: p.ammo };
+});
+check("A sprints and no longer fires",
+  Math.abs(padSprint.walkSpeed - 165) < 8 && Math.abs(padSprint.sprintSpeed - 259) < 10 &&
+  padSprint.stamina < 95 && padSprint.ammoAfter === padSprint.ammoBefore,
+  `walk ${padSprint.walkSpeed.toFixed(0)}, sprint ${padSprint.sprintSpeed.toFixed(0)}, ` +
+  `stamina ${padSprint.stamina.toFixed(0)}, ammo ${padSprint.ammoAfter}`);
 // Mid-match join is gone: an unclaimed device pressing START must be ignored.
 const lateJoin = await padPage.evaluate(async () => {
   const before = window.game.world.players.length;

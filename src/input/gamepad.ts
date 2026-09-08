@@ -72,9 +72,10 @@ export class GamepadSource implements InputSource {
     const btn = (i: number): boolean => gp.buttons[i]?.pressed ?? false;
     const rightTrigger = gp.buttons[7]?.value ?? 0;
 
-    // LB and RB are the lean, so fire and sprint keep off the shoulders.
-    const fire = rightTrigger > 0.35 || btn(0);
-    const sprint = btn(10);                   // L3, held
+    // LB and RB are the lean, so fire and sprint keep off the shoulders. Fire is the
+    // trigger alone, which frees A for sprint.
+    const fire = rightTrigger > 0.35;
+    const sprint = btn(0) || btn(10);         // A or L3, held
     const dive = btn(1) || btn(6);            // B or LT, tapped
     const reload = btn(2);                    // X / square
     const interact = btn(3);                  // Y / triangle, held to revive
