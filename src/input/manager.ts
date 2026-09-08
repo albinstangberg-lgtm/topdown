@@ -51,19 +51,4 @@ export class InputManager {
   list(): InputSource[] {
     return [...this.sources.values()];
   }
-
-  /**
-   * Devices that are not yet driving a player and just asked to join.
-   * The keyboard is excluded because it is always player 1 in this prototype.
-   */
-  pendingJoins(claimed: ReadonlySet<string>): InputSource[] {
-    const out: InputSource[] = [];
-    for (const [id, src] of this.sources) {
-      if (claimed.has(id)) continue;
-      if (!src.isConnected()) continue;
-      const s = this.states.get(id)!;
-      if (s.startPressed || s.firePressed) out.push(src);
-    }
-    return out;
-  }
 }

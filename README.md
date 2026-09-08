@@ -32,12 +32,13 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | --- | --- | --- |
 | Move | `WASD` (relative to the screen) | Left stick |
 | Steer / aim | Mouse (rate scales with distance) | Right stick (rate scales with push) |
-| Fire | Left click / `Space` | RT / RB / A |
-| Sprint (hold) | `Shift` | L3 / LB |
+| Fire | Left click / `Space` | RT / A |
+| Sprint (hold) | `Shift` | L3 |
 | Dive (tap) | `Ctrl` / `C` | B / LT |
-| Reload | `R` | Y |
-| Revive teammate | Hold `E` | Hold X |
-| Join the game | — | `START` |
+| Lean left / right | `Q` / `E` | LB / RB |
+| Reload | `R` | X |
+| Revive teammate | Hold `F` | Hold Y |
+| Join the game | `ENTER` in the lobby | `START` in the lobby |
 
 Debug: `F1` overlay, `F2` collision grid, `Shift+R` restart, `[` / `]` change map,
 `C` switch camera.
@@ -89,9 +90,22 @@ All of it is named constants at the top of `src/sim/player.ts`: `WALK_SPEED`,
 `SPRINT_SPEED`, `SPRINT_DRAIN`, `STAMINA_REGEN`, `EXHAUST_FLOOR`, `DIVE_SPEED`,
 `DIVE_TIME`, `PRONE_TIME`, `STAND_TIME`, `DIVE_COOLDOWN`.
 
+## Leaning
+
+`Q` / `E` (or `LB` / `RB`) slide **where you look and shoot** about half a tile
+sideways, without moving your collision body — so you can clear a corner before you
+step into it. The vision cone, the aim laser and the bullets all leave from that
+leaned "eye"; the hitbox stays put. Leaning into geometry is clamped, so you can peek
+past a corner but never see through the wall itself.
+
+Worth knowing: because the hitbox does not move, leaning is currently a free advantage —
+you gain sight and a firing angle without exposing yourself. The two conventional ways
+to price it are to move the hitbox with the eye, or to block sprint and slow movement
+while leaning. Neither is in yet.
+
 ## Reloading
 
-`R` (or `Y`) tops up a partial magazine. It is refused when the magazine is already
+`R` (or `X`) tops up a partial magazine. It is refused when the magazine is already
 full, and while you are mid-dive or getting up — but it works fine lying prone. Running
 dry still reloads automatically, so the manual button is for reloading *before* you need
 to, which is the decision worth having in a firefight. A reload in progress keeps
@@ -124,9 +138,8 @@ The game boots into a lobby with nobody playing:
 Up to four, in any mix of one keyboard and three pads. `[` `]` changes the map and `C`
 switches camera from the lobby too.
 
-Once you are playing, a controller that has not joined yet can still press `START` to
-drop in mid-match — the screen re-splits live (full → side by side → quadrants) and the
-new player spawns next to the squad.
+The roster is fixed once the match starts — everyone joins in the lobby, so a stray
+`START` mid-firefight cannot re-split the screen on the people already playing.
 
 To work on the split-screen layout without four controllers plugged in, open
 `?players=4`. That skips the lobby entirely and starts with four players, the extra

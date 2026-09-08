@@ -88,6 +88,9 @@ export class GameWorld {
       p.reloadTimer = 0;
       p.stance = "stand";
       p.stanceTimer = 0;
+      p.lean = 0;
+      p.eyeX = p.x;
+      p.eyeY = p.y;
       p.stamina = p.maxStamina;
       p.exhausted = false;
       syncLights(p);
@@ -186,10 +189,10 @@ export class GameWorld {
       e.visible = false;
       for (const p of this.players) {
         const lit =
-          inCone(p.x, p.y, p.facing, p.cone.halfAngle, p.cone.range, e.x, e.y) ||
-          Math.hypot(p.x - e.x, p.y - e.y) < p.halo.range;
+          inCone(p.eyeX, p.eyeY, p.facing, p.cone.halfAngle, p.cone.range, e.x, e.y) ||
+          Math.hypot(p.eyeX - e.x, p.eyeY - e.y) < p.halo.range;
         if (!lit) continue;
-        if (!hasLineOfSight(this.map, p.x, p.y, e.x, e.y)) continue;
+        if (!hasLineOfSight(this.map, p.eyeX, p.eyeY, e.x, e.y)) continue;
         e.visible = true;
         break;
       }

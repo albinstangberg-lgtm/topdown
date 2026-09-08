@@ -34,14 +34,18 @@ check("player 1 exists", await page.evaluate(() => window.game.world.players.len
 await page.waitForFunction(() => window.game.world.enemies.length > 0, null, { timeout: 8000 });
 
 // Bullets damage enemies: park one right in front of the player and shoot it.
+// Aim FIRST and let it settle, then place the target along wherever the player is
+// actually facing — deriving the position from a fixed screen offset made this flaky,
+// because the cursor's world position depends on a camera that is still damping.
+await page.mouse.move(640 + 220, 360);
+await page.waitForTimeout(400);
 const killed = await page.evaluate(async () => {
   const w = window.game.world;
   const p = w.players[0];
-  p.facing = 0;
   const e = w.enemies[0] ?? null;
   if (!e) return "no enemy spawned";
-  e.x = p.x + 90;
-  e.y = p.y;
+  e.x = p.x + Math.cos(p.facing) * 90;
+  e.y = p.y + Math.sin(p.facing) * 90;
   e.health = 20;
   const before = w.enemies.length;
   return { before, id: e.id };
@@ -49,7 +53,6 @@ const killed = await page.evaluate(async () => {
 check("an enemy is on the field", typeof killed === "object", String(killed));
 
 if (typeof killed === "object") {
-  await page.mouse.move(640 + 200, 360);
   await page.keyboard.down("Space");
   await page.waitForTimeout(700);
   await page.keyboard.up("Space");
@@ -335,6 +338,53 @@ const proneFire = await camPage.evaluate(async () => {
 check("you can shoot from the floor", proneFire.after < proneFire.before,
   JSON.stringify(proneFire));
 
+// Lean: the eye slides sideways, the collision body does not, and a wall stops it.
+const lean = await camPage.evaluate(async () => {
+  const p = window.game.world.players[0];
+  const m = window.game.world.map;
+  const TILE = 48;
+  const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Open floor, facing "north" so leaning moves the eye along x.
+  const put = (tx, ty) => {
+    p.x = tx * TILE; p.y = ty * TILE; p.prevX = p.x; p.prevY = p.y;
+    p.vx = 0; p.vy = 0; p.facing = -Math.PI / 2; p.lean = 0;
+    p.stance = "stand"; p.stanceTimer = 0;
+  };
+  put(12.5, 9.5);
+  await settle(200);
+  const bodyBefore = { x: p.x, y: p.y };
+
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyE" }));   // lean right
+  await settle(500);
+  const leaned = { eyeX: p.eyeX, eyeY: p.eyeY, x: p.x, y: p.y, lean: p.lean };
+  // Facing north, screen-right is world -x.
+  const eyeShift = leaned.eyeX - leaned.x;
+  const bodyMoved = Math.hypot(leaned.x - bodyBefore.x, leaned.y - bodyBefore.y);
+  const coneFollowed = Math.abs(p.cone.x - p.eyeX) < 0.001;
+
+  // Now hard against a wall: the lean must not push the eye through it.
+  let wall = null;
+  for (let ty = 1; ty < m.rows - 1 && !wall; ty++) {
+    for (let tx = 1; tx < m.cols - 1; tx++) {
+      if (m.isSolid(tx, ty) && !m.isSolid(tx + 1, ty)) { wall = { tx, ty }; break; }
+    }
+  }
+  put(wall.tx + 1.4, wall.ty + 0.5);
+  p.facing = -Math.PI / 2;                       // wall is now to screen-left... lean into it
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyE" }));
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyQ" }));   // lean left
+  await settle(500);
+  const insideWall = m.isSolidAt(p.eyeX, p.eyeY);
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyQ" }));
+  await settle(300);
+  return { eyeShift, bodyMoved, coneFollowed, insideWall, leanValue: leaned.lean };
+});
+check("leaning moves where you look and shoot, but never the body or into a wall",
+  Math.abs(lean.eyeShift) > 15 && lean.bodyMoved < 1 && lean.coneFollowed &&
+  lean.insideWall === false,
+  JSON.stringify(lean));
+
 // Manual reload: tops up a partial magazine, ignores a full one, works prone.
 const reload = await camPage.evaluate(async () => {
   const p = window.game.world.players[0];
@@ -438,18 +488,30 @@ await padPage.addInitScript(() => {
   window.__pad = pad;
   navigator.getGamepads = () => [pad];
 });
-await padPage.goto(`${URL}?level=showcase&players=1`, { waitUntil: "load" });
-await padPage.waitForTimeout(400);
-
-const joined = await padPage.evaluate(async () => {
-  window.__pad.buttons[9].pressed = true;   // START
-  await new Promise((r) => setTimeout(r, 250));
+// There is no mid-match join any more, so the pad comes in through the lobby.
+await padPage.goto(`${URL}?level=showcase`, { waitUntil: "load" });
+await padPage.waitForTimeout(500);
+const padStartPress = () => padPage.evaluate(async () => {
+  window.__pad.buttons[9].pressed = true;
+  await new Promise((r) => setTimeout(r, 160));
   window.__pad.buttons[9].pressed = false;
-  await new Promise((r) => setTimeout(r, 250));
-  return { players: window.game.world.players.length, views: window.game.views.length };
+  await new Promise((r) => setTimeout(r, 160));
 });
-check("a gamepad pressing START drops in as a second player",
-  joined.players === 2 && joined.views === 2, JSON.stringify(joined));
+await padPage.keyboard.press("Enter");      // keyboard takes slot 1
+await padPage.waitForTimeout(200);
+await padStartPress();                      // pad takes slot 2
+await padPage.keyboard.press("Enter");      // keyboard ready
+await padPage.waitForTimeout(200);
+await padStartPress();                      // pad ready -> match starts
+await padPage.waitForTimeout(500);
+const joined = await padPage.evaluate(() => ({
+  players: window.game.world.players.length,
+  views: window.game.views.length,
+  phase: window.game.phase,
+}));
+check("a gamepad joins through the lobby and gets its own viewport",
+  joined.players === 2 && joined.views === 2 && joined.phase === "playing",
+  JSON.stringify(joined));
 
 // Left stick pushed "up" must walk along the camera's forward, same as WASD.
 const padWalk = await padPage.evaluate(async () => {
@@ -515,6 +577,17 @@ const padButtons = await padPage.evaluate(async () => {
 });
 check("gamepad trigger fires and LT dives",
   padButtons.dashed && padButtons.fired, JSON.stringify(padButtons));
+// Mid-match join is gone: an unclaimed device pressing START must be ignored.
+const lateJoin = await padPage.evaluate(async () => {
+  const before = window.game.world.players.length;
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "Enter" }));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "Enter" }));
+  await new Promise((r) => setTimeout(r, 400));
+  return { before, after: window.game.world.players.length };
+});
+check("nobody can join once the match has started",
+  lateJoin.after === lateJoin.before, JSON.stringify(lateJoin));
+
 check("gamepad page raised no exceptions", padErrors.length === 0, padErrors.join(" | "));
 
 // --- lobby -------------------------------------------------------------------

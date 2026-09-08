@@ -45,6 +45,7 @@ export class GamepadSource implements InputSource {
       out.aimStrength = 0;
       out.fire = false; out.firePressed = false;
       out.sprint = false; out.divePressed = false; out.reloadPressed = false;
+      out.lean = 0;
       out.interact = false; out.interactPressed = false;
       out.startPressed = false; out.cancelPressed = false;
       return;
@@ -71,11 +72,13 @@ export class GamepadSource implements InputSource {
     const btn = (i: number): boolean => gp.buttons[i]?.pressed ?? false;
     const rightTrigger = gp.buttons[7]?.value ?? 0;
 
-    const fire = rightTrigger > 0.35 || btn(5) || btn(0);
-    const sprint = btn(10) || btn(4);         // L3 or LB, held
+    // LB and RB are the lean, so fire and sprint keep off the shoulders.
+    const fire = rightTrigger > 0.35 || btn(0);
+    const sprint = btn(10);                   // L3, held
     const dive = btn(1) || btn(6);            // B or LT, tapped
-    const reload = btn(3);                    // Y / triangle
-    const interact = btn(2);
+    const reload = btn(2);                    // X / square
+    const interact = btn(3);                  // Y / triangle, held to revive
+    const lean = (btn(5) ? 1 : 0) - (btn(4) ? 1 : 0);
     const start = btn(9) || btn(8);
     const cancel = btn(1);                    // B / circle
 
@@ -84,6 +87,7 @@ export class GamepadSource implements InputSource {
     out.sprint = sprint;
     out.divePressed = dive && !this.prevDive;
     out.reloadPressed = reload && !this.prevReload;
+    out.lean = lean;
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
     out.startPressed = start && !this.prevStart;

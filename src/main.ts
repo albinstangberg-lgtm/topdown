@@ -46,7 +46,6 @@ export class Game {
   /** Public for the debug console and the smoke tests — one camera per viewport. */
   cameras: Camera[] = [];
   views: Viewport[] = [];
-  private claimed = new Set<string>();
   private banner = { text: "", time: 0 };
   private levelIndex = 0;
   private cameraMode: CameraMode = "rotating";
@@ -199,7 +198,6 @@ export class Game {
 
   private addPlayerFor(sourceId: string): void {
     if (this.world.players.length >= MAX_PLAYERS) return;
-    this.claimed.add(sourceId);
     this.world.addPlayer(sourceId);
     this.relayout();
   }
@@ -342,12 +340,6 @@ export class Game {
       }
       if (this.banner.time > 0) this.banner.time -= dt;
       return;
-    }
-
-    // Drop-in co-op: any unclaimed pad that presses START/fire becomes a player.
-    for (const src of this.input.pendingJoins(this.claimed)) {
-      if (this.world.players.length >= MAX_PLAYERS) break;
-      this.addPlayerFor(src.id);
     }
 
     this.world.update(dt, this.inputOf, this.resolveAim);

@@ -243,8 +243,10 @@ export class Renderer {
     }
 
     for (const p of world.players) {
-      const x = lerp(p.prevX, p.x, alpha);
-      const y = lerp(p.prevY, p.y, alpha);
+      // The body follows the lean part-way; the eye (light and muzzle) goes all the
+      // way, so a peek reads as a peek without detaching the sprite from its hitbox.
+      const x = lerp(p.prevX, p.x, alpha) + (p.eyeX - p.x) * 0.55;
+      const y = lerp(p.prevY, p.y, alpha) + (p.eyeY - p.y) * 0.55;
       const body = p.downed ? "#6b6b6b" : (p.hurtFlash > 0.15 ? "#ffffff" : p.color);
       // The barrel extends as the weapon comes up and the body flattens as you go to
       // the floor — both stances are readable off the world, without UI.
@@ -375,8 +377,8 @@ export class Renderer {
 
       const cos = Math.cos(p.facing);
       const sin = Math.sin(p.facing);
-      const mx = p.x + cos * (p.radius + 10);
-      const my = p.y + sin * (p.radius + 10);
+      const mx = p.eyeX + cos * (p.radius + 10);
+      const my = p.eyeY + sin * (p.radius + 10);
       const dist = raycast(world.map, mx, my, cos, sin, p.weapon.range, "shot");
       const ex = mx + cos * dist;
       const ey = my + sin * dist;

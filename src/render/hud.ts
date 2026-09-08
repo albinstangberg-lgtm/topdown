@@ -62,6 +62,11 @@ export function drawHud(
     : p.stamina < p.maxStamina ? "rgba(255,206,110,0.9)" : "rgba(120,200,255,0.8)";
   ctx.fillRect(pad, pad + 42, staminaW * (p.stamina / p.maxStamina), 5);
 
+  if (Math.abs(p.lean) > 0.05) {
+    ctx.fillStyle = "rgba(150,200,255,0.9)";
+    ctx.fillText(p.lean < 0 ? "< LEAN" : "LEAN >", pad + 100, pad + 54);
+  }
+
   if (p.stance !== "stand") {
     ctx.fillStyle = "rgba(255,206,110,0.9)";
     ctx.fillText(p.stance === "standUp" ? "GETTING UP" : "PRONE", pad, pad + 54);

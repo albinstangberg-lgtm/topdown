@@ -102,7 +102,8 @@ export class KeyboardMouseSource implements InputSource {
     // Shift+R restarts the level, so a shifted R is not a reload.
     const shifted = k.has("ShiftLeft") || k.has("ShiftRight");
     const reload = this.hit("KeyR") && !shifted;
-    const interact = k.has("KeyE");
+    const interact = k.has("KeyF");
+    const lean = (k.has("KeyE") ? 1 : 0) - (k.has("KeyQ") ? 1 : 0);
     const start = this.hit("Enter") || this.hit("NumpadEnter");
     const cancel = this.hit("Escape") || this.hit("Backspace");
 
@@ -111,6 +112,7 @@ export class KeyboardMouseSource implements InputSource {
     out.sprint = sprint;
     out.divePressed = dive && !this.prevDive;
     out.reloadPressed = reload && !this.prevReload;
+    out.lean = lean;
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
     out.startPressed = start && !this.prevStart;

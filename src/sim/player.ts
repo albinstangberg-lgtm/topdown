@@ -1,6 +1,6 @@
 import type { InputState } from "../input/types";
 import { clamp, damp, rotateToward } from "../core/math";
-import { moveCircle } from "../world/collision";
+import { moveCircle, pointInWall } from "../world/collision";
 import type { TileMap } from "../world/tilemap";
 import { makeLight } from "../vision/visibility";
 import { WEAPONS, type Player } from "./entities";
@@ -44,6 +44,13 @@ const STAND_TIME = 0.45;
 const DIVE_COOLDOWN = 0.8;   // starts once you are back on your feet
 /** Turning on the floor is slower — a prone body pivots badly. */
 const PRONE_TURN_SCALE = 0.55;
+
+/**
+ * Lean. Slides where you look and shoot sideways without moving the body, so you can
+ * clear a corner before you walk into it. Deliberately small — half a tile.
+ */
+const LEAN_OFFSET = 24;
+const LEAN_RATE = 11;
 /** Radians/second toward the aim direction. Absolute aiming wants this fast. */
 export const TURN_RATE = 14;
 /**
@@ -88,6 +95,9 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     ammo: WEAPONS.smg.magazine,
     fireCooldown: 0,
     reloadTimer: 0,
+    lean: 0,
+    eyeX: x,
+    eyeY: y,
     stance: "stand",
     stanceTimer: 0,
     diveDirX: 0,
@@ -144,6 +154,7 @@ export function updatePlayer(
     p.weaponHold = 0;
     p.stance = "stand";
     p.stanceTimer = 0;
+    p.lean = 0;
     updateDowned(p, input, deps, dt);
     return;
   }
@@ -207,6 +218,7 @@ export function updatePlayer(
     if (wantsToFire && p.fireCooldown <= 0 && p.weaponUp >= 1 && canFire(p)) fire(p, deps);
   }
 
+  updateLean(p, input, deps, dt);
   syncLights(p);
 }
 
@@ -224,6 +236,31 @@ function updateWeaponStance(
   const target = wants || p.weaponHold > 0 ? 1 : 0;
   const rate = target > p.weaponUp ? 1 / WEAPON_RAISE_TIME : 1 / WEAPON_LOWER_TIME;
   p.weaponUp = clamp(p.weaponUp + Math.sign(target - p.weaponUp) * rate * dt, 0, 1);
+}
+
+/**
+ * Resolve the lean into an eye position. If the leaned position would sit inside
+ * geometry we back it off rather than letting you see through a wall — leaning past a
+ * corner is the point, leaning INTO it is not.
+ */
+function updateLean(p: Player, input: InputState, deps: PlayerDeps, dt: number): void {
+  const allowed = p.stance === "stand" || p.stance === "prone";
+  p.lean = damp(p.lean, allowed ? clamp(input.lean, -1, 1) : 0, LEAN_RATE, dt);
+
+  // Perpendicular to facing, pointing to screen-right.
+  const px = -Math.sin(p.facing);
+  const py = Math.cos(p.facing);
+  for (let frac = 1; frac > 0.01; frac -= 1 / 3) {
+    const ex = p.x + px * LEAN_OFFSET * p.lean * frac;
+    const ey = p.y + py * LEAN_OFFSET * p.lean * frac;
+    if (!pointInWall(deps.map, ex, ey)) {
+      p.eyeX = ex;
+      p.eyeY = ey;
+      return;
+    }
+  }
+  p.eyeX = p.x;
+  p.eyeY = p.y;
 }
 
 function startReload(p: Player, deps: PlayerDeps): void {
@@ -309,9 +346,10 @@ function fire(p: Player, deps: PlayerDeps): void {
   p.ammo--;
   p.muzzleFlash = 1;
 
+  // Shots leave from the eye, so a lean actually shoots round the corner.
   const muzzle = p.radius + 10;
-  const mx = p.x + Math.cos(p.facing) * muzzle;
-  const my = p.y + Math.sin(p.facing) * muzzle;
+  const mx = p.eyeX + Math.cos(p.facing) * muzzle;
+  const my = p.eyeY + Math.sin(p.facing) * muzzle;
 
   for (let i = 0; i < w.pellets; i++) {
     const spread = (Math.random() * 2 - 1) * w.spread;
@@ -383,20 +421,20 @@ export function damagePlayer(p: Player, amount: number): void {
 }
 
 export function syncLights(p: Player): void {
-  p.cone.x = p.x;
-  p.cone.y = p.y;
+  p.cone.x = p.eyeX;
+  p.cone.y = p.eyeY;
   p.cone.facing = p.facing;
   p.cone.halfAngle = p.downed ? 0.7 : CONE_HALF_ANGLE;
   p.cone.range = p.downed ? 210 : CONE_RANGE;
   p.cone.intensity = p.downed ? 0.5 : 1 + p.muzzleFlash * 0.35;
 
-  p.halo.x = p.x;
-  p.halo.y = p.y;
+  p.halo.x = p.eyeX;
+  p.halo.y = p.eyeY;
   p.halo.facing = 0;
   p.halo.range = HALO_RANGE;
 }
 
 export const PLAYER_TUNING = {
   WALK_SPEED, SPRINT_SPEED, STAMINA_MAX, SPRINT_DRAIN,
-  DIVE_TIME, PRONE_TIME, STAND_TIME, BLEEDOUT, REVIVE_TIME, REVIVE_RANGE,
+  DIVE_TIME, PRONE_TIME, STAND_TIME, LEAN_OFFSET, BLEEDOUT, REVIVE_TIME, REVIVE_RANGE,
 };

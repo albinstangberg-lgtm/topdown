@@ -78,6 +78,15 @@ export interface Player {
   diveDirX: number;
   diveDirY: number;
   diveCooldown: number;
+  /** Current lean, -1 left to +1 right, damped toward the input. */
+  lean: number;
+  /**
+   * Where the player looks and shoots from. Equals the body position when upright and
+   * slides sideways when leaning — the collision circle never moves, which is what
+   * lets you peek round a corner without stepping into it.
+   */
+  eyeX: number;
+  eyeY: number;
   stamina: number;
   maxStamina: number;
   /** Counts down before stamina starts coming back, so tapping sprint is not free. */
