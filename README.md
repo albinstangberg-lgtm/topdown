@@ -184,8 +184,8 @@ unlocks whatever required it, and you come back to the map after every mission, 
 lost. Missions have placed zombies you can learn, spawn zones so reinforcements are not
 always the same, and a safe room to reach. Progress is kept in `localStorage`.
 
-**Survival** is the endless one: a fresh procedural layout every run and a director that
-never stops. No exit, no objective — last as long as you can.
+**Survival** is the endless one: a fresh procedural layout every run, bigger waves and
+shorter breathers. No exit, no objective — last as long as you can.
 
 The starter campaign, *Sector 7*, lives in `src/campaign/campaign.ts`: five missions as
 glyph art, each with a node position on the mission map and a list of missions it
@@ -196,6 +196,38 @@ The opening mission, **Vertical Slice**, is a six-floor building: car park, serv
 corridors, the street outside, lobby, cubicle floor, roof. Stairs (`^`) join the floors
 and the squad carries its condition up, so it plays as one continuous climb. See
 [docs/LEVELS.md](docs/LEVELS.md#multi-floor-missions).
+
+## The director
+
+Pressure has a shape, modelled on Left 4 Dead's AI Director rather than on a spawn
+table. It runs four phases in a loop:
+
+| phase | what it does |
+| --- | --- |
+| **buildup** | releases a wave every 9–16s (7–12s in survival), one door at a time |
+| **peak** | holds for 4s with nothing new arriving — the fight you are in is the fight |
+| **fade** | stops spawning and waits for the squad to get on top of it |
+| **relax** | 18–30s of guaranteed quiet (12–20s in survival) before it starts again |
+
+The phase changes on **intensity**, not on a clock: survivor stress climbs when you take
+damage, when zombies are inside about four tiles of you, and hard while anyone is down,
+and it decays whenever none of that is happening. The squad's intensity is the *worst*
+player's rather than the average — one person being mauled is a peak even if the other
+three are fine.
+
+**Waves come out of doors.** Zone tiles (`8`) that touch each other are one door, so a
+row of twelve along a wall is a single way in and not twelve. A wave is a group out of
+one door, never the same door twice running, and never a door anybody can currently see
+— using exactly the test that decides whether a zombie gets drawn, so nothing ever pops
+in where you are looking. A map with four separated doors therefore plays differently
+every run, which is the whole reason to paint more than one.
+
+Underneath all of it a couple of **wanderers** per squad are kept alive at all times,
+well away from everyone, so a relax reads as quiet rather than as the level having run
+out. `F1` shows the phase, the intensity, the wave count and the door count.
+
+Tuning is two tables at the top of `src/sim/director.ts` — `STORY_TUNING` and
+`SURVIVAL_TUNING`.
 
 ## Maps
 
@@ -238,7 +270,7 @@ Implemented: fixed-timestep loop, device-agnostic input with drop-in join, tile 
 driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones with
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
-hear through walls and lunge, downed and revive, a population director, HUD per viewport,
+hear through walls and lunge, downed and revive, an intensity-driven wave director, HUD per viewport,
 a debug overlay, the level format with a tolerant importer, and a map editor.
 
 Not built yet: audible audio (the noise field is simulation only — nothing plays), menus and a controller-assignment screen, weapon pickups and

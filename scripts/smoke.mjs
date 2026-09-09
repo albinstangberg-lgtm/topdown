@@ -779,6 +779,9 @@ const zoneOnly = await storyPage.evaluate(async () => {
   const w = window.game.world;
   const zones = w.map.spawnZones;
   w.enemies.length = 0;
+  // Skip the opening breather: this check is about WHERE waves come from, not when.
+  w.director.phase = "buildup";
+  w.director.waveTimer = 0;
 
   // Enemies start walking the moment they exist, so record where each one APPEARED
   // rather than where it has got to by the end of the sample.
@@ -1332,6 +1335,139 @@ check("walking is silent, sprinting and shooting are not",
   loudness.walking.length === 0 &&
   loudness.sprinting.includes("step") && loudness.shooting.includes("shot"),
   JSON.stringify(loudness));
+
+// --- the director ------------------------------------------------------------
+//
+// Waves, not a drip: a group out of one door at a time, never the same door twice
+// running, never one the squad is looking at, and nothing at all while the fight is
+// already at its peak. A 21x17 arena with a zone tile at each compass point, so there
+// are four distinct doors and at most one of them can be inside the player's cone.
+
+const DIRECTOR_ARENA = [
+  "#####################",
+  "#.........Z.........#",
+  "#...................#",
+  "#...................#",
+  "#...................#",
+  "#...................#",
+  "#...................#",
+  "#...................#",
+  "#Z........P........Z#",
+  "#...................#",
+  "#...................#",
+  "#...................#",
+  "#...................#",
+  "#...................#",
+  "#...................#",
+  "#.........Z.........#",
+  "#####################",
+].join("\n");
+
+/** Load the arena in story mode, so the director may only use the authored zones. */
+const directorArena = async () => zomPage.evaluate(async (art) => {
+  window.game.loadLevelText(art, "director arena");
+  await new Promise((r) => setTimeout(r, 250));
+  const w = window.game.world;
+  w.mode = "story";
+  w.enemies.length = 0;
+  const p = w.players[0];
+  p.health = p.maxHealth; p.downed = false;
+  p.stance = "stand"; p.stanceTimer = 0;
+  w.director.reset();
+  return w.director.doorCount;
+}, DIRECTOR_ARENA);
+
+const doorCount = await directorArena();
+check("touching zone tiles group into doors", doorCount === 4, `doors ${doorCount}`);
+
+// A wave is a group arriving together out of one door, out of sight.
+const wave = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  w.enemies.length = 0;
+  w.director.phase = "buildup";
+  w.director.waveTimer = 0;
+
+  const seen = new Map();
+  const t0 = performance.now();
+  while (performance.now() - t0 < 2500 && w.director.waves === 0) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  // The wave has landed: record where each of them appeared, and whether the squad
+  // could have watched it happen.
+  for (const e of w.enemies) seen.set(e.id, { x: e.x, y: e.y, visible: e.visible });
+  const spawns = [...seen.values()];
+  const spread = Math.max(...spawns.map((a) =>
+    Math.max(...spawns.map((b) => Math.hypot(a.x - b.x, a.y - b.y)))));
+  const onZone = spawns.every((sp) =>
+    w.map.spawnZones.some((z) => Math.hypot(z.x - sp.x, z.y - sp.y) < 1));
+  return {
+    waves: w.director.waves,
+    size: spawns.length,
+    spread: Math.round(spread),
+    onZone,
+    anyVisible: spawns.some((sp) => sp.visible),
+  };
+});
+check("a wave is a group from one door, on its zone tiles, out of sight",
+  wave.waves === 1 && wave.size >= 4 && wave.spread < 48 &&
+  wave.onZone && !wave.anyVisible,
+  JSON.stringify(wave));
+
+// Pressure has to arrive from somewhere new, or a map with four doors plays like a
+// map with one.
+await directorArena();
+const rotation = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  const used = [];
+  for (let i = 0; i < 4; i++) {
+    w.enemies.length = 0;                 // stay under the cap so every wave lands
+    w.director.phase = "buildup";
+    w.director.waveTimer = 0;
+    const before = w.director.waves;
+    const until = performance.now() + 2500;
+    while (performance.now() < until && w.director.waves === before) {
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    used.push(w.director.lastDoor);
+  }
+  let repeats = 0;
+  for (let i = 1; i < used.length; i++) if (used[i] === used[i - 1]) repeats++;
+  return { used, repeats };
+});
+check("consecutive waves never come from the same door",
+  rotation.used.length === 4 && rotation.used.every((d) => d >= 0) && rotation.repeats === 0,
+  JSON.stringify(rotation));
+
+// At the peak, the director stops adding. The fight you are in is the fight.
+await directorArena();
+const peaked = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  w.director.phase = "buildup";
+  w.director.waveTimer = 0;
+  const until = performance.now() + 2500;
+  while (performance.now() < until && w.director.waves === 0) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+
+  // A big hit is a peak: stress is driven by damage taken, so take some.
+  p.health = p.maxHealth - 60;
+  await new Promise((r) => setTimeout(r, 200));
+  const phaseAtPeak = w.director.phase;
+  const wavesAtPeak = w.director.waves;
+  await new Promise((r) => setTimeout(r, 3000));
+  p.health = p.maxHealth;
+  return {
+    intensity: Math.round(w.director.intensity * 100) / 100,
+    phaseAtPeak,
+    phaseAfter: w.director.phase,
+    added: w.director.waves - wavesAtPeak,
+  };
+});
+check("no new waves while the squad is at its peak",
+  peaked.phaseAtPeak === "peak" && peaked.added === 0 &&
+  (peaked.phaseAfter === "peak" || peaked.phaseAfter === "fade" || peaked.phaseAfter === "relax"),
+  JSON.stringify(peaked));
 
 check("zombie pages raised no exceptions", zomErrors.length === 0, zomErrors.join(" | "));
 

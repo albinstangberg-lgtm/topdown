@@ -83,6 +83,8 @@ export class DebugOverlay {
       `sim ${loop.stats.updateMs.toFixed(2)}ms  draw ${loop.stats.renderMs.toFixed(2)}ms`,
       `players ${world.players.length}  enemies ${world.enemies.length}`,
       `bullets ${world.bullets.items.filter((b) => b.active).length}`,
+      `director ${world.director.phase}  intensity ${world.director.intensity.toFixed(2)}`,
+      `waves ${world.director.waves}  doors ${world.director.doorCount}  next ${Math.max(0, world.director.waveTimer).toFixed(1)}s`,
       `vision pts ${world.players.reduce((n, p) => n + p.cone.poly.length / 2, 0).toFixed(0)}`,
       `t ${world.time.toFixed(1)}s   [F2] collision grid`,
     ];

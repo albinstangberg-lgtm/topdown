@@ -14,6 +14,7 @@ import {
 import { createEnemy, damageEnemy, updateEnemy } from "./enemy";
 import { randomZombieKind } from "./zombies";
 import { NOISE, NoiseField } from "./noise";
+import { Director, STORY_TUNING, SURVIVAL_TUNING } from "./director";
 import { BulletPool, ParticlePool } from "./pools";
 import type { Enemy, Player } from "./entities";
 
@@ -27,12 +28,6 @@ import type { Enemy, Player } from "./entities";
 
 const MAP_COLS = 56;
 const MAP_ROWS = 42;
-/** How far from every player an enemy has to spawn — never pop in inside someone's cone. */
-const SPAWN_CLEARANCE = 620;
-/** Survival: enemies alive on the field, per player. The local co-op difficulty knob. */
-const ENEMIES_PER_PLAYER = 5;
-/** Story: how much pressure the director adds ON TOP of the zombies you placed. */
-const ZONE_ENEMIES_PER_PLAYER = 3;
 /** Seconds the whole squad has to stand on the exit before the mission ends. */
 const EXIT_DWELL = 0.8;
 
@@ -44,11 +39,13 @@ const EXIT_DWELL = 0.8;
 export type GameMode = "survival" | "story";
 
 export interface GameEvent {
-  kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level"
+  kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level" | "horde"
       | "floorCleared" | "missionComplete" | "missionFailed";
   x?: number;
   y?: number;
   text?: string;
+  /** How many zombies a `horde` event released. */
+  count?: number;
 }
 
 export class GameWorld {
@@ -59,12 +56,20 @@ export class GameWorld {
   readonly particles = new ParticlePool();
   /** Every noise made this step. Zombies hear it; walls do not stop it. */
   readonly noise = new NoiseField();
+  /** Waves, peaks and breathers. See `src/sim/director.ts`. */
+  readonly director = new Director(SURVIVAL_TUNING);
   readonly events: GameEvent[] = [];
 
   /** Lamps baked into the level. Static, so their visibility is solved once on load. */
   readonly staticLights: VisionLight[] = [];
 
-  mode: GameMode = "survival";
+  private _mode: GameMode = "survival";
+  /** Setting the mode re-tunes the director: survival leans harder than story. */
+  get mode(): GameMode { return this._mode; }
+  set mode(next: GameMode) {
+    this._mode = next;
+    this.director.setTuning(next === "story" ? STORY_TUNING : SURVIVAL_TUNING);
+  }
   /**
    * Live objective state for the HUD: what the squad is standing on, how many of them
    * are on it, and how far through the dwell they are.
@@ -79,7 +84,6 @@ export class GameWorld {
   time = 0;
   private exitTimer = 0;
   private nextEnemyId = 1;
-  private spawnTimer = 2;
   /** Grace period once the whole squad is down, so the wipe reads as a moment. */
   private wipeTimer = 0;
   private seed: number;
@@ -89,6 +93,8 @@ export class GameWorld {
     this.mode = mode;
     this.map = buildTileMap(level ?? generateLevel(MAP_COLS, MAP_ROWS, seed));
     this.bakeStaticLights();
+    this.director.rebuild(this.map);
+    this.director.reset();
   }
 
   /**
@@ -109,8 +115,9 @@ export class GameWorld {
     for (const p of this.particles.items) p.active = false;
     this.noise.clear();
     this.time = 0;
-    this.spawnTimer = 1.5;
     this.wipeTimer = 0;
+    this.director.rebuild(this.map);
+    this.director.reset();
 
     this.players.forEach((p, i) => {
       const spawn = this.playerSpawn(i);
@@ -272,27 +279,30 @@ export class GameWorld {
    * then almost-hidden by the darkness layer.
    */
   private updateEnemyVisibility(): void {
-    for (const e of this.enemies) {
-      e.visible = false;
-      for (const p of this.players) {
-        const lit =
-          inCone(p.eyeX, p.eyeY, p.facing, p.cone.halfAngle, p.cone.range, e.x, e.y) ||
-          Math.hypot(p.eyeX - e.x, p.eyeY - e.y) < p.halo.range;
-        if (!lit) continue;
-        if (!hasLineOfSight(this.map, p.eyeX, p.eyeY, e.x, e.y)) continue;
-        e.visible = true;
-        break;
-      }
-      // Standing in a lamp's pool gives you away too — that is what lamps are for.
-      if (e.visible || this.players.length === 0) continue;
-      for (const light of this.staticLights) {
-        if (Math.hypot(light.x - e.x, light.y - e.y) > light.range) continue;
-        if (!hasLineOfSight(this.map, light.x, light.y, e.x, e.y)) continue;
-        e.visible = true;
-        break;
-      }
-    }
+    for (const e of this.enemies) e.visible = this.squadCanSee(e.x, e.y);
   }
+
+  /**
+   * Can anybody see this point right now? The renderer's own test, so "is that zombie
+   * drawn" and "may a wave arrive there" can never answer it differently. Bound,
+   * because the director holds it as a callback.
+   */
+  squadCanSee = (x: number, y: number): boolean => {
+    for (const p of this.players) {
+      const lit =
+        inCone(p.eyeX, p.eyeY, p.facing, p.cone.halfAngle, p.cone.range, x, y) ||
+        Math.hypot(p.eyeX - x, p.eyeY - y) < p.halo.range;
+      if (!lit) continue;
+      if (hasLineOfSight(this.map, p.eyeX, p.eyeY, x, y)) return true;
+    }
+    // Standing in a lamp's pool gives you away too — that is what lamps are for.
+    if (this.players.length === 0) return false;
+    for (const light of this.staticLights) {
+      if (Math.hypot(light.x - x, light.y - y) > light.range) continue;
+      if (hasLineOfSight(this.map, light.x, light.y, x, y)) return true;
+    }
+    return false;
+  };
 
   private updateBullets(dt: number): void {
     for (const b of this.bullets.items) {
@@ -320,6 +330,8 @@ export class GameWorld {
             this.map.setTile(tx, ty, hit.breaksInto);
             // Derived lists (what is walkable, where spawns are) change with the grid.
             this.map.refresh();
+            // A smashed window is a new way in. The director should know about it.
+            this.director.rebuild(this.map);
             this.particles.burst(b.x, b.y, 14, 190, "#cfe9f5", 0.5, 3);
             // Breaking a pane is nearly as loud as the shot that broke it.
             this.noise.emit(b.x, b.y, NOISE.glass, "break");
@@ -378,53 +390,27 @@ export class GameWorld {
     this.events.push({ kind: "kill", x: e.x, y: e.y });
   }
 
-  /** CORE 9 — a director, not a spawn table: population scales with the squad. */
+  /**
+   * CORE 9 — the AI Director. The shape of the pressure lives in `director.ts`; this
+   * is only the wiring, and the one rule the director must not own: a story map with
+   * no spawn zones is a fixed encounter the author wrote, and nothing may be added to it.
+   */
   private updateDirector(dt: number): void {
-    if (this.players.length === 0) return;
     const story = this.mode === "story";
-    // A story map with no zones is a fixed encounter — respect the author and stop.
     if (story && this.map.spawnZones.length === 0) return;
-
-    const perPlayer = story ? ZONE_ENEMIES_PER_PLAYER : ENEMIES_PER_PLAYER;
-    const cap = perPlayer * this.players.length;
-    this.spawnTimer -= dt;
-    if (this.enemies.length >= cap || this.spawnTimer > 0) return;
-
-    this.spawnTimer = story ? 3.4 : Math.max(0.6, 2.2 - this.time * 0.004);
-    const spot = this.enemySpawn();
-    if (spot) {
-      this.enemies.push(createEnemy(this.nextEnemyId++, spot.x, spot.y, randomZombieKind()));
-    }
-  }
-
-  /**
-   * Enemy spawn priority: the level's enemy-spawn tiles, then any floor tile — in both
-   * cases far enough away that nobody watches one appear. A small map may legitimately
-   * have nowhere valid, in which case we simply do not spawn this tick.
-   */
-  /**
-   * Spawn zones first, in a shuffled order so pressure does not always arrive from the
-   * same door. Survival falls back to any floor tile; story does not — an authored map
-   * only ever spawns where the author said it could.
-   */
-  private enemySpawn(): { x: number; y: number } | null {
-    const zones = this.map.spawnZones;
-    if (zones.length > 0) {
-      const start = Math.floor(Math.random() * zones.length);
-      for (let i = 0; i < zones.length; i++) {
-        const spot = zones[(start + i) % zones.length];
-        if (this.clearOfPlayers(spot.x, spot.y)) return spot;
-      }
-      // Every zone is currently in someone's lap: wait rather than cheat.
-      if (this.mode === "story") return null;
-    }
-    if (this.mode === "story") return null;
-    for (let attempt = 0; attempt < 30; attempt++) {
-      const spot = this.map.randomWalkable();
-      if (!spot) return null;
-      if (this.clearOfPlayers(spot.x, spot.y)) return spot;
-    }
-    return null;
+    this.director.update(dt, {
+      map: this.map,
+      players: this.players,
+      enemies: this.enemies,
+      squadCanSee: this.squadCanSee,
+      allowFallback: !story,
+      spawn: (x, y) => {
+        this.enemies.push(createEnemy(this.nextEnemyId++, x, y, randomZombieKind()));
+      },
+      onWave: (x, y, count) => {
+        this.events.push({ kind: "horde", x, y, text: undefined, count });
+      },
+    });
   }
 
   /**
@@ -465,17 +451,6 @@ export class GameWorld {
         text: this.map.name,
       });
     }
-  }
-
-  private clearOfPlayers(x: number, y: number): boolean {
-    // On a small map the clearance shrinks rather than starving the level of enemies.
-    const clearance = Math.min(
-      SPAWN_CLEARANCE, Math.max(this.map.worldWidth, this.map.worldHeight) * 0.45,
-    );
-    for (const p of this.players) {
-      if (Math.hypot(p.x - x, p.y - y) < clearance) return false;
-    }
-    return true;
   }
 
   private updateBleedout(dt: number): void {
