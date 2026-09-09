@@ -327,7 +327,7 @@ export class Renderer {
         const x = tx * TILE;
         const y = ty * TILE;
 
-        if (key === "brokenGlass") {
+        if (key === "brokenGlass" || key === "brokenWindow") {
           // A shattered pane: the frame is gone, so all that is left is glitter on the
           // floor. Reads instantly as "this was glass, and it is open now".
           ctx.fillStyle = "rgba(159,216,234,0.10)";
@@ -345,6 +345,23 @@ export class Renderer {
             ctx.lineTo(rx + len, ry + len * 0.4);
           }
           ctx.stroke();
+
+          // A smashed window keeps the stubs of its frame, so the hole in the wall is
+          // still legible as a window and not just glitter on the floor.
+          if (key === "brokenWindow") {
+            ctx.strokeStyle = "rgba(140,225,255,0.5)";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(x + 1, y + 1); ctx.lineTo(x + 11, y + 1);
+            ctx.moveTo(x + TILE - 11, y + 1); ctx.lineTo(x + TILE - 1, y + 1);
+            ctx.moveTo(x + 1, y + TILE - 1); ctx.lineTo(x + 11, y + TILE - 1);
+            ctx.moveTo(x + TILE - 11, y + TILE - 1); ctx.lineTo(x + TILE - 1, y + TILE - 1);
+            ctx.moveTo(x + 1, y + 1); ctx.lineTo(x + 1, y + 11);
+            ctx.moveTo(x + TILE - 1, y + 1); ctx.lineTo(x + TILE - 1, y + 11);
+            ctx.moveTo(x + 1, y + TILE - 11); ctx.lineTo(x + 1, y + TILE - 1);
+            ctx.moveTo(x + TILE - 1, y + TILE - 11); ctx.lineTo(x + TILE - 1, y + TILE - 1);
+            ctx.stroke();
+          }
           continue;
         }
 

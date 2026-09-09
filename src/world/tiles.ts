@@ -65,8 +65,10 @@ export const TILE_DEFS: readonly TileDef[] = [
     color: "#5ad2ff", glyph: "^", hint: "the way up. Get the whole squad on it to move to the next floor" },
   { id: 10, key: "car", name: "Car", solid: true, opaque: true, prop: "car",
     color: "#7a4a4a", glyph: "C", hint: "a wreck. Blocks movement and sight, so it is cover" },
-  { id: 11, key: "window", name: "Window", solid: true, opaque: false, spawn: "zone", prop: "door",
-    color: "#5ad2ff", glyph: "W", hint: "see and shoot through, but nobody walks through — and zombies climb in here" },
+  { id: 11, key: "window", name: "Window", solid: true, opaque: false, blocksShots: false,
+    breaksInto: 18, spawn: "zone", prop: "door",
+    color: "#5ad2ff", glyph: "W",
+    hint: "see and shoot through, nobody walks through — until a bullet smashes it. Zombies climb in here either way" },
   { id: 12, key: "reception", name: "Reception desk", solid: true, opaque: false, prop: "reception",
     color: "#8a6a3a", glyph: "R", hint: "waist-high counter: blocks bodies, you see and shoot over it" },
   { id: 13, key: "cubicle", name: "Cubicle wall", solid: true, opaque: true, prop: "cubicle",
@@ -81,6 +83,9 @@ export const TILE_DEFS: readonly TileDef[] = [
   { id: 17, key: "brokenGlass", name: "Broken glass", solid: false, opaque: false,
     color: "#9fd8ea", glyph: "g",
     hint: "what glass leaves behind: an open hole you can walk through. Rarely authored by hand" },
+  { id: 18, key: "brokenWindow", name: "Broken window", solid: false, opaque: false, spawn: "zone",
+    color: "#7fc4dd", glyph: "w",
+    hint: "a smashed window: walk straight through it, and it is STILL a way in for the director" },
 ];
 
 export const TILE_FLOOR = 0;

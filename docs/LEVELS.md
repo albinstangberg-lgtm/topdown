@@ -19,13 +19,14 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `8` | `Z` | Spawn zone | no | no | the director draws from these, picking a different one each time and never in sight |
 | `9` | `^` | Stairs | no | no | the way up. The whole squad standing on it loads the mission's next floor |
 | `10` | `C` | Car | yes | yes | a wreck. Cover you cannot see through — author them as 2×2 blocks |
-| `11` | `W` | Window | yes | **no** | see and shoot through, nobody walks through — and the director can put a zombie there, climbing in |
+| `11` | `W` | Window | yes | **no** | see and shoot through, nobody walks through — until a bullet smashes it. A zombie entry point either way |
 | `12` | `R` | Reception desk | yes | **no** | waist-high counter: blocks bodies, you shoot over it |
 | `13` | `c` | Cubicle wall | yes | yes | office partition. **Lowercase c** — `C` is a car |
 | `14` | `f` | Flare | no | no | a big red static light you can stand on |
 | `15` | `D` | Elevator door | yes | yes | closed lift doors. Scenery — use `^` for a floor you can actually take |
 | `16` | `_` | Blocked floor | yes | no | looks and lights like floor, but nobody walks on it. Sight **and bullets** pass over — shape rooms with it |
 | `17` | `g` | Broken glass | no | no | what glass leaves behind: an open hole with shards on the floor. You rarely author this by hand |
+| `18` | `w` | Broken window | no | no | a smashed window: walk straight through, and **still** a way in for the director |
 
 `solid`, `opaque` and `blocksShots` are separate flags on purpose, because they are three
 different questions: **can a body pass, can a look pass, can a bullet pass.** Collision
@@ -33,12 +34,19 @@ asks solid, the vision raycast asks opaque, bullets and the aim laser ask blocks
 (which falls back to `solid` when a tile does not say otherwise). Glass proves the first
 two are different; blocked floor proves the third is too.
 
-**Glass breaks.** A bullet passes straight through a pane and shatters it into broken
-glass (`17`), which is walkable — so shooting out a window is how you make a shortcut,
-and a glass wall is cover that only lasts until someone opens fire. Any bullet does it,
-yours or theirs, and a single shot crossing several panes takes out every one it
-touches. `breaksInto` on the tile is what drives this; point another tile at it and that
-tile becomes breakable too.
+**Glass and windows break.** A bullet passes straight through and shatters what it
+crosses: glass (`5`) becomes broken glass (`17`), a window (`11`) becomes a broken
+window (`18`). Both are walkable, so shooting out a pane is how you make a shortcut, and
+a glass wall is cover that only lasts until someone opens fire. Any bullet does it,
+yours or theirs, and a single shot crossing several panes takes out every one it touches.
+
+They break into *different* tiles on purpose. A window is also a spawn zone, and if it
+broke into ordinary broken glass the director would silently lose that way in — so
+shooting out your own windows would make you safer, which is backwards. Broken window
+keeps the zone.
+
+`breaksInto` on the tile is what drives all of this: point any tile at another and it
+becomes breakable.
 
 Blocked floor (`16`) is the one for shaping a level's look. It is lit like floor and you
 can see and shoot straight across it, so it reads as ground rather than as architecture —

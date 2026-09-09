@@ -921,31 +921,129 @@ check("ragged rows and unknown ids import with warnings",
   forgiving.cols === 4 && forgiving.rows === 4 && forgiving.warnings.length >= 2,
   JSON.stringify(forgiving));
 
-// Intact glass: blocks the body, not the eye. Runs on its own purpose-built map —
-// the checks above deliberately shatter panes, and a test that needs unbroken glass
-// must not depend on what an earlier test left behind.
-// This page has been toggled to the FIXED camera by an earlier check, where the
-// cursor sets facing absolutely — so put it out to the right, which is the direction
-// the pane and the target are in. The check asserts the resulting facing, so if the
-// camera mode here ever changes this fails loudly instead of quietly measuring nothing.
-await camPage.mouse.move(640 + 320, 360);
-await camPage.waitForTimeout(250);
-const glass = await camPage.evaluate(async () => {
+// Glass: a bullet goes through it and shatters it into something walkable.
+const glassBreak = await camPage.evaluate(async () => {
   const art = [
-    "###############",
-    "#.............#",
-    "#......G......#",
-    "#......G......#",
-    "#..P...G...E..#",
-    "#......G......#",
-    "#.............#",
-    "###############",
+    "###########",
+    "#.........#",
+    "#..GGGGG..#",
+    "#.........#",
+    "#....P....#",
+    "###########",
   ].join("\n");
-  window.game.loadLevelText(art, "intact glass test");
+  window.game.loadLevelText(art, "glass break test");
   await new Promise((r) => setTimeout(r, 400));
 
   const w = window.game.world;
   const m = w.map;
+  const T = 48;
+  const p = w.players[0];
+  const before = { id: m.tileAt(5, 2), solid: m.isSolid(5, 2) };
+
+  w.bullets.spawn(5.5 * T, 4.0 * T, -Math.PI / 2, 800, 10, "player", p.id, 1, "#fff");
+  let reachedAbove = false;
+  const until = performance.now() + 500;
+  while (performance.now() < until) {
+    for (const b of w.bullets.items) if (b.active && b.y < 1.5 * T) reachedAbove = true;
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+
+  return {
+    before,
+    after: { id: m.tileAt(5, 2), solid: m.isSolid(5, 2) },
+    shotCarriedOn: reachedAbove,
+    // Only the pane it crossed should go; the rest of the wall stands.
+    neighbourIntact: m.tileAt(4, 2) === 5 && m.tileAt(6, 2) === 5,
+  };
+});
+check("a bullet passes through glass and shatters just the pane it crossed",
+  glassBreak.before.id === 5 && glassBreak.before.solid === true &&
+  glassBreak.after.id === 17 && glassBreak.after.solid === false &&
+  glassBreak.shotCarriedOn && glassBreak.neighbourIntact,
+  JSON.stringify(glassBreak));
+
+// And the squad can then walk through the hole it made.
+const throughHole = await camPage.evaluate(async () => {
+  const w = window.game.world;
+  const T = 48;
+  const p = w.players[0];
+  p.stance = "stand"; p.stanceTimer = 0;
+  p.x = 5.5 * T; p.y = 3.5 * T; p.prevX = p.x; p.prevY = p.y;
+  for (let i = 0; i < 60; i++) {
+    p.vy = -700;
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return { pastPane: p.y < 1.9 * T, endY: Math.round((p.y / T) * 10) / 10 };
+});
+check("once broken, the squad walks through the gap",
+  throughHole.pastPane === true, JSON.stringify(throughHole));
+
+// Windows smash the same way — but into their own tile, because a window is also a
+// way in for the director and breaking it must not quietly delete the spawn point.
+const windowBreak = await camPage.evaluate(async () => {
+  const art = [
+    "#####W#####",
+    "#.........#",
+    "#.........#",
+    "#....P....#",
+    "#.........#",
+    "###########",
+  ].join("\n");
+  window.game.loadLevelText(art, "window break test");
+  await new Promise((r) => setTimeout(r, 400));
+
+  const w = window.game.world;
+  const m = w.map;
+  const T = 48;
+  const before = { id: m.tileAt(5, 0), solid: m.isSolid(5, 0), zones: m.spawnZones.length };
+
+  const p = w.players[0];
+  w.bullets.spawn(5.5 * T, 3.0 * T, -Math.PI / 2, 800, 10, "player", p.id, 1, "#fff");
+  await new Promise((r) => setTimeout(r, 400));
+
+  p.stance = "stand"; p.stanceTimer = 0;
+  p.x = 5.5 * T; p.y = 1.5 * T; p.prevX = p.x; p.prevY = p.y;
+  for (let i = 0; i < 60; i++) {
+    p.vy = -700;
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+
+  return {
+    before,
+    after: { id: m.tileAt(5, 0), solid: m.isSolid(5, 0), zones: m.spawnZones.length },
+    walkedIn: p.y < 1.0 * T,
+  };
+});
+check("a window smashes into a walkable hole that is still a spawn zone",
+  windowBreak.before.id === 11 && windowBreak.before.solid === true &&
+  windowBreak.after.id === 18 && windowBreak.after.solid === false &&
+  windowBreak.after.zones === windowBreak.before.zones && windowBreak.walkedIn,
+  JSON.stringify(windowBreak));
+
+// Intact glass: blocks the body, not the eye. Two halves, deliberately separated —
+// the sight half needs an enemy behind the pane, and that enemy shoots the pane out,
+// which used to leave the movement half walking through a hole and still passing.
+//
+// This page has been toggled to the FIXED camera by an earlier check, where the cursor
+// sets facing absolutely, so the cursor goes out to the right where the pane is. The
+// check asserts that facing, so it fails loudly rather than measuring the wrong way.
+const GLASS_ART = [
+  "###############",
+  "#.............#",
+  "#......G......#",
+  "#......G......#",
+  "#..P...G...E..#",
+  "#......G......#",
+  "#.............#",
+  "###############",
+].join("\n");
+
+await camPage.mouse.move(640 + 320, 360);
+await camPage.waitForTimeout(250);
+const glassSight = await camPage.evaluate(async (art) => {
+  window.game.loadLevelText(art, "intact glass sight");
+  await new Promise((r) => setTimeout(r, 400));
+  const w = window.game.world;
   const T = 48;
   const p = w.players[0];
   p.stance = "stand"; p.stanceTimer = 0; p.health = p.maxHealth; p.downed = false;
@@ -957,26 +1055,42 @@ const glass = await camPage.evaluate(async () => {
   if (!e) return "no enemy behind the glass";
   e.x = 11.5 * T; e.y = 4.5 * T;
   await new Promise((r) => setTimeout(r, 300));
-  const seenThroughGlass = e.visible;
+  return {
+    seenThroughGlass: e.visible,
+    paneIntact: w.map.tileAt(7, 4) === 5,
+    facing: Math.round(p.facing * 100) / 100,
+  };
+}, GLASS_ART);
+check("you can see through intact glass",
+  typeof glassSight === "object" && Math.abs(glassSight.facing) < 0.2 &&
+  glassSight.paneIntact === true && glassSight.seenThroughGlass === true,
+  JSON.stringify(glassSight));
 
-  // Now walk straight at the pane. An unbroken one has to stop the body.
+const glassMove = await camPage.evaluate(async (art) => {
+  window.game.loadLevelText(art, "intact glass movement");
+  await new Promise((r) => setTimeout(r, 300));
+  const w = window.game.world;
+  const m = w.map;
+  const T = 48;
+  // No enemy: nothing else is allowed to shoot the pane out during the test.
+  w.enemies.length = 0;
+  const p = w.players[0];
+  p.stance = "stand"; p.stanceTimer = 0; p.health = p.maxHealth; p.downed = false;
+  p.x = 4.5 * T; p.y = 4.5 * T; p.prevX = p.x; p.prevY = p.y;
+
   for (let i = 0; i < 70; i++) {
     p.vx = 800;
     await new Promise((r) => requestAnimationFrame(r));
   }
   return {
-    seenThroughGlass,
     movedThrough: p.x > 7.5 * T,
     stillGlass: m.tileAt(7, 4) === 5,
     endX: Math.round((p.x / T) * 10) / 10,
-    facing: Math.round(p.facing * 100) / 100,
   };
-});
-check("intact glass blocks movement but not sight",
-  typeof glass === "object" && Math.abs(glass.facing) < 0.2 &&
-  glass.seenThroughGlass === true &&
-  glass.movedThrough === false && glass.stillGlass === true,
-  JSON.stringify(glass));
+}, GLASS_ART);
+check("intact glass stops the body",
+  glassMove.movedThrough === false && glassMove.stillGlass === true,
+  JSON.stringify(glassMove));
 
 // The editor hand-off: a level parked in localStorage loads as ?level=draft.
 await levelPage.evaluate(() => {
