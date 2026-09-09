@@ -172,7 +172,8 @@ and the squad carries its condition up, so it plays as one continuous climb. See
 
 Levels are 2D arrays of tile ids — `0` floor, `1` wall, `2` player spawn, `3` zombie,
 `4` crate, `5` glass, `6` lamp, `7` exit, `8` spawn zone, `9` stairs, plus scenery
-(`10` car, `11` window, `12` reception desk, `13` cubicle, `14` flare, `15` lift door):
+(`10` car, `11` window, `12` reception desk, `13` cubicle, `14` flare, `15` lift door,
+`16` blocked floor):
 
 ```
 [1,1,1,1,1,1,1],

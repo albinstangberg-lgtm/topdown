@@ -295,7 +295,7 @@ export class GameWorld {
         b.x += sx;
         b.y += sy;
 
-        if (pointInWall(this.map, b.x, b.y)) {
+        if (this.map.blocksShotsAt(b.x, b.y)) {
           b.active = false;
           this.particles.burst(b.x, b.y, 4, 130, "#c8cede", 0.22, 2);
           break;

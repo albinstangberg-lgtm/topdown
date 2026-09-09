@@ -99,6 +99,7 @@ export class Renderer {
 
     const bounds = cam.visibleBounds(vp);
     this.drawFloor(ctx, bounds);
+    this.drawBlockedFloor(ctx, world, bounds);
     this.drawExits(ctx, world, bounds);
     this.drawStairs(ctx, world, bounds);
     this.drawLamps(ctx, world, bounds);
@@ -177,6 +178,7 @@ export class Renderer {
         }
         const def = tileDef(map.tileAt(tx, ty));
         if (!def.solid) continue;
+        if (def.key === "blocked") continue;   // drawn with the floor, not as geometry
         const bucket = def.prop ?? (def.key === "crate" ? "crate" : def.key === "glass" ? "glass" : null);
         if (bucket && props[bucket]) { props[bucket].push(tx, ty); continue; }
         ctx.rect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
@@ -304,6 +306,65 @@ export class Renderer {
       ctx.strokeStyle = `rgba(139,255,122,${0.35 + t * 0.35})`;
       ctx.lineWidth = 2;
       ctx.strokeRect(exit.x - TILE / 2 + 3, exit.y - TILE / 2 + 3, TILE - 6, TILE - 6);
+    }
+  }
+
+  /**
+   * Floor you cannot stand on. Drawn in the floor pass so the flashlight lights it like
+   * ground rather than it reading as a wall — but deliberately NOT identical to walkable
+   * floor, because an invisible wall is the worst thing a level can have.
+   */
+  private drawBlockedFloor(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    const map = world.map;
+    const tx0 = Math.max(0, Math.floor(b.x0 / TILE));
+    const ty0 = Math.max(0, Math.floor(b.y0 / TILE));
+    const tx1 = Math.min(map.cols - 1, Math.ceil(b.x1 / TILE));
+    const ty1 = Math.min(map.rows - 1, Math.ceil(b.y1 / TILE));
+
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        if (tileDef(map.tileAt(tx, ty)).key !== "blocked") continue;
+        const x = tx * TILE;
+        const y = ty * TILE;
+
+        ctx.fillStyle = "#a49e8b";
+        ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+
+        // A shallow hatch: enough to read as "not for walking" under a flashlight,
+        // faint enough not to fight the floor it sits in.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x, y, TILE, TILE);
+        ctx.clip();
+        ctx.strokeStyle = "rgba(60,56,46,0.28)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let o = -TILE; o < TILE; o += 10) {
+          ctx.moveTo(x + o, y);
+          ctx.lineTo(x + o + TILE, y + TILE);
+        }
+        ctx.stroke();
+        ctx.restore();
+
+        // Outline only the sides that touch somewhere you CAN walk, so a block of them
+        // reads as one shape instead of a grid of squares.
+        ctx.strokeStyle = "rgba(60,56,46,0.5)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        if (tileDef(map.tileAt(tx, ty - 1)).key !== "blocked" && !map.isSolid(tx, ty - 1)) {
+          ctx.moveTo(x, y + 1); ctx.lineTo(x + TILE, y + 1);
+        }
+        if (tileDef(map.tileAt(tx, ty + 1)).key !== "blocked" && !map.isSolid(tx, ty + 1)) {
+          ctx.moveTo(x, y + TILE - 1); ctx.lineTo(x + TILE, y + TILE - 1);
+        }
+        if (tileDef(map.tileAt(tx - 1, ty)).key !== "blocked" && !map.isSolid(tx - 1, ty)) {
+          ctx.moveTo(x + 1, y); ctx.lineTo(x + 1, y + TILE);
+        }
+        if (tileDef(map.tileAt(tx + 1, ty)).key !== "blocked" && !map.isSolid(tx + 1, ty)) {
+          ctx.moveTo(x + TILE - 1, y); ctx.lineTo(x + TILE - 1, y + TILE);
+        }
+        ctx.stroke();
+      }
     }
   }
 

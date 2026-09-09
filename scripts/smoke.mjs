@@ -1001,6 +1001,62 @@ await levelPage.waitForTimeout(400);
 const draft = await levelPage.evaluate(() => window.game.world.map.name);
 check("editor draft loads through ?level=draft", draft === "draft test", String(draft));
 
+// Blocked floor: solid to a body, transparent to sight AND to bullets. The three
+// axes are separate flags, and this is the tile that proves it.
+const blocked = await levelPage.evaluate(async () => {
+  const art = [
+    "####################",
+    "#..................#",
+    "#..................#",
+    "#....____.....E....#",
+    "#....____..........#",
+    "#....____..........#",
+    "#..................#",
+    "#........P.........#",
+    "#..................#",
+    "####################",
+  ].join("\n");
+  window.game.loadLevelText(art, "blocked floor test");
+  await new Promise((r) => setTimeout(r, 400));
+
+  const w = window.game.world;
+  const m = w.map;
+  const T = 48;
+  const p = w.players[0];
+
+  // Walk hard into the patch from below; the body must not get in.
+  p.x = 6.5 * T; p.y = 6.5 * T; p.prevX = p.x; p.prevY = p.y;
+  for (let i = 0; i < 70; i++) {
+    p.vy = -700;
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  const insidePatch = m.isSolidAt(p.x, p.y);
+  const gotPast = p.y < 5.6 * T;
+
+  // A bullet crossing it must carry on.
+  // Fired from well left of the patch, so it has to cross the whole thing. Track the
+  // furthest it gets rather than sampling once — a fixed wait is a race.
+  w.bullets.spawn(1.5 * T, 3.5 * T, 0, 800, 10, "player", p.id, 1, "#fff");
+  let reached = 0;
+  const until = performance.now() + 700;
+  while (performance.now() < until) {
+    for (const b of w.bullets.items) if (b.active) reached = Math.max(reached, b.x);
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  const bulletPast = reached > 9 * T;
+
+  return {
+    solid: m.isSolid(5, 3),
+    opaque: m.isOpaque(5, 3),
+    stopsShots: m.blocksShots(5, 3),
+    insidePatch, gotPast, bulletPast, reached: Math.round(reached / 48),
+  };
+});
+check("blocked floor stops bodies but not sight or bullets",
+  blocked.solid && !blocked.opaque && !blocked.stopsShots &&
+  !blocked.insidePatch && !blocked.gotPast && blocked.bulletPast,
+  JSON.stringify(blocked));
+
 check("level pages raised no exceptions", levelErrors.length === 0, levelErrors.join(" | "));
 
 await browser.close();

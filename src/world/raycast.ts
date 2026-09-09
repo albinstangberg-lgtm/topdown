@@ -20,7 +20,7 @@ export function raycast(
   // two disagree, and an aim laser that ignored it would be lying to the player.
   const blocks = blocker === "sight"
     ? (x: number, y: number): boolean => map.isOpaque(x, y)
-    : (x: number, y: number): boolean => map.isSolid(x, y);
+    : (x: number, y: number): boolean => map.blocksShots(x, y);
 
   let tx = Math.floor(ox / TILE);
   let ty = Math.floor(oy / TILE);

@@ -1,4 +1,4 @@
-import { TILE_DEFS, TILE_FLOOR, tileDef } from "./tiles";
+import { stopsShots, TILE_DEFS, TILE_FLOOR, tileDef } from "./tiles";
 
 export const TILE = 48;
 
@@ -19,6 +19,7 @@ export class TileMap {
   readonly tiles: Uint8Array;
   private readonly solidMask: Uint8Array;
   private readonly opaqueMask: Uint8Array;
+  private readonly shotMask: Uint8Array;
 
   readonly playerSpawns: Point[] = [];
   /** Hand-placed enemies. One zombie each, put down once when the map loads. */
@@ -40,6 +41,7 @@ export class TileMap {
     if (tiles) this.tiles.set(Array.from(tiles).slice(0, cols * rows));
     this.solidMask = new Uint8Array(cols * rows);
     this.opaqueMask = new Uint8Array(cols * rows);
+    this.shotMask = new Uint8Array(cols * rows);
     this.refresh();
   }
 
@@ -72,6 +74,7 @@ export class TileMap {
         const def = tileDef(this.tiles[i]);
         this.solidMask[i] = def.solid ? 1 : 0;
         this.opaqueMask[i] = def.opaque ? 1 : 0;
+        this.shotMask[i] = stopsShots(def) ? 1 : 0;
 
         // A SOLID tile can still be a spawn point — a window is the case that matters.
         // Nothing can stand inside it, so the spawn lands on the open tile next to it.
@@ -106,6 +109,7 @@ export class TileMap {
     const i = this.idx(tx, ty);
     this.solidMask[i] = def.solid ? 1 : 0;
     this.opaqueMask[i] = def.opaque ? 1 : 0;
+    this.shotMask[i] = stopsShots(def) ? 1 : 0;
   }
 
   /** Out of bounds counts as solid AND opaque, so nothing walks or sees off the map. */
@@ -117,6 +121,16 @@ export class TileMap {
   isOpaque(tx: number, ty: number): boolean {
     if (!this.inBounds(tx, ty)) return true;
     return this.opaqueMask[this.idx(tx, ty)] === 1;
+  }
+
+  /** Stops a bullet. Not the same question as `isSolid` — see TILE_DEFS. */
+  blocksShots(tx: number, ty: number): boolean {
+    if (!this.inBounds(tx, ty)) return true;
+    return this.shotMask[this.idx(tx, ty)] === 1;
+  }
+
+  blocksShotsAt(x: number, y: number): boolean {
+    return this.blocksShots(Math.floor(x / TILE), Math.floor(y / TILE));
   }
 
   isSolidAt(x: number, y: number): boolean {

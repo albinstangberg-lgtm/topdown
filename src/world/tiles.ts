@@ -5,8 +5,10 @@
  * is ONE entry in this table: the collision, the vision, the renderer, the editor
  * palette and the level validator all read from it, so nothing else has to change.
  *
- * `solid` and `opaque` are deliberately separate. Glass blocks movement but not sight;
- * a future smoke tile would block sight but not movement. Collapsing them into one
+ * `solid`, `opaque` and `blocksShots` are deliberately separate, because they are three
+ * different questions: can a body pass, can a look pass, can a bullet pass. Glass blocks
+ * movement but not sight; a gap in the floor blocks movement but neither sight nor
+ * shots; smoke would block sight but neither of the others. Collapsing them into one
  * "blocking" flag is the kind of shortcut that costs a refactor later.
  */
 
@@ -19,6 +21,8 @@ export interface TileDef {
   name: string;
   solid: boolean;
   opaque: boolean;
+  /** Stops bullets and ends the aim laser. Defaults to `solid` when left out. */
+  blocksShots?: boolean;
   spawn?: SpawnKind;
   /** Emits a static light at the centre of the tile, with this radius in world units. */
   light?: number;
@@ -68,10 +72,18 @@ export const TILE_DEFS: readonly TileDef[] = [
     color: "#ff7a4a", glyph: "f", hint: "a burning flare — a big red static light you can stand on" },
   { id: 15, key: "elevator", name: "Elevator door", solid: true, opaque: true, prop: "door",
     color: "#3a4a5a", glyph: "D", hint: "closed lift doors. Scenery — use ^ for the floor you can actually take" },
+  { id: 16, key: "blocked", name: "Blocked floor", solid: true, opaque: false, blocksShots: false,
+    color: "#8f8a78", glyph: "_",
+    hint: "looks like floor and lit like it, but nobody walks on it. Sight and bullets pass straight over — shape rooms with it" },
 ];
 
 export const TILE_FLOOR = 0;
 export const TILE_WALL = 1;
+
+/** Bullets follow `blocksShots`, which falls back to `solid` for every ordinary tile. */
+export function stopsShots(def: TileDef): boolean {
+  return def.blocksShots ?? def.solid;
+}
 
 const BY_ID = new Map(TILE_DEFS.map((t) => [t.id, t]));
 const BY_KEY = new Map(TILE_DEFS.map((t) => [t.key, t]));

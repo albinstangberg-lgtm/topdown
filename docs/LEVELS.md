@@ -24,10 +24,19 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `13` | `c` | Cubicle wall | yes | yes | office partition. **Lowercase c** — `C` is a car |
 | `14` | `f` | Flare | no | no | a big red static light you can stand on |
 | `15` | `D` | Elevator door | yes | yes | closed lift doors. Scenery — use `^` for a floor you can actually take |
+| `16` | `_` | Blocked floor | yes | no | looks and lights like floor, but nobody walks on it. Sight **and bullets** pass over — shape rooms with it |
 
-`solid` and `opaque` are separate flags on purpose. Collision asks "solid?", the vision
-raycast asks "opaque?". Glass is the tile that proves the two are different questions;
-a smoke or a one-way window would use the other combination.
+`solid`, `opaque` and `blocksShots` are separate flags on purpose, because they are three
+different questions: **can a body pass, can a look pass, can a bullet pass.** Collision
+asks solid, the vision raycast asks opaque, bullets and the aim laser ask blocksShots
+(which falls back to `solid` when a tile does not say otherwise). Glass proves the first
+two are different; blocked floor proves the third is too.
+
+Blocked floor (`16`) is the one for shaping a level's look. It is lit like floor and you
+can see and shoot straight across it, so it reads as ground rather than as architecture —
+use it for a pool, a pit, a planter, rubble, or just to give a room a shape that walls
+would make ugly. It is drawn hatched and outlined rather than identical to walkable
+floor, deliberately: an invisible wall is the worst thing a level can have.
 
 **Adding a tile type is one row in `TILE_DEFS`.** Give it an id, a colour and a glyph,
 set the two flags, and it appears in the editor palette, imports correctly, and behaves
