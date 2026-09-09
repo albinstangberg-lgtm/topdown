@@ -63,8 +63,8 @@ check("player bullets kill enemies, and the kill is credited",
   typeof killed === "object" && killed.gone && killed.after === killed.kills + 1,
   JSON.stringify(killed));
 
-// AI perception: an enemy with the player in its cone and clear line of sight
-// must leave patrol on its own.
+// AI perception: a zombie with the player in its arc and clear line of sight
+// must leave its wander on its own.
 await page.waitForFunction(() => window.game.world.enemies.length > 0, null, { timeout: 8000 });
 const perceived = await page.evaluate(async () => {
   const w = window.game.world;
@@ -74,12 +74,13 @@ const perceived = await page.evaluate(async () => {
   e.y = p.y;
   e.facing = Math.PI;
   e.alertness = 0;
-  e.state = "patrol";
+  e.state = "wander";
+  e.stateTimer = 0;
   await new Promise((r) => setTimeout(r, 400));
   return { state: e.state, target: e.targetId };
 });
-check("enemies acquire a target through their vision cone",
-  perceived.state !== "patrol" && perceived.target === 0, JSON.stringify(perceived));
+check("zombies acquire a target through their sense arc",
+  perceived.state !== "wander" && perceived.target === 0, JSON.stringify(perceived));
 
 // Enemy bullets damage players, and zero health means downed rather than deleted.
 const downed = await page.evaluate(async () => {
@@ -1162,6 +1163,177 @@ check("blocked floor stops bodies but not sight or bullets",
   JSON.stringify(blocked));
 
 check("level pages raised no exceptions", levelErrors.length === 0, levelErrors.join(" | "));
+
+// --- zombies -----------------------------------------------------------------
+//
+// The enemy is the dead: no guns, a telegraphed leap you can dodge, and ears that
+// work through walls. Each check runs on its own arena so the director cannot wander
+// a second zombie into the answer.
+
+const zomPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const zomErrors = [];
+zomPage.on("pageerror", (e) => zomErrors.push(String(e)));
+await zomPage.goto(`${URL}?camera=fixed&players=1`, { waitUntil: "load" });
+await zomPage.waitForTimeout(500);
+
+const ARENA = [
+  "###############",
+  "#.............#",
+  "#.............#",
+  "#..P.......E..#",
+  "#.............#",
+  "#.............#",
+  "###############",
+].join("\n");
+
+// A wall down the middle: the two halves cannot see each other at all.
+const SPLIT_ARENA = [
+  "###############",
+  "#......#......#",
+  "#......#......#",
+  "#..P...#...E..#",
+  "#......#......#",
+  "#......#......#",
+  "###############",
+].join("\n");
+
+/** Load an arena and quiet the director, so only the authored zombie exists. */
+const arena = async (art, name) => zomPage.evaluate(async ([art, name]) => {
+  window.game.loadLevelText(art, name);
+  await new Promise((r) => setTimeout(r, 250));
+  const w = window.game.world;
+  w.mode = "story";
+  w.map.spawnZones.length = 0;
+  const p = w.players[0];
+  p.health = p.maxHealth; p.downed = false;
+  p.stance = "stand"; p.stanceTimer = 0;
+  p.ammo = p.weapon.magazine; p.reloadTimer = 0;
+}, [art, name]);
+
+// Zombies do not shoot. They close and they bite, and nothing they do ever puts an
+// enemy bullet in the world — the whole reason the gunner AI came out.
+await arena(ARENA, "zombie melee");
+const melee = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  const T = 48;
+  const p = w.players[0];
+  const e = w.enemies[0];
+  if (!e) return "no zombie in the arena";
+  p.x = 4.5 * T; p.y = 3.5 * T; p.prevX = p.x; p.prevY = p.y;
+  e.x = 8.5 * T; e.y = 3.5 * T; e.prevX = e.x; e.prevY = e.y;
+  e.facing = Math.PI; e.state = "wander"; e.alertness = 0; e.attackCooldown = 0;
+
+  const health = p.health;
+  const states = [];
+  let enemyBullet = false;
+  const until = performance.now() + 3200;
+  while (performance.now() < until) {
+    if (states[states.length - 1] !== e.state) states.push(e.state);
+    if (w.bullets.items.some((b) => b.active && b.team === "enemy")) enemyBullet = true;
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return { states, enemyBullet, hurt: health - p.health };
+});
+check("a zombie closes, winds up, leaps — and never fires a shot",
+  typeof melee === "object" && !melee.enemyBullet &&
+  melee.states.includes("windup") && melee.states.includes("lunge") &&
+  melee.states.includes("recover") && melee.hurt > 0,
+  JSON.stringify(melee));
+
+// The leap is a commitment, and the recovery is the payoff for dodging it.
+await arena(ARENA, "zombie recovery");
+const vulnerable = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  const T = 48;
+  const p = w.players[0];
+  const e = w.enemies[0];
+  if (!e) return "no zombie in the arena";
+  p.x = 4.5 * T; p.y = 3.5 * T;
+
+  const hitOnce = async (state) => {
+    e.x = 8.5 * T; e.y = 3.5 * T; e.prevX = e.x; e.prevY = e.y;
+    e.health = e.maxHealth = 400;
+    e.state = state;
+    e.stateTimer = 5;
+    const before = e.health;
+    w.bullets.spawn(e.x - 60, e.y, 0, 800, 10, "player", p.id, 1, "#fff");
+    await new Promise((r) => setTimeout(r, 300));
+    return Math.round(before - e.health);
+  };
+  const upright = await hitOnce("chase");
+  const down = await hitOnce("recover");
+  e.health = e.maxHealth = 40;
+  return { upright, down };
+});
+check("a zombie caught recovering from a missed leap takes extra damage",
+  typeof vulnerable === "object" && vulnerable.upright === 10 && vulnerable.down > 10,
+  JSON.stringify(vulnerable));
+
+// Hearing goes through walls — that is what stops shooting from cover being free.
+await arena(SPLIT_ARENA, "zombie hearing");
+const heard = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  const T = 48;
+  const p = w.players[0];
+  const e = w.enemies[0];
+  if (!e) return "no zombie in the arena";
+  p.x = 3.5 * T; p.y = 3.5 * T; p.prevX = p.x; p.prevY = p.y;
+  e.x = 11.5 * T; e.y = 3.5 * T; e.prevX = e.x; e.prevY = e.y;
+  // Facing away from the wall, so nothing about this is sight.
+  e.facing = 0; e.state = "wander"; e.alertness = 0; e.stateTimer = 0;
+  const walled = w.map.isSolidAt(7.5 * T, 3.5 * T);
+  const startX = e.x;
+
+  w.noise.emit(p.x, p.y, 700, "shot");
+  await new Promise((r) => setTimeout(r, 700));
+  return { walled, state: e.state, movedToward: Math.round(startX - e.x) };
+});
+check("a zombie walks toward a noise it heard through a wall",
+  typeof heard === "object" && heard.walled === true &&
+  heard.state === "investigate" && heard.movedToward > 5,
+  JSON.stringify(heard));
+
+// What is loud and what is not: firing yes, sprinting yes, walking no.
+await arena(ARENA, "zombie noise sources");
+const loudness = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  w.enemies.length = 0;
+
+  const listen = async (ms) => {
+    const kinds = new Set();
+    const until = performance.now() + ms;
+    while (performance.now() < until) {
+      for (const n of w.noise.items) if (n.active) kinds.add(n.kind);
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    return [...kinds];
+  };
+
+  const press = (code, down) =>
+    window.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { code }));
+
+  p.stamina = p.maxStamina; p.exhausted = false;
+  press("KeyW", true);
+  const walking = await listen(700);
+  press("ShiftLeft", true);
+  const sprinting = await listen(700);
+  press("ShiftLeft", false);
+  press("KeyW", false);
+
+  p.weaponUp = 1; p.weaponHold = 1; p.ammo = p.weapon.magazine; p.fireCooldown = 0;
+  press("Space", true);
+  const shooting = await listen(400);
+  press("Space", false);
+
+  return { walking, sprinting, shooting };
+});
+check("walking is silent, sprinting and shooting are not",
+  loudness.walking.length === 0 &&
+  loudness.sprinting.includes("step") && loudness.shooting.includes("shot"),
+  JSON.stringify(loudness));
+
+check("zombie pages raised no exceptions", zomErrors.length === 0, zomErrors.join(" | "));
 
 await browser.close();
 

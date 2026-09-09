@@ -146,6 +146,35 @@ To work on the split-screen layout without four controllers plugged in, open
 `?players=4`. That skips the lobby entirely and starts with four players, the extra
 three inert but fully rendered — which is also how the test suite drives the game.
 
+## Zombies
+
+The enemy is the dead. They carry nothing, so they never shoot — everything they do is
+close-range, and every part of it is readable off the world rather than off UI.
+
+- **They wander.** With nothing to chase they shamble at a third of your walking pace,
+  turning at random and bouncing off walls.
+- **They see in a wide, short arc** — about 160° across and under five tiles, and it
+  needs line of sight, the same primitive the player's flashlight uses. Walking past one
+  head-on is hard; slipping behind it is easy. If a wall stops you seeing it, it cannot
+  see you.
+- **They hear through walls.** A shot carries 600–850 units depending on the weapon,
+  breaking a pane 600, a sprinting footfall 180, and hitting the floor at the end of a
+  dive 250. **Walking makes no noise at all.** Loudness falls off with distance and the
+  loudest thing wins, so a zombie between two noises goes to the one filling its ears.
+  Sound deliberately ignores walls: shooting from cover should still pull the room
+  toward you.
+- **They lunge.** In range they plant, and a red ring closes on them for about a third of
+  a second — that is your window. Then they commit to a direction and leap; the leap does
+  not steer. Contact costs you 18. A miss puts them face down for half a second, unable
+  to move or turn, taking **60% extra damage**. Dodging is worth more than backing up:
+  their chase pace is below your walk, so the leap is the only way they can catch you.
+
+Every number above lives in one row of `ZOMBIE_DEFS` (`src/sim/zombies.ts`). **Adding a
+kind of zombie is one entry in that table** — a runner is a walker with a bigger
+`chaseSpeed` and a shorter windup, a brute one with more health and a heavier bite. The
+state machine, the renderer and the director all read the table by key, so nothing else
+changes. `F1` draws each zombie's state and sense arc while you tune.
+
 ## Modes
 
 The lobby hands off to a mode select:
@@ -208,10 +237,10 @@ editor palette and importer all read from that one table.
 Implemented: fixed-timestep loop, device-agnostic input with drop-in join, tile world
 driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones with
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
-composite with static lamps, pooled bullets and particles, enemies with cone-based
-perception, downed and revive, a population director, HUD per viewport, a debug overlay,
-the level format with a tolerant importer, and a map editor.
+composite with static lamps, pooled bullets and particles, zombies that see in an arc,
+hear through walls and lunge, downed and revive, a population director, HUD per viewport,
+a debug overlay, the level format with a tolerant importer, and a map editor.
 
-Not built yet: audio, menus and a controller-assignment screen, weapon pickups and
+Not built yet: audible audio (the noise field is simulation only — nothing plays), menus and a controller-assignment screen, weapon pickups and
 progression, objectives, saves, and netcode. The architecture doc says where each of
 those attaches.

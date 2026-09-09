@@ -12,6 +12,8 @@ import {
   createPlayer, damagePlayer, syncLights, updatePlayer, updateRevives, type AimCommand,
 } from "./player";
 import { createEnemy, damageEnemy, updateEnemy } from "./enemy";
+import { randomZombieKind } from "./zombies";
+import { NOISE, NoiseField } from "./noise";
 import { BulletPool, ParticlePool } from "./pools";
 import type { Enemy, Player } from "./entities";
 
@@ -55,6 +57,8 @@ export class GameWorld {
   readonly enemies: Enemy[] = [];
   readonly bullets = new BulletPool();
   readonly particles = new ParticlePool();
+  /** Every noise made this step. Zombies hear it; walls do not stop it. */
+  readonly noise = new NoiseField();
   readonly events: GameEvent[] = [];
 
   /** Lamps baked into the level. Static, so their visibility is solved once on load. */
@@ -103,6 +107,7 @@ export class GameWorld {
     this.objective.progress = 0;
     for (const b of this.bullets.items) b.active = false;
     for (const p of this.particles.items) p.active = false;
+    this.noise.clear();
     this.time = 0;
     this.spawnTimer = 1.5;
     this.wipeTimer = 0;
@@ -223,7 +228,9 @@ export class GameWorld {
     resolveAim: (p: Player, input: InputState) => AimCommand | null,
   ): void {
     this.time += dt;
-    const deps = { map: this.map, bullets: this.bullets, particles: this.particles };
+    const deps = {
+      map: this.map, bullets: this.bullets, particles: this.particles, noise: this.noise,
+    };
 
     for (const p of this.players) {
       const input = inputOf(p);
@@ -233,11 +240,20 @@ export class GameWorld {
     const revived = updateRevives(this.players, inputOf, dt);
     if (revived) this.events.push({ kind: "revive", x: revived.x, y: revived.y, text: `P${revived.id + 1} up` });
 
-    const enemyDeps = { ...deps, enemies: this.enemies, players: this.players };
+    const enemyDeps = {
+      map: this.map,
+      particles: this.particles,
+      noise: this.noise,
+      enemies: this.enemies,
+      players: this.players,
+      hurtPlayer: this.hurtPlayer,
+    };
     for (const e of this.enemies) updateEnemy(e, enemyDeps, dt);
 
     this.updateBullets(dt);
     this.particles.update(dt);
+    // Noises age out after every listener has had a step to hear them.
+    this.noise.update(dt);
     this.updateDirector(dt);
     this.updateBleedout(dt);
     this.updateObjective(dt);
@@ -247,8 +263,6 @@ export class GameWorld {
       computeVisibility(this.map, p.cone);
       computeVisibility(this.map, p.halo);
     }
-    for (const e of this.enemies) computeVisibility(this.map, e.cone);
-
     this.updateEnemyVisibility();
   }
 
@@ -307,6 +321,8 @@ export class GameWorld {
             // Derived lists (what is walkable, where spawns are) change with the grid.
             this.map.refresh();
             this.particles.burst(b.x, b.y, 14, 190, "#cfe9f5", 0.5, 3);
+            // Breaking a pane is nearly as loud as the shot that broke it.
+            this.noise.emit(b.x, b.y, NOISE.glass, "break");
           }
         }
 
@@ -333,14 +349,25 @@ export class GameWorld {
             if (!circleOverlap(b.x, b.y, 2, p.x, p.y, p.radius)) continue;
             b.active = false;
             this.particles.burst(b.x, b.y, 6, 160, "#ff9a9a", 0.3, 3);
-            damagePlayer(p, b.damage);
-            if (p.downed) this.events.push({ kind: "playerDown", x: p.x, y: p.y, text: `P${p.id + 1} down` });
+            this.hurtPlayer(p, b.damage);
             break;
           }
         }
       }
     }
   }
+
+  /**
+   * The one way anything hurts a player, so "who is down" is raised in one place.
+   * Bound, because the zombie AI holds it as a callback.
+   */
+  private hurtPlayer = (p: Player, amount: number): void => {
+    const wasDown = p.downed;
+    damagePlayer(p, amount);
+    if (p.downed && !wasDown) {
+      this.events.push({ kind: "playerDown", x: p.x, y: p.y, text: `P${p.id + 1} down` });
+    }
+  };
 
   private killEnemy(e: Enemy, killerId: number): void {
     const idx = this.enemies.indexOf(e);
@@ -365,7 +392,9 @@ export class GameWorld {
 
     this.spawnTimer = story ? 3.4 : Math.max(0.6, 2.2 - this.time * 0.004);
     const spot = this.enemySpawn();
-    if (spot) this.enemies.push(createEnemy(this.nextEnemyId++, spot.x, spot.y));
+    if (spot) {
+      this.enemies.push(createEnemy(this.nextEnemyId++, spot.x, spot.y, randomZombieKind()));
+    }
   }
 
   /**

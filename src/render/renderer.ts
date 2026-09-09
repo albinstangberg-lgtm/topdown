@@ -3,7 +3,8 @@ import { TILE } from "../world/tilemap";
 import { tileDef } from "../world/tiles";
 import { raycast } from "../world/raycast";
 import { PLAYER_TUNING } from "../sim/player";
-import type { Player } from "../sim/entities";
+import type { Enemy, Player } from "../sim/entities";
+import { zombieDef } from "../sim/zombies";
 import type { GameWorld } from "../sim/world";
 import type { VisionLight } from "../vision/visibility";
 import type { Camera } from "./camera";
@@ -464,19 +465,7 @@ export class Renderer {
     for (const e of world.enemies) {
       // Nothing in the dark gets drawn — that is the whole point of the cone.
       if (!e.visible) continue;
-      const x = lerp(e.prevX, e.x, alpha);
-      const y = lerp(e.prevY, e.y, alpha);
-      const hurt = e.hurtFlash;
-      drawBlockActor(ctx, x, y, e.facing, e.radius, hurt > 0.1 ? "#ffffff" : "#7aa7c7", "#1d2b3a");
-
-      // Health pip above damaged enemies.
-      if (e.health < e.maxHealth) {
-        const w = 26;
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(x - w / 2, y - e.radius - 14, w, 4);
-        ctx.fillStyle = "#ff6b6b";
-        ctx.fillRect(x - w / 2, y - e.radius - 14, w * (e.health / e.maxHealth), 4);
-      }
+      drawZombie(ctx, e, alpha);
     }
 
     for (const p of world.players) {
@@ -544,15 +533,12 @@ export class Renderer {
 
   // --- lighting ----------------------------------------------------------------
 
-  /** Additive colour pass: the visible warmth of the cone, plus enemy beams. */
+  /** Additive colour pass: the warmth of the player cones and the static lights. */
   private drawWarmLight(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
     ctx.globalCompositeOperation = "lighter";
     for (const p of world.players) {
       if (lightVisible(p.cone, b)) fillLight(ctx, p.cone, FLASHLIGHT_GLOW * p.cone.intensity);
       if (lightVisible(p.halo, b)) fillLight(ctx, p.halo, HALO_GLOW);
-    }
-    for (const e of world.enemies) {
-      if (lightVisible(e.cone, b)) fillLight(ctx, e.cone, 0.10 * e.cone.intensity);
     }
     for (const light of world.staticLights) {
       if (lightVisible(light, b)) fillLight(ctx, light, 0.22);
@@ -746,6 +732,51 @@ function proneAmount(p: Player): number {
     case "prone": return 1;
     case "standUp": return Math.min(1, Math.max(0, p.stanceTimer / t.STAND_TIME));
     default: return 0;
+  }
+}
+
+/**
+ * A zombie. No barrel — it carries nothing — and the whole attack reads off the body:
+ * it plants and a ring closes on it through the windup, it streaks while it leaps, and
+ * it lies flat and grey while it gets back up. Every tell is in the world, not in UI.
+ */
+function drawZombie(ctx: CanvasRenderingContext2D, e: Enemy, alpha: number): void {
+  const def = zombieDef(e.kind);
+  const x = lerp(e.prevX, e.x, alpha);
+  const y = lerp(e.prevY, e.y, alpha);
+  const down = e.state === "recover";
+
+  if (e.state === "lunge") {
+    // A short streak back along the leap, so a lunge past you is legible at speed.
+    ctx.strokeStyle = "rgba(220,80,80,0.35)";
+    ctx.lineWidth = e.radius * 1.3;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x - e.lungeDirX * 26, y - e.lungeDirY * 26);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+
+  const body = e.hurtFlash > 0.1 ? "#ffffff" : down ? "#5a6b5c" : def.color;
+  drawBlockActor(ctx, x, y, e.facing, e.radius, body, "#22301f", false, 0, down ? 1 : 0);
+
+  if (e.state === "windup") {
+    // The telegraph: a ring that closes on it as the leap gets closer.
+    const t = 1 - e.stateTimer / def.lunge.windup;
+    ctx.strokeStyle = `rgba(255,90,70,${0.35 + 0.5 * t})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, e.radius + 16 - 12 * t, 0, TAU);
+    ctx.stroke();
+  }
+
+  // Health pip above damaged zombies.
+  if (e.health < e.maxHealth) {
+    const w = 26;
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(x - w / 2, y - e.radius - 14, w, 4);
+    ctx.fillStyle = "#ff6b6b";
+    ctx.fillRect(x - w / 2, y - e.radius - 14, w * (e.health / e.maxHealth), 4);
   }
 }
 

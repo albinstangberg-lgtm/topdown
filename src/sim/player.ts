@@ -5,6 +5,7 @@ import type { TileMap } from "../world/tilemap";
 import { makeLight } from "../vision/visibility";
 import { WEAPONS, type Player } from "./entities";
 import type { BulletPool, ParticlePool } from "./pools";
+import { NOISE, type NoiseField } from "./noise";
 
 export const PLAYER_COLORS = ["#ffd257", "#5ad2ff", "#ff7ba8", "#8bff7a"];
 
@@ -49,6 +50,8 @@ const PRONE_TURN_SCALE = 0.55;
  * Lean. Slides where you look and shoot sideways without moving the body, so you can
  * clear a corner before you walk into it. Deliberately small — half a tile.
  */
+/** Seconds between sprinting footfalls. Walking makes none at all. */
+const STEP_INTERVAL = 0.3;
 const LEAN_OFFSET = 24;
 const LEAN_RATE = 11;
 /** Radians/second toward the aim direction. Absolute aiming wants this fast. */
@@ -107,6 +110,7 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     maxStamina: STAMINA_MAX,
     staminaDelay: 0,
     exhausted: false,
+    stepNoise: 0,
     muzzleFlash: 0,
     hurtFlash: 0,
     kills: 0,
@@ -133,6 +137,8 @@ export interface PlayerDeps {
   map: TileMap;
   bullets: BulletPool;
   particles: ParticlePool;
+  /** What the dead can hear. Walking is silent; shooting, sprinting and landing are not. */
+  noise: NoiseField;
 }
 
 /**
@@ -298,6 +304,7 @@ function updateStanceAndStamina(
         p.stance = "prone";
         p.stanceTimer = PRONE_TIME;
         deps.particles.burst(p.x, p.y, 10, 90, "#c9c3ae", 0.4, 3);
+        deps.noise.emit(p.x, p.y, NOISE.dive, "impact");
       } else if (p.stance === "prone") {
         p.stance = "standUp";
         p.stanceTimer = STAND_TIME;
@@ -330,6 +337,11 @@ function updateStanceAndStamina(
     p.stamina = Math.max(0, p.stamina - SPRINT_DRAIN * dt);
     p.staminaDelay = STAMINA_DELAY;
     if (p.stamina <= 0) p.exhausted = true;
+    p.stepNoise -= dt;
+    if (p.stepNoise <= 0) {
+      p.stepNoise = STEP_INTERVAL;
+      deps.noise.emit(p.x, p.y, NOISE.sprint, "step");
+    }
   } else if (p.staminaDelay > 0) {
     p.staminaDelay -= dt;
   } else if (p.stamina < p.maxStamina) {
@@ -360,6 +372,8 @@ function fire(p: Player, deps: PlayerDeps): void {
   }
 
   deps.particles.burst(mx, my, 3, 90, "#fff3c4", 0.12, 2);
+  // The loudest thing you can do. A shotgun carries further than an SMG.
+  deps.noise.emit(mx, my, w.noise, "shot");
   p.facing += (Math.random() * 2 - 1) * w.recoil;
   // Recoil pushes you back a little — free weight without an animation system.
   p.vx -= Math.cos(p.facing) * 26;

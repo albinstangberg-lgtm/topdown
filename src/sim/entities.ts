@@ -33,20 +33,25 @@ export interface WeaponDef {
   recoil: number;
   auto: boolean;
   range: number;
+  /** How far the report carries, in world units. What the dead hear. */
+  noise: number;
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {
   smg: {
     name: "SMG", fireRate: 9, bulletSpeed: 900, damage: 12, spread: 0.055,
     pellets: 1, magazine: 30, reloadTime: 1.3, recoil: 0.02, auto: true, range: 900,
+    noise: 650,
   },
   shotgun: {
     name: "Shotgun", fireRate: 1.6, bulletSpeed: 780, damage: 9, spread: 0.16,
     pellets: 7, magazine: 6, reloadTime: 1.9, recoil: 0.09, auto: false, range: 500,
+    noise: 850,
   },
   pistol: {
     name: "Pistol", fireRate: 5, bulletSpeed: 820, damage: 10, spread: 0.03,
     pellets: 1, magazine: 14, reloadTime: 1.0, recoil: 0.03, auto: false, range: 800,
+    noise: 600,
   },
 };
 
@@ -93,6 +98,8 @@ export interface Player {
   staminaDelay: number;
   /** Ran the tank dry — sprint stays locked out until stamina recovers past a floor. */
   exhausted: boolean;
+  /** Counts down to the next sprinting footfall. Only sprinting makes noise. */
+  stepNoise: number;
   muzzleFlash: number;
   hurtFlash: number;
   kills: number;
@@ -104,8 +111,15 @@ export interface Player {
   halo: VisionLight;
 }
 
+/**
+ * A hostile. Today every one of them is a zombie — `kind` names the row in
+ * `ZOMBIE_DEFS` it takes its numbers from, which is how a second kind arrives without
+ * a second entity type. `Enemy` stays the faction word, `kind` is what it actually is.
+ */
 export interface Enemy {
   id: number;
+  /** Key into ZOMBIE_DEFS. Stats are looked up, never copied, so a def edit is live. */
+  kind: string;
   x: number; y: number;
   prevX: number; prevY: number;
   vx: number; vy: number;
@@ -113,17 +127,31 @@ export interface Enemy {
   facing: number;
   health: number;
   maxHealth: number;
-  speed: number;
-  state: "patrol" | "alert" | "chase" | "attack";
-  /** Player id this enemy is currently interested in, or -1. */
+  /**
+   * The zombie state machine.
+   * - `wander` — shambling with no idea you exist
+   * - `investigate` — walking to a noise or to where you last were
+   * - `chase` — has you in sight and is closing
+   * - `windup` — planted, telegraphing the leap. This is the window you dodge in
+   * - `lunge` — committed to a direction, damage on contact
+   * - `recover` — face down, cannot move or turn, takes extra damage
+   */
+  state: "wander" | "investigate" | "chase" | "windup" | "lunge" | "recover";
+  /** Seconds left in windup / lunge / recover. Unused in the other states. */
+  stateTimer: number;
+  /** Locked in at the end of the windup: a lunge does not steer. */
+  lungeDirX: number;
+  lungeDirY: number;
+  /** Player id this zombie is currently interested in, or -1. */
   targetId: number;
+  /** Where it is walking to when it cannot see you: last sighting, or a noise. */
   lastSeenX: number;
   lastSeenY: number;
   alertness: number;
-  fireCooldown: number;
+  /** Seconds before it may wind up another leap. */
+  attackCooldown: number;
   wanderAngle: number;
   hurtFlash: number;
-  cone: VisionLight;
   /** Recomputed each step: is this enemy inside any player's vision right now? */
   visible: boolean;
 }

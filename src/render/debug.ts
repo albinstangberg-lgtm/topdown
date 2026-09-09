@@ -3,6 +3,17 @@ import type { GameWorld } from "../sim/world";
 import type { Camera } from "./camera";
 import type { Viewport } from "./viewport";
 import { TILE } from "../world/tilemap";
+import { zombieDef } from "../sim/zombies";
+
+/** One colour per AI state, so the machine is readable at a glance. */
+const STATE_COLORS: Record<string, string> = {
+  wander: "#4dff88",
+  investigate: "#ffe14d",
+  chase: "#ffaa4d",
+  windup: "#ff4d4d",
+  lunge: "#ff4dff",
+  recover: "#8899aa",
+};
 
 /**
  * CORE 13 — Debug view.
@@ -33,9 +44,17 @@ export class DebugOverlay {
 
     ctx.lineWidth = 1;
     for (const e of world.enemies) {
-      ctx.strokeStyle = e.state === "attack" ? "#ff4d4d" : e.state === "chase" ? "#ffaa4d" : "#4dff88";
+      ctx.strokeStyle = STATE_COLORS[e.state] ?? "#4dff88";
       ctx.beginPath();
       ctx.arc(e.x, e.y, e.radius + 3, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // The sense arc, which is the thing you actually want to see while tuning.
+      const def = zombieDef(e.kind);
+      ctx.beginPath();
+      ctx.moveTo(e.x, e.y);
+      ctx.arc(e.x, e.y, def.senseRange, e.facing - def.senseHalf, e.facing + def.senseHalf);
+      ctx.closePath();
       ctx.stroke();
       if (e.targetId >= 0) {
         ctx.beginPath();
