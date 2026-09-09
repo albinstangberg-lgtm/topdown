@@ -921,71 +921,61 @@ check("ragged rows and unknown ids import with warnings",
   forgiving.cols === 4 && forgiving.rows === 4 && forgiving.warnings.length >= 2,
   JSON.stringify(forgiving));
 
-// Glass: blocks the body, not the eye. Both halves of that pair in one check.
-await levelPage.goto(`${URL}?level=showcase&players=1`, { waitUntil: "load" });
-await levelPage.waitForFunction(() => window.game.world.enemies.length > 0, null, { timeout: 8000 });
-const glass = await levelPage.evaluate(async () => {
+// Intact glass: blocks the body, not the eye. Runs on its own purpose-built map —
+// the checks above deliberately shatter panes, and a test that needs unbroken glass
+// must not depend on what an earlier test left behind.
+// This page has been toggled to the FIXED camera by an earlier check, where the
+// cursor sets facing absolutely — so put it out to the right, which is the direction
+// the pane and the target are in. The check asserts the resulting facing, so if the
+// camera mode here ever changes this fails loudly instead of quietly measuring nothing.
+await camPage.mouse.move(640 + 320, 360);
+await camPage.waitForTimeout(250);
+const glass = await camPage.evaluate(async () => {
+  const art = [
+    "###############",
+    "#.............#",
+    "#......G......#",
+    "#......G......#",
+    "#..P...G...E..#",
+    "#......G......#",
+    "#.............#",
+    "###############",
+  ].join("\n");
+  window.game.loadLevelText(art, "intact glass test");
+  await new Promise((r) => setTimeout(r, 400));
+
   const w = window.game.world;
   const m = w.map;
-  const TILE = 48;
-  let pane = null;
-  for (let ty = 0; ty < m.rows && !pane; ty++) {
-    for (let tx = 0; tx < m.cols; tx++) {
-      if (m.tileAt(tx, ty) === 5 && !m.isSolid(tx - 1, ty) && !m.isSolid(tx + 1, ty)) {
-        pane = { tx, ty };
-        break;
-      }
-    }
-  }
-  if (!pane) return "no glass pane with open sides in this map";
-
+  const T = 48;
   const p = w.players[0];
-  p.x = (pane.tx - 1.5) * TILE;
-  p.y = (pane.ty + 0.5) * TILE;
-  p.prevX = p.x; p.prevY = p.y;
+  p.stance = "stand"; p.stanceTimer = 0; p.health = p.maxHealth; p.downed = false;
+  p.x = 4.5 * T; p.y = 4.5 * T; p.prevX = p.x; p.prevY = p.y;
   p.facing = 0;
-  const e = w.enemies[0];
-  if (!e) return "no enemy to place";
-  e.x = (pane.tx + 2.5) * TILE;
-  e.y = (pane.ty + 0.5) * TILE;
-  await new Promise((r) => setTimeout(r, 250));
+  window.game.cameras[0].snapTo(p.x, p.y, 0);
 
+  const e = w.enemies[0];
+  if (!e) return "no enemy behind the glass";
+  e.x = 11.5 * T; e.y = 4.5 * T;
+  await new Promise((r) => setTimeout(r, 300));
   const seenThroughGlass = e.visible;
-  // Now walk straight at the pane and confirm the body does not pass through it.
-  const startX = p.x;
-  for (let i = 0; i < 60; i++) {
-    p.vx = 900;
+
+  // Now walk straight at the pane. An unbroken one has to stop the body.
+  for (let i = 0; i < 70; i++) {
+    p.vx = 800;
     await new Promise((r) => requestAnimationFrame(r));
   }
-  return { seenThroughGlass, movedThrough: p.x > (pane.tx + 1) * TILE, startX, endX: p.x };
+  return {
+    seenThroughGlass,
+    movedThrough: p.x > 7.5 * T,
+    stillGlass: m.tileAt(7, 4) === 5,
+    endX: Math.round((p.x / T) * 10) / 10,
+    facing: Math.round(p.facing * 100) / 100,
+  };
 });
-// The aim laser stops at glass; bullets must agree with it.
-const glassStopsShots = await camPage.evaluate(async () => {
-  const w = window.game.world;
-  const m = w.map;
-  const TILE = 48;
-  let pane = null;
-  for (let ty = 0; ty < m.rows && !pane; ty++) {
-    for (let tx = 0; tx < m.cols; tx++) {
-      if (m.tileAt(tx, ty) === 5 && !m.isSolid(tx - 1, ty) && !m.isSolid(tx + 1, ty)) {
-        pane = { tx, ty };
-        break;
-      }
-    }
-  }
-  if (!pane) return "no glass pane";
-  const paneX = pane.tx * TILE;
-  w.bullets.spawn((pane.tx - 2) * TILE, (pane.ty + 0.5) * TILE, 0, 700, 10, "player", 0, 1, "#fff");
-  await new Promise((r) => setTimeout(r, 350));
-  const past = w.bullets.items.some((b) => b.active && b.x > paneX + TILE);
-  return { past };
-});
-check("bullets stop at glass, exactly where the aim laser ends",
-  typeof glassStopsShots === "object" && glassStopsShots.past === false,
-  JSON.stringify(glassStopsShots));
-
-check("glass blocks movement but not sight",
-  typeof glass === "object" && glass.seenThroughGlass === true && glass.movedThrough === false,
+check("intact glass blocks movement but not sight",
+  typeof glass === "object" && Math.abs(glass.facing) < 0.2 &&
+  glass.seenThroughGlass === true &&
+  glass.movedThrough === false && glass.stillGlass === true,
   JSON.stringify(glass));
 
 // The editor hand-off: a level parked in localStorage loads as ?level=draft.

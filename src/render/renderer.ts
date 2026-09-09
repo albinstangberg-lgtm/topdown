@@ -99,7 +99,7 @@ export class Renderer {
 
     const bounds = cam.visibleBounds(vp);
     this.drawFloor(ctx, bounds);
-    this.drawBlockedFloor(ctx, world, bounds);
+    this.drawFloorDecals(ctx, world, bounds);
     this.drawExits(ctx, world, bounds);
     this.drawStairs(ctx, world, bounds);
     this.drawLamps(ctx, world, bounds);
@@ -314,7 +314,7 @@ export class Renderer {
    * ground rather than it reading as a wall — but deliberately NOT identical to walkable
    * floor, because an invisible wall is the worst thing a level can have.
    */
-  private drawBlockedFloor(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+  private drawFloorDecals(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
     const map = world.map;
     const tx0 = Math.max(0, Math.floor(b.x0 / TILE));
     const ty0 = Math.max(0, Math.floor(b.y0 / TILE));
@@ -323,9 +323,32 @@ export class Renderer {
 
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
-        if (tileDef(map.tileAt(tx, ty)).key !== "blocked") continue;
+        const key = tileDef(map.tileAt(tx, ty)).key;
         const x = tx * TILE;
         const y = ty * TILE;
+
+        if (key === "brokenGlass") {
+          // A shattered pane: the frame is gone, so all that is left is glitter on the
+          // floor. Reads instantly as "this was glass, and it is open now".
+          ctx.fillStyle = "rgba(159,216,234,0.10)";
+          ctx.fillRect(x, y, TILE, TILE);
+          ctx.strokeStyle = "rgba(190,235,250,0.55)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          for (let k = 0; k < 7; k++) {
+            // Deterministic scatter from the tile coordinates, so shards do not crawl.
+            const h = Math.sin((tx * 13.1 + ty * 7.7 + k * 3.3)) * 43758.5;
+            const rx = x + 6 + (Math.abs(h) % 1) * (TILE - 12);
+            const ry = y + 6 + (Math.abs(h * 1.7) % 1) * (TILE - 12);
+            const len = 3 + (Math.abs(h * 2.3) % 1) * 5;
+            ctx.moveTo(rx - len, ry - len * 0.4);
+            ctx.lineTo(rx + len, ry + len * 0.4);
+          }
+          ctx.stroke();
+          continue;
+        }
+
+        if (key !== "blocked") continue;
 
         ctx.fillStyle = "#a49e8b";
         ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);

@@ -1,6 +1,7 @@
 import type { InputState } from "../input/types";
 import { randRange } from "../core/math";
-import type { TileMap } from "../world/tilemap";
+import { TILE, type TileMap } from "../world/tilemap";
+import { tileDef } from "../world/tiles";
 import { buildTileMap, type LevelData } from "../world/level";
 import { generateLevel } from "../world/generator";
 import { makeLight } from "../vision/visibility";
@@ -294,6 +295,20 @@ export class GameWorld {
       for (let s = 0; s < steps && b.active; s++) {
         b.x += sx;
         b.y += sy;
+
+        // Anything a bullet can pass through but that does not survive the experience.
+        // Glass is the only one today; the tile says what it leaves behind.
+        const tx = Math.floor(b.x / TILE);
+        const ty = Math.floor(b.y / TILE);
+        if (this.map.inBounds(tx, ty)) {
+          const hit = tileDef(this.map.tileAt(tx, ty));
+          if (hit.breaksInto !== undefined) {
+            this.map.setTile(tx, ty, hit.breaksInto);
+            // Derived lists (what is walkable, where spawns are) change with the grid.
+            this.map.refresh();
+            this.particles.burst(b.x, b.y, 14, 190, "#cfe9f5", 0.5, 3);
+          }
+        }
 
         if (this.map.blocksShotsAt(b.x, b.y)) {
           b.active = false;

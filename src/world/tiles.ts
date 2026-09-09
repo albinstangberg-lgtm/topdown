@@ -23,6 +23,8 @@ export interface TileDef {
   opaque: boolean;
   /** Stops bullets and ends the aim laser. Defaults to `solid` when left out. */
   blocksShots?: boolean;
+  /** Tile id this turns into when a bullet passes through it. Glass shatters. */
+  breaksInto?: number;
   spawn?: SpawnKind;
   /** Emits a static light at the centre of the tile, with this radius in world units. */
   light?: number;
@@ -50,8 +52,9 @@ export const TILE_DEFS: readonly TileDef[] = [
     color: "#ff6b6b", glyph: "E", hint: "one zombie, placed here at map start. Never respawns" },
   { id: 4, key: "crate", name: "Crate", solid: true, opaque: true,
     color: "#6b5334", glyph: "X", hint: "cover — same rules as a wall, drawn as a block" },
-  { id: 5, key: "glass", name: "Glass", solid: true, opaque: false,
-    color: "#5ad2ff", glyph: "G", hint: "blocks movement, NOT sight — you can see (and shoot past) through it" },
+  { id: 5, key: "glass", name: "Glass", solid: true, opaque: false, blocksShots: false, breaksInto: 17,
+    color: "#5ad2ff", glyph: "G",
+    hint: "see and shoot straight through it, but you cannot walk through — until a bullet shatters it" },
   { id: 6, key: "lamp", name: "Lamp", solid: false, opaque: false, light: 250,
     color: "#ffe9b0", glyph: "L", hint: "static light — permanently lit area, computed once on load" },
   { id: 7, key: "exit", name: "Exit", solid: false, opaque: false, exit: true,
@@ -75,6 +78,9 @@ export const TILE_DEFS: readonly TileDef[] = [
   { id: 16, key: "blocked", name: "Blocked floor", solid: true, opaque: false, blocksShots: false,
     color: "#8f8a78", glyph: "_",
     hint: "looks like floor and lit like it, but nobody walks on it. Sight and bullets pass straight over — shape rooms with it" },
+  { id: 17, key: "brokenGlass", name: "Broken glass", solid: false, opaque: false,
+    color: "#9fd8ea", glyph: "g",
+    hint: "what glass leaves behind: an open hole you can walk through. Rarely authored by hand" },
 ];
 
 export const TILE_FLOOR = 0;

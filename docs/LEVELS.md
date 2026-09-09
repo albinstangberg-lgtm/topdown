@@ -13,7 +13,7 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `2` | `P` | Player spawn | no | no | players spawn here in grid order, cycling if there are more players than spawns |
 | `3` | `E` | Enemy spawn | no | no | the director spawns enemies at these, and only when nobody is looking |
 | `4` | `X` | Crate | yes | yes | cover; same rules as a wall, drawn as an object on the floor |
-| `5` | `G` | Glass | yes | **no** | blocks the body, not the eye — see and shoot through it |
+| `5` | `G` | Glass | yes | **no** | see and shoot straight through, but you cannot walk through — until a bullet shatters it |
 | `6` | `L` | Lamp | no | no | a static light; its visibility polygon is solved once at load, not per frame |
 | `7` | `>` | Exit | no | no | the safe room. Get the whole living squad standing on it to finish a story mission |
 | `8` | `Z` | Spawn zone | no | no | the director draws from these, picking a different one each time and never in sight |
@@ -25,12 +25,20 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `14` | `f` | Flare | no | no | a big red static light you can stand on |
 | `15` | `D` | Elevator door | yes | yes | closed lift doors. Scenery — use `^` for a floor you can actually take |
 | `16` | `_` | Blocked floor | yes | no | looks and lights like floor, but nobody walks on it. Sight **and bullets** pass over — shape rooms with it |
+| `17` | `g` | Broken glass | no | no | what glass leaves behind: an open hole with shards on the floor. You rarely author this by hand |
 
 `solid`, `opaque` and `blocksShots` are separate flags on purpose, because they are three
 different questions: **can a body pass, can a look pass, can a bullet pass.** Collision
 asks solid, the vision raycast asks opaque, bullets and the aim laser ask blocksShots
 (which falls back to `solid` when a tile does not say otherwise). Glass proves the first
 two are different; blocked floor proves the third is too.
+
+**Glass breaks.** A bullet passes straight through a pane and shatters it into broken
+glass (`17`), which is walkable — so shooting out a window is how you make a shortcut,
+and a glass wall is cover that only lasts until someone opens fire. Any bullet does it,
+yours or theirs, and a single shot crossing several panes takes out every one it
+touches. `breaksInto` on the tile is what drives this; point another tile at it and that
+tile becomes breakable too.
 
 Blocked floor (`16`) is the one for shaping a level's look. It is lit like floor and you
 can see and shoot straight across it, so it reads as ground rather than as architecture —
