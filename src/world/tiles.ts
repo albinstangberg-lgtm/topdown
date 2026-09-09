@@ -34,6 +34,14 @@ export interface TileDef {
   stairs?: boolean;
   /** Purely visual variant — the renderer draws it as furniture, not as a wall face. */
   prop?: "car" | "reception" | "cubicle" | "door";
+  /**
+   * Shooting this sets off a car alarm: a wave from every door and twenty seconds of
+   * noise pulling the floor toward it. Once per car — the tile is spent afterwards and
+   * becomes whatever `alarmSpent` names.
+   */
+  alarm?: boolean;
+  /** What an alarm tile turns into once it has gone off. */
+  alarmSpent?: number;
   /** Editor palette colour. */
   color: string;
   /** Single character for the compact text form of a level. */
@@ -86,6 +94,10 @@ export const TILE_DEFS: readonly TileDef[] = [
   { id: 18, key: "brokenWindow", name: "Broken window", solid: false, opaque: false, spawn: "zone",
     color: "#7fc4dd", glyph: "w",
     hint: "a smashed window: walk straight through it, and it is STILL a way in for the director" },
+  { id: 19, key: "alarmCar", name: "Alarmed car", solid: true, opaque: true, prop: "car",
+    alarm: true, alarmSpent: 10,
+    color: "#c25a3a", glyph: "A",
+    hint: "a wreck with a live alarm. Put a bullet in it and every door on the floor opens at once — once" },
 ];
 
 export const TILE_FLOOR = 0;

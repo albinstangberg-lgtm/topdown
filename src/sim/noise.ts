@@ -11,7 +11,7 @@
  * walks toward the one that is nearer to filling its ears rather than the newer one.
  */
 
-export type NoiseKind = "shot" | "break" | "step" | "impact";
+export type NoiseKind = "shot" | "break" | "step" | "impact" | "alarm";
 
 export interface Noise {
   active: boolean;
@@ -91,4 +91,6 @@ export const NOISE = {
   sprint: 180,
   /** Hitting the floor at the end of a dive. */
   dive: 250,
+  /** A car alarm. Loud enough to be heard across any floor — that is the point of it. */
+  alarm: 1600,
 } as const;

@@ -14,7 +14,7 @@ import {
 import { createEnemy, damageEnemy, updateEnemy } from "./enemy";
 import { randomZombieKind } from "./zombies";
 import { NOISE, NoiseField } from "./noise";
-import { Director, STORY_TUNING, SURVIVAL_TUNING } from "./director";
+import { Director, STORY_TUNING, SURVIVAL_TUNING, type DirectorDeps } from "./director";
 import { BulletPool, ParticlePool } from "./pools";
 import type { Enemy, Player } from "./entities";
 
@@ -28,6 +28,16 @@ import type { Enemy, Player } from "./entities";
 
 const MAP_COLS = 56;
 const MAP_ROWS = 42;
+/**
+ * No authored zombie is placed this close to a player spawn tile. Arriving on a floor
+ * should give you a moment to read the room; the director's own arrival grace covers
+ * the other half of that.
+ */
+const SPAWN_SAFE_RADIUS = 300;
+/** How long a car alarm keeps screaming once a bullet sets it off. */
+const ALARM_TIME = 20;
+/** Seconds between the alarm's noise pulses. Every zombie on the floor hears these. */
+const ALARM_PULSE = 0.6;
 /** Seconds the whole squad has to stand on the exit before the mission ends. */
 const EXIT_DWELL = 0.8;
 
@@ -39,7 +49,7 @@ const EXIT_DWELL = 0.8;
 export type GameMode = "survival" | "story";
 
 export interface GameEvent {
-  kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level" | "horde"
+  kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level" | "horde" | "alarm"
       | "floorCleared" | "missionComplete" | "missionFailed";
   x?: number;
   y?: number;
@@ -58,6 +68,11 @@ export class GameWorld {
   readonly noise = new NoiseField();
   /** Waves, peaks and breathers. See `src/sim/director.ts`. */
   readonly director = new Director(SURVIVAL_TUNING);
+  /**
+   * The car alarm, if one is going. Read by the renderer (the strobe) and the HUD.
+   * There is only ever one: setting off a second car moves it rather than stacking.
+   */
+  readonly alarm = { active: false, x: 0, y: 0, timeLeft: 0, pulse: 0 };
   readonly events: GameEvent[] = [];
 
   /** Lamps baked into the level. Static, so their visibility is solved once on load. */
@@ -114,6 +129,8 @@ export class GameWorld {
     for (const b of this.bullets.items) b.active = false;
     for (const p of this.particles.items) p.active = false;
     this.noise.clear();
+    this.alarm.active = false;
+    this.alarm.timeLeft = 0;
     this.time = 0;
     this.wipeTimer = 0;
     this.director.rebuild(this.map);
@@ -156,8 +173,18 @@ export class GameWorld {
    */
   private populateAuthoredEnemies(): void {
     for (const spot of this.map.enemySpawns) {
+      // Not on top of where the squad comes in. An author placing a zombie near the
+      // stairwell means "this floor is hostile", not "lose health before you can look".
+      if (this.nearPlayerSpawn(spot.x, spot.y)) continue;
       this.enemies.push(createEnemy(this.nextEnemyId++, spot.x, spot.y));
     }
+  }
+
+  /** Inside the no-spawn bubble around any of this floor's arrival tiles? */
+  private nearPlayerSpawn(x: number, y: number): boolean {
+    return this.map.playerSpawns.some(
+      (p) => Math.hypot(p.x - x, p.y - y) < SPAWN_SAFE_RADIUS,
+    );
   }
 
   /** Lamp tiles never move, so solve their visibility polygons once instead of per frame. */
@@ -261,6 +288,7 @@ export class GameWorld {
     this.particles.update(dt);
     // Noises age out after every listener has had a step to hear them.
     this.noise.update(dt);
+    this.updateAlarm(dt);
     this.updateDirector(dt);
     this.updateBleedout(dt);
     this.updateObjective(dt);
@@ -341,6 +369,10 @@ export class GameWorld {
         if (this.map.blocksShotsAt(b.x, b.y)) {
           b.active = false;
           this.particles.burst(b.x, b.y, 4, 130, "#c8cede", 0.22, 2);
+          // Whatever stopped it might have had an alarm in it.
+          const sx = Math.floor(b.x / TILE);
+          const sy = Math.floor(b.y / TILE);
+          if (tileDef(this.map.tileAt(sx, sy)).alarm) this.triggerAlarm(sx, sy);
           break;
         }
 
@@ -391,6 +423,55 @@ export class GameWorld {
   }
 
   /**
+   * A live car alarm: a huge noise pulse every few tenths of a second, so every zombie
+   * on the floor walks to the car whether or not the director is still feeding. The
+   * pulse is what makes an alarm a place rather than an event.
+   */
+  private updateAlarm(dt: number): void {
+    if (!this.alarm.active) return;
+    this.alarm.timeLeft -= dt;
+    this.alarm.pulse -= dt;
+    if (this.alarm.pulse <= 0) {
+      this.alarm.pulse = ALARM_PULSE;
+      this.noise.emit(this.alarm.x, this.alarm.y, NOISE.alarm, "alarm");
+      this.particles.burst(this.alarm.x, this.alarm.y, 4, 70, "#ff8a5c", 0.5, 3);
+    }
+    if (this.alarm.timeLeft <= 0) this.alarm.active = false;
+  }
+
+  /**
+   * A bullet found a car with a live alarm. Every door on the floor opens at once and
+   * keeps opening for as long as it screams.
+   *
+   * The "only once" lives in the grid rather than in a flag beside it: the car's tiles
+   * become ordinary wrecks, so a spent alarm survives a save, a reload and the map
+   * refresh that a smashed window triggers, and cannot come back.
+   */
+  private triggerAlarm(tx: number, ty: number): void {
+    const car = this.map.carAt(tx, ty);
+    if (!car || !car.alarmed) return;
+
+    for (const i of car.tiles) {
+      const spent = tileDef(this.map.tiles[i]).alarmSpent;
+      if (spent !== undefined) this.map.setTile(i % this.map.cols, Math.floor(i / this.map.cols), spent);
+    }
+    this.map.refresh();
+    this.director.rebuild(this.map);
+
+    this.alarm.active = true;
+    this.alarm.x = car.x + car.w / 2;
+    this.alarm.y = car.y + car.h / 2;
+    this.alarm.timeLeft = ALARM_TIME;
+    this.alarm.pulse = 0;
+
+    const released = this.director.panic(ALARM_TIME, this.directorDeps());
+    this.particles.burst(this.alarm.x, this.alarm.y, 26, 240, "#ffb45c", 0.7, 4);
+    this.events.push({
+      kind: "alarm", x: this.alarm.x, y: this.alarm.y, count: released, text: "CAR ALARM",
+    });
+  }
+
+  /**
    * CORE 9 — the AI Director. The shape of the pressure lives in `director.ts`; this
    * is only the wiring, and the one rule the director must not own: a story map with
    * no spawn zones is a fixed encounter the author wrote, and nothing may be added to it.
@@ -398,19 +479,23 @@ export class GameWorld {
   private updateDirector(dt: number): void {
     const story = this.mode === "story";
     if (story && this.map.spawnZones.length === 0) return;
-    this.director.update(dt, {
+    this.director.update(dt, this.directorDeps());
+  }
+
+  private directorDeps(): DirectorDeps {
+    return {
       map: this.map,
       players: this.players,
       enemies: this.enemies,
       squadCanSee: this.squadCanSee,
-      allowFallback: !story,
+      allowFallback: this.mode !== "story",
       spawn: (x, y) => {
         this.enemies.push(createEnemy(this.nextEnemyId++, x, y, randomZombieKind()));
       },
       onWave: (x, y, count) => {
-        this.events.push({ kind: "horde", x, y, text: undefined, count });
+        this.events.push({ kind: "horde", x, y, count });
       },
-    });
+    };
   }
 
   /**

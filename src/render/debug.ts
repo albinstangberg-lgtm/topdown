@@ -85,6 +85,7 @@ export class DebugOverlay {
       `bullets ${world.bullets.items.filter((b) => b.active).length}`,
       `director ${world.director.phase}  intensity ${world.director.intensity.toFixed(2)}`,
       `waves ${world.director.waves}  doors ${world.director.doorCount}  next ${Math.max(0, world.director.waveTimer).toFixed(1)}s`,
+      `grace ${world.director.grace.toFixed(1)}s  alarm ${world.alarm.active ? world.alarm.timeLeft.toFixed(1) + "s" : "-"}`,
       `vision pts ${world.players.reduce((n, p) => n + p.cone.poly.length / 2, 0).toFixed(0)}`,
       `t ${world.time.toFixed(1)}s   [F2] collision grid`,
     ];

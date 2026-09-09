@@ -5,6 +5,23 @@ export const TILE = 48;
 export interface Point { x: number; y: number }
 
 /**
+ * One vehicle, not one tile. Cars are authored as blocks of `C` (or `A`) and the tiles
+ * touching each other are gathered here into a single body with one outline, so the
+ * renderer draws a car rather than four squares that happen to line up.
+ */
+export interface CarBody {
+  /** Tile indices making up this car. */
+  tiles: number[];
+  /** Bounding box in world units. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** True while any of its tiles still carries a live alarm. */
+  alarmed: boolean;
+}
+
+/**
  * CORE 3a — The world grid.
  *
  * Static geometry is a grid of tile ids. A grid buys three things a polygon soup does
@@ -31,6 +48,8 @@ export class TileMap {
   /** Stairs. A floor with these sends the squad up instead of ending the mission. */
   readonly stairs: Point[] = [];
   readonly lamps: { x: number; y: number; range: number }[] = [];
+  /** Vehicles, gathered from touching car tiles. See `CarBody`. */
+  readonly cars: CarBody[] = [];
   /** Tile indices you can stand on, for random placement. */
   private walkable: number[] = [];
 
@@ -66,6 +85,7 @@ export class TileMap {
     this.exits.length = 0;
     this.stairs.length = 0;
     this.lamps.length = 0;
+    this.cars.length = 0;
     this.walkable = [];
 
     for (let ty = 0; ty < this.rows; ty++) {
@@ -100,6 +120,57 @@ export class TileMap {
         if (def.light) this.lamps.push({ x: c.x, y: c.y, range: def.light });
       }
     }
+    this.buildCars();
+  }
+
+  /**
+   * Gather touching car tiles into vehicles. Orthogonal neighbours only: two cars
+   * parked corner to corner are two cars, which is what an author drawing a car park
+   * means by it.
+   */
+  private buildCars(): void {
+    const seen = new Set<number>();
+    for (let ty = 0; ty < this.rows; ty++) {
+      for (let tx = 0; tx < this.cols; tx++) {
+        const i = this.idx(tx, ty);
+        if (seen.has(i) || tileDef(this.tiles[i]).prop !== "car") continue;
+
+        const tiles: number[] = [];
+        const queue = [[tx, ty]];
+        seen.add(i);
+        let minX = tx, minY = ty, maxX = tx, maxY = ty;
+        let alarmed = false;
+        while (queue.length > 0) {
+          const [cx, cy] = queue.pop()!;
+          const ci = this.idx(cx, cy);
+          tiles.push(ci);
+          if (tileDef(this.tiles[ci]).alarm) alarmed = true;
+          minX = Math.min(minX, cx); maxX = Math.max(maxX, cx);
+          minY = Math.min(minY, cy); maxY = Math.max(maxY, cy);
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = cx + dx, ny = cy + dy;
+            if (!this.inBounds(nx, ny)) continue;
+            const ni = this.idx(nx, ny);
+            if (seen.has(ni) || tileDef(this.tiles[ni]).prop !== "car") continue;
+            seen.add(ni);
+            queue.push([nx, ny]);
+          }
+        }
+        this.cars.push({
+          tiles,
+          x: minX * TILE, y: minY * TILE,
+          w: (maxX - minX + 1) * TILE, h: (maxY - minY + 1) * TILE,
+          alarmed,
+        });
+      }
+    }
+  }
+
+  /** The vehicle occupying this tile, if any. */
+  carAt(tx: number, ty: number): CarBody | null {
+    if (!this.inBounds(tx, ty)) return null;
+    const i = this.idx(tx, ty);
+    return this.cars.find((c) => c.tiles.includes(i)) ?? null;
   }
 
   setTile(tx: number, ty: number, id: number): void {

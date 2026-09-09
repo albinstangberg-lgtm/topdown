@@ -153,6 +153,79 @@ export class Renderer {
   }
 
   /**
+   * One body per vehicle. The car park used to be drawn tile by tile, which read as a
+   * grid of boxes; a car is a single shape with a roof panel down its long axis and a
+   * windscreen across the short one, so it has an orientation you can see.
+   *
+   * An alarmed car is the same shape in warning colours with hazard lights on the
+   * corners, and while its alarm is going they strobe and it throws light.
+   */
+  private drawCars(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    const alarm = world.alarm;
+    for (const car of world.map.cars) {
+      if (car.x > b.x1 || car.y > b.y1 || car.x + car.w < b.x0 || car.y + car.h < b.y0) continue;
+      const { x, y, w, h } = car;
+      const along = w >= h;            // which way the car is pointing
+      const ringing = alarm.active &&
+        alarm.x >= x && alarm.x <= x + w && alarm.y >= y && alarm.y <= y + h;
+      // A car going off has already spent its alarm tiles, so `ringing` has to keep
+      // the warning look alive for the twenty seconds it screams.
+      const live = car.alarmed || ringing;
+      const strobe = ringing ? 0.5 + 0.5 * Math.sin(performance.now() * 0.018) : 0;
+
+      ctx.fillStyle = "#0b0b10";
+      ctx.fillRect(x, y, w + 0.5, h + 0.5);
+      ctx.fillStyle = live ? "#3a1d18" : "#2a1a1c";
+      ctx.fillRect(x + 3, y + 3, w - 6, h - 6);
+
+      // Roof panel: inset along the long axis, so the shape reads as a vehicle.
+      const inset = 10;
+      const rx = along ? x + inset + 4 : x + inset;
+      const ry = along ? y + inset : y + inset + 4;
+      const rw = along ? w - (inset + 4) * 2 : w - inset * 2;
+      const rh = along ? h - inset * 2 : h - (inset + 4) * 2;
+      ctx.fillStyle = live ? "#5a2f26" : "#3d2a2c";
+      ctx.fillRect(rx, ry, rw, rh);
+
+      // Windscreen across the short axis, at the front.
+      ctx.fillStyle = "rgba(120,170,190,0.22)";
+      if (along) ctx.fillRect(rx + rw * 0.62, ry + 2, rw * 0.3, rh - 4);
+      else ctx.fillRect(rx + 2, ry + rh * 0.62, rw - 4, rh * 0.3);
+
+      ctx.strokeStyle = live
+        ? `rgba(255,${120 + 90 * strobe | 0},90,${0.45 + 0.45 * strobe})`
+        : "rgba(190,120,110,0.25)";
+      ctx.lineWidth = live ? 2 : 1.5;
+      ctx.strokeRect(x + 3, y + 3, w - 6, h - 6);
+
+      if (!live) continue;
+      // Hazard lights on the corners — the tell that this one is worth avoiding.
+      const lamp = ringing ? 0.35 + 0.65 * strobe : 0.55;
+      ctx.fillStyle = `rgba(255,${90 + 120 * strobe | 0},60,${lamp})`;
+      for (const [cx, cy] of [[x + 8, y + 8], [x + w - 8, y + 8], [x + 8, y + h - 8], [x + w - 8, y + h - 8]]) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, 3.5, 0, TAU);
+        ctx.fill();
+      }
+      if (!ringing) continue;
+      // The wash it throws while it screams. A gradient, not a flat disc — a hard
+      // circle edge on the floor reads as a bug rather than as light.
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      const reach = Math.max(w, h) * (1.5 + 0.5 * strobe);
+      const glow = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.3, cx, cy, reach);
+      glow.addColorStop(0, `rgba(255,70,45,${0.16 + 0.2 * strobe})`);
+      glow.addColorStop(1, "rgba(255,70,45,0)");
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(cx, cy, reach, 0, TAU);
+      ctx.fill();
+      ctx.globalCompositeOperation = "source-over";
+    }
+  }
+
+  /**
    * Solid geometry, drawn from tile ids. Walls are pure black silhouettes; crates read
    * as objects sitting on the floor; glass is a pane you can see through, which is the
    * visible payoff of solid and opaque being separate flags.
@@ -167,7 +240,9 @@ export class Renderer {
     const ty1 = Math.ceil(b.y1 / TILE);
 
     // Walls are one batched black path; everything else is furniture with its own look.
-    const props: Record<string, number[]> = { crate: [], glass: [], car: [], reception: [], cubicle: [], door: [] };
+    // Cars are deliberately absent: they are drawn per VEHICLE from `map.cars`, not
+    // per tile, so a 2x2 wreck is one body with one outline.
+    const props: Record<string, number[]> = { crate: [], glass: [], reception: [], cubicle: [], door: [] };
 
     ctx.fillStyle = COLOR_WALL;
     ctx.beginPath();
@@ -180,6 +255,7 @@ export class Renderer {
         const def = tileDef(map.tileAt(tx, ty));
         if (!def.solid) continue;
         if (def.key === "blocked") continue;   // drawn with the floor, not as geometry
+        if (def.prop === "car") continue;         // drawn as a whole vehicle, below
         const bucket = def.prop ?? (def.key === "crate" ? "crate" : def.key === "glass" ? "glass" : null);
         if (bucket && props[bucket]) { props[bucket].push(tx, ty); continue; }
         ctx.rect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
@@ -199,24 +275,7 @@ export class Renderer {
       ctx.strokeRect(x + 4, y + 4, TILE - 8, TILE - 8);
     }
 
-    // A car: dark body filling the tile, a lighter roof panel, and a windscreen band.
-    // Cars are authored as 2x2 blocks, and drawing each tile the same way still reads
-    // as one vehicle because the roof panel lines up across the seam.
-    for (let i = 0; i < props.car.length; i += 2) {
-      const x = props.car[i] * TILE;
-      const y = props.car[i + 1] * TILE;
-      ctx.fillStyle = "#0b0b10";
-      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
-      ctx.fillStyle = "#2a1a1c";
-      ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
-      ctx.fillStyle = "#3d2a2c";
-      ctx.fillRect(x + 7, y + 7, TILE - 14, TILE - 14);
-      ctx.fillStyle = "rgba(120,170,190,0.22)";
-      ctx.fillRect(x + 7, y + 12, TILE - 14, 7);
-      ctx.strokeStyle = "rgba(190,120,110,0.25)";
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(x + 2, y + 2, TILE - 4, TILE - 4);
-    }
+    this.drawCars(ctx, world, b);
 
     // Reception counter: solid but see-over, so it is drawn low and warm rather than
     // as a silhouette. Anything you can shoot across should not look like a wall.

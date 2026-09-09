@@ -176,7 +176,9 @@ with the game.
   clustered into doors), never the same door twice running and never one the squad can
   see; a guaranteed quiet stretch follows every peak. Population scales with the number
   of players: difficulty in a drop-in co-op game has to be a function of squad size from
-  the first line of it.
+  the first line of it. A car alarm overrides the loop entirely — every door at once, for
+  as long as it screams — and its "only once" is stored in the tile grid rather than in a
+  flag beside it, so a spent alarm survives a reload and cannot come back.
 - **HUD per viewport** (`src/render/hud.ts`) — anything drawn "at the top of the screen"
   is a bug waiting for player 3. Off-screen teammate markers and downed alerts matter
   more than health bars once the squad splits up.

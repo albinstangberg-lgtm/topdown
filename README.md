@@ -222,6 +222,17 @@ one door, never the same door twice running, and never a door anybody can curren
 in where you are looking. A map with four separated doors therefore plays differently
 every run, which is the whole reason to paint more than one.
 
+**Car alarms** cut across the whole loop. An alarmed car (`A`, drawn in warning colours
+with hazard lights) that takes a bullet drops the director into a **panic**: a wave out of
+*every* door at once, ignoring the usual "not while anyone is watching" rule, and twenty
+seconds of noise loud enough to pull every zombie on the floor toward the car while more
+keep arriving every 3–5 seconds. Then it fades. Once per car, ever — the tiles are spent
+and become an ordinary wreck.
+
+**Arriving is quiet.** No authored zombie is placed within about six tiles of a spawn
+tile, and the director adds nothing for the first six seconds of a floor. Walking out of
+a stairwell into a bite is not difficulty; it is the game starting before you did.
+
 Underneath all of it a couple of **wanderers** per squad are kept alive at all times,
 well away from everyone, so a relax reads as quiet rather than as the level having run
 out. `F1` shows the phase, the intensity, the wave count and the door count.

@@ -479,6 +479,11 @@ export class Game {
     for (const ev of this.world.events) {
       if (ev.kind === "kill" && ev.x !== undefined && ev.y !== undefined) {
         this.shakeNear(ev.x, ev.y, 0.35, 520);
+      } else if (ev.kind === "alarm") {
+        // This one you DO get told about: it is a mistake with consequences, and the
+        // player has to be able to connect the bang to the twenty seconds that follow.
+        this.shakeAll(0.8);
+        if (ev.text) this.setBanner(ev.text);
       } else if (ev.kind === "horde") {
         // No banner: a wave should be something you hear and feel, not read.
         this.shakeAll(0.35);
