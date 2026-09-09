@@ -479,6 +479,9 @@ export class Game {
     for (const ev of this.world.events) {
       if (ev.kind === "kill" && ev.x !== undefined && ev.y !== undefined) {
         this.shakeNear(ev.x, ev.y, 0.35, 520);
+      } else if (ev.kind === "horde") {
+        // No banner: a wave should be something you hear and feel, not read.
+        this.shakeAll(0.35);
       } else if (ev.kind === "playerDown") {
         this.shakeAll(0.6);
         if (ev.text) this.setBanner(ev.text);

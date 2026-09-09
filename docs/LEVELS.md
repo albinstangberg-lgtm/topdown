@@ -139,11 +139,15 @@ cannot drift out of sync with the game — there is only one definition of what 
   players spawn beside the squad, and the first player at the most open point on the map.
 - **Zombies (`3`)**: one enemy per tile, placed when the map loads, never replaced.
   This is the part of an encounter a player can learn.
-- **Spawn zones (`8`)**: where reinforcements come from. The director shuffles them and
-  only uses one that nobody can currently see, so pressure arrives from a different door
-  each time. In a **story** map those are the *only* places an enemy may appear — a map
-  with no zones is a fixed encounter and stops spawning once the placed zombies are
-  dead. **Survival** falls back to any floor tile when no zone is clear.
+- **Spawn zones (`8`)**: where reinforcements come from, in waves rather than a drip.
+  **Zone tiles that touch each other are one door.** A row of twelve along a wall is a
+  single way in, not twelve, and a wave comes out of one door at a time — never the same
+  door twice running, and never one the squad can see. So paint zones in *groups*, and
+  put the groups in different places: three or four separated doors is what makes a map
+  play differently each run. In a **story** map those are the *only* places an enemy may
+  appear — a map with no zones is a fixed encounter and stops spawning once the placed
+  zombies are dead. **Survival** falls back to open floor when a map declares no zones.
+  See the director section in the [README](../README.md#the-director).
 - **Exits (`7`)**: a story mission ends when every living player stands on an exit tile
   together for 0.8s. Downed players do not block it. A map with no exit has no
   objective, which is exactly what survival is.

@@ -156,12 +156,27 @@ with the game.
 
 ## The supporting cores
 
-- **AI perception on the same primitive** (`src/sim/enemy.ts`) — an enemy sees you when
-  you are in its cone *and* it has line of sight. Symmetry with the player's vision is
-  what makes a light-and-shadow shooter fair and readable.
-- **A director, not a spawn table** (`GameWorld.updateDirector`) — population scales with
-  the number of players, and spawns are placed out of everyone's sight. Difficulty in a
-  drop-in co-op game has to be a function of squad size from the first line of it.
+- **AI perception on the same primitive** (`src/sim/enemy.ts`) — a zombie sees you when
+  you are in its arc *and* it has line of sight. Symmetry with the player's vision is
+  what makes a light-and-shadow shooter fair and readable: if a wall stops you seeing
+  it, it cannot see you.
+- **Hearing that ignores walls** (`src/sim/noise.ts`) — the second sense, and the one
+  that makes a gunshot a decision. Noises are points with a radius and a half-second
+  life; anything with ears inside one walks to it. Deliberately *not* gated on line of
+  sight — blocking sound on walls would make firing from cover free, which is backwards.
+- **One table per enemy kind** (`src/sim/zombies.ts`) — the same trick as `TILE_DEFS`.
+  Health, pace, senses, hearing and the whole leap are rows in `ZOMBIE_DEFS`, and the
+  state machine reads them by key. A runner is a walker with a bigger `chaseSpeed`; a
+  brute is one with more health and a fatter `lunge.damage`. Adding a kind touches no
+  other file.
+- **A director, not a spawn table** (`src/sim/director.ts`) — modelled on Left 4 Dead's.
+  Four phases in a loop — buildup, peak, fade, relax — driven by a survivor-intensity
+  metric rather than a timetable, because a constant drip is something you stop noticing
+  after ninety seconds. Waves come out of one *door* at a time (touching zone tiles are
+  clustered into doors), never the same door twice running and never one the squad can
+  see; a guaranteed quiet stretch follows every peak. Population scales with the number
+  of players: difficulty in a drop-in co-op game has to be a function of squad size from
+  the first line of it.
 - **HUD per viewport** (`src/render/hud.ts`) — anything drawn "at the top of the screen"
   is a bug waiting for player 3. Off-screen teammate markers and downed alerts matter
   more than health bars once the squad splits up.

@@ -2,118 +2,246 @@ import { damp, randRange, rotateToward, TAU } from "../core/math";
 import { moveCircle } from "../world/collision";
 import { hasLineOfSight } from "../world/raycast";
 import type { TileMap } from "../world/tilemap";
-import { inCone, makeLight } from "../vision/visibility";
+import { inCone } from "../vision/visibility";
 import type { Enemy, Player } from "./entities";
-import type { BulletPool, ParticlePool } from "./pools";
+import type { ParticlePool } from "./pools";
+import type { NoiseField } from "./noise";
+import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
 
 /**
- * CORE 7 — Enemies and perception.
+ * CORE 7 — Zombies and perception.
  *
- * The AI is a 4-state machine driven by the same vision primitive the player uses:
- * an enemy sees you when you are inside its cone AND it has line of sight. That
- * symmetry is what makes a light-and-shadow shooter readable — if you cannot see
- * them through the wall, they cannot see you either.
+ * A six-state machine, and every number it runs on comes from the row in `ZOMBIE_DEFS`
+ * named by `e.kind` — so a new kind of zombie is a table entry, not a new file.
+ *
+ *   wander → investigate → chase → windup → lunge → recover
+ *
+ * They have two senses, and both are the ones the player already understands:
+ *
+ * - **Sight** is the same primitive the player's flashlight uses: a wide, short arc
+ *   plus line of sight. Wide and short on purpose — walking past one head-on is hard,
+ *   slipping behind it is easy. If a wall stops you seeing it, it cannot see you.
+ * - **Hearing** goes through walls. A gunshot pulls a room toward you whether or not
+ *   anything could have watched you fire, which is what stops shooting from cover
+ *   being free.
+ *
+ * They never shoot. The attack is a telegraphed leap you can dodge: it plants, it
+ * winds up where you can see it, it commits to a direction, and if you are not there
+ * any more it lands face down and takes extra damage while it gets up.
  */
 
-const CONE_HALF = 0.55;
-// Pulled in to match the tighter camera: an enemy that can shoot you from off-screen
-// is not a difficulty setting, it is a bug you feel.
-const CONE_RANGE = 300;
-const ATTACK_RANGE = 210;
 const SEPARATION = 34;
+/** How close is close enough when walking to a noise. */
+const ARRIVED = 26;
+/** Seconds of alertness a fresh sighting or a noise is worth. Decays in `investigate`. */
+const ALERT_FULL = 1;
 
-export function createEnemy(id: number, x: number, y: number): Enemy {
+export function createEnemy(id: number, x: number, y: number, kind = DEFAULT_ZOMBIE): Enemy {
+  const def = zombieDef(kind);
   return {
     id,
+    kind: def.key,
     x, y, prevX: x, prevY: y,
     vx: 0, vy: 0,
-    radius: 14,
+    radius: def.radius,
     facing: randRange(0, TAU),
-    health: 40,
-    maxHealth: 40,
-    speed: randRange(105, 140),
-    state: "patrol",
+    health: def.health,
+    maxHealth: def.health,
+    state: "wander",
+    stateTimer: 0,
+    lungeDirX: 0,
+    lungeDirY: 0,
     targetId: -1,
     lastSeenX: 0,
     lastSeenY: 0,
     alertness: 0,
-    fireCooldown: randRange(0.4, 1.6),
+    attackCooldown: randRange(0, 0.6),
     wanderAngle: randRange(0, TAU),
     hurtFlash: 0,
     visible: false,
-    cone: makeLight("#ff5a5a", CONE_HALF, CONE_RANGE, 0.55),
   };
 }
 
 export interface EnemyDeps {
   map: TileMap;
-  bullets: BulletPool;
   particles: ParticlePool;
+  noise: NoiseField;
   enemies: Enemy[];
   players: Player[];
+  /** How a bite reaches a player. The world owns damage, so it can raise the event. */
+  hurtPlayer: (p: Player, amount: number) => void;
 }
 
 export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
+  const def = zombieDef(e.kind);
   e.prevX = e.x;
   e.prevY = e.y;
   e.hurtFlash = Math.max(0, e.hurtFlash - dt * 4);
-  e.fireCooldown -= dt;
+  e.attackCooldown = Math.max(0, e.attackCooldown - dt);
+  e.stateTimer = Math.max(0, e.stateTimer - dt);
+
+  // The leap is a commitment: nothing it perceives mid-flight changes where it lands.
+  if (e.state === "windup" || e.state === "lunge" || e.state === "recover") {
+    updateAttack(e, deps, dt);
+    return;
+  }
 
   const target = perceive(e, deps);
 
   let desiredX = 0;
   let desiredY = 0;
   let lookAngle = e.facing;
+  let speed = def.wanderSpeed;
 
   if (target) {
     e.targetId = target.id;
     e.lastSeenX = target.x;
     e.lastSeenY = target.y;
-    e.alertness = 1;
+    e.alertness = ALERT_FULL;
 
     const dx = target.x - e.x;
     const dy = target.y - e.y;
     const dist = Math.hypot(dx, dy) || 1;
     lookAngle = Math.atan2(dy, dx);
 
-    if (dist > ATTACK_RANGE * 0.8) {
-      e.state = "chase";
-      desiredX = dx / dist;
-      desiredY = dy / dist;
-    } else {
-      e.state = "attack";
-      // Strafe rather than stand still, so a firefight has movement in it.
-      const strafe = Math.sin(performance.now() * 0.001 + e.id) * 0.7;
-      desiredX = -dy / dist * strafe;
-      desiredY = dx / dist * strafe;
-      if (dist < ATTACK_RANGE * 0.45) { desiredX -= dx / dist * 0.6; desiredY -= dy / dist * 0.6; }
-      if (e.fireCooldown <= 0) shoot(e, lookAngle, deps);
+    if (dist <= def.lunge.range && e.attackCooldown <= 0) {
+      // Plant and telegraph. Direction is not locked until the windup ends, so it
+      // tracks you a little first and then commits — dodge late, not early.
+      e.state = "windup";
+      e.stateTimer = def.lunge.windup;
+      e.vx = 0;
+      e.vy = 0;
+      e.facing = rotateToward(e.facing, lookAngle, 9 * dt);
+      return;
     }
-  } else if (e.alertness > 0) {
-    // Lost sight: walk to where the player last was before giving up.
-    e.state = "alert";
-    e.alertness -= dt * 0.25;
-    const dx = e.lastSeenX - e.x;
-    const dy = e.lastSeenY - e.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > 24) {
-      desiredX = dx / dist;
-      desiredY = dy / dist;
-      lookAngle = Math.atan2(dy, dx);
-    } else {
-      e.alertness -= dt;
-      lookAngle = e.facing + Math.sin(performance.now() * 0.002 + e.id) * 1.2;
-    }
+
+    e.state = "chase";
+    speed = def.chaseSpeed;
+    desiredX = dx / dist;
+    desiredY = dy / dist;
   } else {
-    e.state = "patrol";
-    e.targetId = -1;
-    e.wanderAngle += randRange(-1, 1) * dt * 2.2;
-    desiredX = Math.cos(e.wanderAngle) * 0.55;
-    desiredY = Math.sin(e.wanderAngle) * 0.55;
-    lookAngle = e.wanderAngle;
+    // Nothing in sight. A noise it can hear beats whatever it was already doing.
+    const heard = deps.noise.loudestAt(e.x, e.y, def.hearing);
+    if (heard) {
+      e.lastSeenX = heard.x;
+      e.lastSeenY = heard.y;
+      e.alertness = ALERT_FULL;
+      e.targetId = -1;
+    }
+
+    if (e.alertness > 0) {
+      e.state = "investigate";
+      e.alertness -= dt * 0.25;
+      const dx = e.lastSeenX - e.x;
+      const dy = e.lastSeenY - e.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > ARRIVED) {
+        desiredX = dx / dist;
+        desiredY = dy / dist;
+        lookAngle = Math.atan2(dy, dx);
+      } else {
+        // Arrived and found nothing: mill about, lose interest faster.
+        e.alertness -= dt;
+        lookAngle = e.facing + Math.sin(performance.now() * 0.002 + e.id) * 1.2;
+      }
+    } else {
+      e.state = "wander";
+      e.targetId = -1;
+      e.wanderAngle += randRange(-1, 1) * dt * 2.2;
+      desiredX = Math.cos(e.wanderAngle);
+      desiredY = Math.sin(e.wanderAngle);
+      lookAngle = e.wanderAngle;
+    }
   }
 
-  // Keep enemies from piling into one blob.
+  applySeparation(e, deps);
+  desiredX += separation.x;
+  desiredY += separation.y;
+
+  e.vx = damp(e.vx, desiredX * speed, 8, dt);
+  e.vy = damp(e.vy, desiredY * speed, 8, dt);
+
+  const moved = moveCircle(deps.map, e.x, e.y, e.radius, e.vx * dt, e.vy * dt);
+  if (moved.hitWall && e.state === "wander") e.wanderAngle += Math.PI * randRange(0.4, 1.2);
+  e.x = moved.x;
+  e.y = moved.y;
+
+  e.facing = rotateToward(e.facing, lookAngle, 6 * dt);
+}
+
+/** The three committed states. Nothing here looks at what the zombie can perceive. */
+function updateAttack(e: Enemy, deps: EnemyDeps, dt: number): void {
+  const def = zombieDef(e.kind);
+
+  if (e.state === "windup") {
+    // Track the target through the telegraph, then launch at wherever it ended up.
+    const target = deps.players.find((p) => p.id === e.targetId && !p.downed);
+    if (target) {
+      const angle = Math.atan2(target.y - e.y, target.x - e.x);
+      e.facing = rotateToward(e.facing, angle, 5 * dt);
+    }
+    e.vx = damp(e.vx, 0, 14, dt);
+    e.vy = damp(e.vy, 0, 14, dt);
+    if (e.stateTimer <= 0) {
+      e.state = "lunge";
+      e.stateTimer = def.lunge.duration;
+      e.lungeDirX = Math.cos(e.facing);
+      e.lungeDirY = Math.sin(e.facing);
+      e.vx = e.lungeDirX * def.lunge.speed;
+      e.vy = e.lungeDirY * def.lunge.speed;
+    }
+    return;
+  }
+
+  if (e.state === "lunge") {
+    // Decelerating, so the leap covers ground and then puts it on the floor.
+    const t = 1 - e.stateTimer / def.lunge.duration;
+    const speed = def.lunge.speed * Math.max(0, 1 - t * 0.8);
+    e.vx = e.lungeDirX * speed;
+    e.vy = e.lungeDirY * speed;
+
+    const moved = moveCircle(deps.map, e.x, e.y, e.radius, e.vx * dt, e.vy * dt);
+    e.x = moved.x;
+    e.y = moved.y;
+
+    if (bite(e, deps, def.lunge.damage) || moved.hitWall || e.stateTimer <= 0) {
+      e.state = "recover";
+      e.stateTimer = def.lunge.recover;
+      e.vx = 0;
+      e.vy = 0;
+    }
+    return;
+  }
+
+  // recover: face down, no movement, no turning, and open to a free shot.
+  e.vx = 0;
+  e.vy = 0;
+  if (e.stateTimer <= 0) {
+    e.state = e.targetId >= 0 ? "chase" : "investigate";
+    e.attackCooldown = def.lunge.cooldown;
+  }
+}
+
+/** Contact damage, mid-leap only. Returns whether it connected. */
+function bite(e: Enemy, deps: EnemyDeps, damage: number): boolean {
+  for (const p of deps.players) {
+    if (p.downed) continue;
+    const reach = e.radius + p.radius;
+    if (Math.hypot(p.x - e.x, p.y - e.y) > reach) continue;
+    deps.particles.burst(p.x, p.y, 8, 150, "#c23b3b", 0.35, 3);
+    deps.hurtPlayer(p, damage);
+    return true;
+  }
+  return false;
+}
+
+/** Scratch vector for `applySeparation`, so the AI loop never allocates. */
+const separation = { x: 0, y: 0 };
+
+/** Keep zombies from piling into one blob. */
+function applySeparation(e: Enemy, deps: EnemyDeps): void {
+  separation.x = 0;
+  separation.y = 0;
   for (const other of deps.enemies) {
     if (other === e || other.health <= 0) continue;
     const dx = e.x - other.x;
@@ -121,33 +249,18 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
     const d2 = dx * dx + dy * dy;
     if (d2 > SEPARATION * SEPARATION || d2 < 1e-4) continue;
     const d = Math.sqrt(d2);
-    desiredX += (dx / d) * 0.8;
-    desiredY += (dy / d) * 0.8;
+    separation.x += (dx / d) * 0.8;
+    separation.y += (dy / d) * 0.8;
   }
-
-  const speed = e.state === "patrol" ? e.speed * 0.45 : e.speed;
-  e.vx = damp(e.vx, desiredX * speed, 8, dt);
-  e.vy = damp(e.vy, desiredY * speed, 8, dt);
-
-  const moved = moveCircle(deps.map, e.x, e.y, e.radius, e.vx * dt, e.vy * dt);
-  if (moved.hitWall && e.state === "patrol") e.wanderAngle += Math.PI * randRange(0.4, 1.2);
-  e.x = moved.x;
-  e.y = moved.y;
-
-  e.facing = rotateToward(e.facing, lookAngle, 6 * dt);
-
-  e.cone.x = e.x;
-  e.cone.y = e.y;
-  e.cone.facing = e.facing;
-  e.cone.intensity = e.state === "patrol" ? 0.45 : 0.8;
 }
 
 function perceive(e: Enemy, deps: EnemyDeps): Player | null {
+  const def = zombieDef(e.kind);
   let best: Player | null = null;
   let bestDist = Infinity;
   for (const p of deps.players) {
     if (p.downed) continue;
-    if (!inCone(e.x, e.y, e.facing, CONE_HALF, CONE_RANGE, p.x, p.y)) continue;
+    if (!inCone(e.x, e.y, e.facing, def.senseHalf, def.senseRange, p.x, p.y)) continue;
     if (!hasLineOfSight(deps.map, e.x, e.y, p.x, p.y)) continue;
     const d = Math.hypot(p.x - e.x, p.y - e.y);
     if (d < bestDist) { bestDist = d; best = p; }
@@ -155,18 +268,14 @@ function perceive(e: Enemy, deps: EnemyDeps): Player | null {
   return best;
 }
 
-function shoot(e: Enemy, angle: number, deps: EnemyDeps): void {
-  e.fireCooldown = randRange(0.75, 1.4);
-  const spread = randRange(-0.09, 0.09);
-  const mx = e.x + Math.cos(angle) * (e.radius + 8);
-  const my = e.y + Math.sin(angle) * (e.radius + 8);
-  deps.bullets.spawn(mx, my, angle + spread, 520, 9, "enemy", e.id, 1.4, "#ff6b6b");
-  deps.particles.burst(mx, my, 2, 60, "#ffb0b0", 0.1, 2);
-}
-
+/**
+ * Damage. Being shot always wakes one up, and a zombie caught on the floor after a
+ * missed leap takes its kind's `vulnerable` multiplier — the payoff for dodging.
+ */
 export function damageEnemy(e: Enemy, amount: number): boolean {
-  e.health -= amount;
+  const def = zombieDef(e.kind);
+  e.health -= e.state === "recover" ? amount * def.vulnerable : amount;
   e.hurtFlash = 1;
-  e.alertness = 1;
+  e.alertness = ALERT_FULL;
   return e.health <= 0;
 }
