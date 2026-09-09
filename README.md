@@ -151,8 +151,13 @@ three inert but fully rendered — which is also how the test suite drives the g
 The enemy is the dead. They carry nothing, so they never shoot — everything they do is
 close-range, and every part of it is readable off the world rather than off UI.
 
-- **They wander.** With nothing to chase they shamble at a third of your walking pace,
-  turning at random and bouncing off walls.
+- **They wander** when they have no idea you exist — a third of your walking pace,
+  turning at random and bouncing off walls. That is the ambient population only.
+- **They hunt.** A zombie that arrives with a wave knows roughly where the squad is and
+  walks the actual route there, reading a heading off a flow field over the tile grid.
+  Sight alone is not enough to make a horde: chasing needs line of sight, so a wave
+  spawning three rooms away would otherwise mill about until the fight found it. The
+  same field is what gets an investigating zombie *round* a corner instead of into it.
 - **They see in a wide, short arc** — about 160° across and under five tiles, and it
   needs line of sight, the same primitive the player's flashlight uses. Walking past one
   head-on is hard; slipping behind it is easy. If a wall stops you seeing it, it cannot
@@ -168,6 +173,9 @@ close-range, and every part of it is readable off the world rather than off UI.
   not steer. Contact costs you 18. A miss puts them face down for half a second, unable
   to move or turn, taking **60% extra damage**. Dodging is worth more than backing up:
   their chase pace is below your walk, so the leap is the only way they can catch you.
+
+`F1` then `F3` draws the field, one arrow per tile — the fastest way to see why a horde
+is going the wrong way.
 
 Every number above lives in one row of `ZOMBIE_DEFS` (`src/sim/zombies.ts`). **Adding a
 kind of zombie is one entry in that table** — a runner is a walker with a bigger
@@ -226,7 +234,8 @@ every run, which is the whole reason to paint more than one.
 with hazard lights) that takes a bullet drops the director into a **panic**: a wave out of
 *every* door at once, ignoring the usual "not while anyone is watching" rule, and twenty
 seconds of noise loud enough to pull every zombie on the floor toward the car while more
-keep arriving every 3–5 seconds. Then it fades. Once per car, ever — the tiles are spent
+keep arriving every 3–5 seconds. A second flow field, aimed at the open ring around the
+car, is what actually routes them there. Then it fades. Once per car, ever — the tiles are spent
 and become an ordinary wreck.
 
 **Arriving is quiet.** No authored zombie is placed within about six tiles of a spawn
@@ -281,7 +290,7 @@ Implemented: fixed-timestep loop, device-agnostic input with drop-in join, tile 
 driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones with
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
-hear through walls and lunge, downed and revive, an intensity-driven wave director, HUD per viewport,
+hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director, HUD per viewport,
 a debug overlay, the level format with a tolerant importer, and a map editor.
 
 Not built yet: audible audio (the noise field is simulation only — nothing plays), menus and a controller-assignment screen, weapon pickups and

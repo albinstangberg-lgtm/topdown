@@ -121,8 +121,11 @@ export interface DirectorDeps {
   enemies: Enemy[];
   /** True when any player could see this point right now — the renderer's own test. */
   squadCanSee: (x: number, y: number) => boolean;
-  /** Put one zombie here. The world owns ids and kinds. */
-  spawn: (x: number, y: number) => void;
+  /**
+   * Put one zombie here. `hunting` means it arrived with a wave and knows roughly
+   * where the squad is; a wanderer does not.
+   */
+  spawn: (x: number, y: number, hunting: boolean) => void;
   /**
    * May a wave use plain floor when the map declares no zones? Survival says yes —
    * it is the endless mode and has to keep going. A story map says no: an authored
@@ -340,7 +343,7 @@ export class Director {
     this.ambientTimer = 3;
 
     const spot = this.pickAmbientSpot(deps);
-    if (spot) deps.spawn(spot.x, spot.y);
+    if (spot) deps.spawn(spot.x, spot.y, false);
   }
 
   private improviseDoor(deps: DirectorDeps): Door | null {
@@ -402,7 +405,7 @@ export class Director {
     const tiles = shuffled(door.tiles);
     for (let i = 0; i < size; i++) {
       const tile = tiles[i % tiles.length];
-      deps.spawn(tile.x, tile.y);
+      deps.spawn(tile.x, tile.y, true);
     }
     deps.onWave(door.cx, door.cy, size);
     return size;

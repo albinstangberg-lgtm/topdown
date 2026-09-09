@@ -1,8 +1,9 @@
 import type { InputState } from "../input/types";
 import { randRange } from "../core/math";
-import { TILE, type TileMap } from "../world/tilemap";
+import { TILE, type CarBody, type TileMap } from "../world/tilemap";
 import { tileDef } from "../world/tiles";
 import { buildTileMap, type LevelData } from "../world/level";
+import { FlowField } from "../world/flow";
 import { generateLevel } from "../world/generator";
 import { makeLight } from "../vision/visibility";
 import { circleOverlap, pointInWall } from "../world/collision";
@@ -38,6 +39,12 @@ const SPAWN_SAFE_RADIUS = 300;
 const ALARM_TIME = 20;
 /** Seconds between the alarm's noise pulses. Every zombie on the floor hears these. */
 const ALARM_PULSE = 0.6;
+/**
+ * How often the squad's flow field is swept again. A breadth-first pass over a few
+ * thousand tiles is far cheaper than the vision raycasts, but four times a second is
+ * already finer than anything walking at 140 units/s can tell.
+ */
+const FLOW_INTERVAL = 0.25;
 /** Seconds the whole squad has to stand on the exit before the mission ends. */
 const EXIT_DWELL = 0.8;
 
@@ -73,6 +80,13 @@ export class GameWorld {
    * There is only ever one: setting off a second car moves it rather than stacking.
    */
   readonly alarm = { active: false, x: 0, y: 0, timeLeft: 0, pulse: 0 };
+  /**
+   * Distance to the squad over the tile grid, swept a few times a second and read by
+   * every zombie that needs a route rather than a straight line. See `world/flow.ts`.
+   */
+  readonly squadFlow = new FlowField();
+  /** The same, toward whatever is currently screaming. Empty unless an alarm is going. */
+  readonly lureFlow = new FlowField();
   readonly events: GameEvent[] = [];
 
   /** Lamps baked into the level. Static, so their visibility is solved once on load. */
@@ -99,6 +113,7 @@ export class GameWorld {
   time = 0;
   private exitTimer = 0;
   private nextEnemyId = 1;
+  private flowTimer = 0;
   /** Grace period once the whole squad is down, so the wipe reads as a moment. */
   private wipeTimer = 0;
   private seed: number;
@@ -131,6 +146,8 @@ export class GameWorld {
     this.noise.clear();
     this.alarm.active = false;
     this.alarm.timeLeft = 0;
+    this.lureFlow.clear();
+    this.flowTimer = 0;
     this.time = 0;
     this.wipeTimer = 0;
     this.director.rebuild(this.map);
@@ -274,12 +291,15 @@ export class GameWorld {
     const revived = updateRevives(this.players, inputOf, dt);
     if (revived) this.events.push({ kind: "revive", x: revived.x, y: revived.y, text: `P${revived.id + 1} up` });
 
+    this.updateFlow(dt);
     const enemyDeps = {
       map: this.map,
       particles: this.particles,
       noise: this.noise,
       enemies: this.enemies,
       players: this.players,
+      squadFlow: this.squadFlow,
+      lureFlow: this.lureFlow,
       hurtPlayer: this.hurtPlayer,
     };
     for (const e of this.enemies) updateEnemy(e, enemyDeps, dt);
@@ -423,6 +443,18 @@ export class GameWorld {
   }
 
   /**
+   * Re-sweep the squad's flow field. Downed players are not goals: a horde should
+   * converge on whoever is still shooting, not pile onto the one already on the floor.
+   * With nobody up, the field empties and hunting zombies fall back to wandering.
+   */
+  private updateFlow(dt: number): void {
+    this.flowTimer -= dt;
+    if (this.flowTimer > 0) return;
+    this.flowTimer = FLOW_INTERVAL;
+    this.squadFlow.rebuild(this.map, this.players.filter((p) => !p.downed));
+  }
+
+  /**
    * A live car alarm: a huge noise pulse every few tenths of a second, so every zombie
    * on the floor walks to the car whether or not the director is still feeding. The
    * pulse is what makes an alarm a place rather than an event.
@@ -436,7 +468,10 @@ export class GameWorld {
       this.noise.emit(this.alarm.x, this.alarm.y, NOISE.alarm, "alarm");
       this.particles.burst(this.alarm.x, this.alarm.y, 4, 70, "#ff8a5c", 0.5, 3);
     }
-    if (this.alarm.timeLeft <= 0) this.alarm.active = false;
+    if (this.alarm.timeLeft <= 0) {
+      this.alarm.active = false;
+      this.lureFlow.clear();
+    }
   }
 
   /**
@@ -463,12 +498,36 @@ export class GameWorld {
     this.alarm.y = car.y + car.h / 2;
     this.alarm.timeLeft = ALARM_TIME;
     this.alarm.pulse = 0;
+    // The goal is the open ring AROUND the car, not the car: nothing can stand inside
+    // a wreck, and a horde should close on it from every side it can reach. The car
+    // does not move, so this is swept once and read for the whole twenty seconds.
+    this.lureFlow.rebuild(this.map, this.openRingAround(car));
 
     const released = this.director.panic(ALARM_TIME, this.directorDeps());
     this.particles.burst(this.alarm.x, this.alarm.y, 26, 240, "#ffb45c", 0.7, 4);
     this.events.push({
       kind: "alarm", x: this.alarm.x, y: this.alarm.y, count: released, text: "CAR ALARM",
     });
+  }
+
+  /** Every walkable tile touching a car — where a horde converging on it can stand. */
+  private openRingAround(car: CarBody): { x: number; y: number }[] {
+    const ring: { x: number; y: number }[] = [];
+    const seen = new Set<number>();
+    for (const i of car.tiles) {
+      const tx = i % this.map.cols;
+      const ty = Math.floor(i / this.map.cols);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = tx + dx;
+        const ny = ty + dy;
+        if (!this.map.inBounds(nx, ny) || this.map.isSolid(nx, ny)) continue;
+        const ni = this.map.idx(nx, ny);
+        if (seen.has(ni)) continue;
+        seen.add(ni);
+        ring.push(this.map.tileCenter(nx, ny));
+      }
+    }
+    return ring;
   }
 
   /**
@@ -489,8 +548,8 @@ export class GameWorld {
       enemies: this.enemies,
       squadCanSee: this.squadCanSee,
       allowFallback: this.mode !== "story",
-      spawn: (x, y) => {
-        this.enemies.push(createEnemy(this.nextEnemyId++, x, y, randomZombieKind()));
+      spawn: (x, y, hunting) => {
+        this.enemies.push(createEnemy(this.nextEnemyId++, x, y, randomZombieKind(), hunting));
       },
       onWave: (x, y, count) => {
         this.events.push({ kind: "horde", x, y, count });

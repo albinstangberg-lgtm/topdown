@@ -160,6 +160,15 @@ with the game.
   you are in its arc *and* it has line of sight. Symmetry with the player's vision is
   what makes a light-and-shadow shooter fair and readable: if a wall stops you seeing
   it, it cannot see you.
+- **Flow-field pathing** (`src/world/flow.ts`) — one breadth-first sweep out from the
+  squad gives every tile its distance to the nearest player, and any number of zombies
+  steer by reading one tile. Forty zombies cost one sweep, not forty path searches, and
+  the grid is what makes it that cheap: integer distances, four neighbours, a flat queue
+  and no allocation after the first build. Diagonals are recovered at query time, where
+  a corner check can see both sides of the step. A second field, aimed at whatever is
+  screaming, is how a car alarm actually pulls a floor. Measured at 160 zombies and four
+  split-screen viewports: 0.6ms of simulation against 9ms of drawing — the AI is not
+  where the frame goes.
 - **Hearing that ignores walls** (`src/sim/noise.ts`) — the second sense, and the one
   that makes a gunshot a decision. Noises are points with a radius and a half-second
   life; anything with ears inside one walks to it. Deliberately *not* gated on line of

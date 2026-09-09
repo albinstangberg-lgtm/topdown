@@ -126,6 +126,7 @@ export class Game {
     window.addEventListener("keydown", (e) => {
       if (e.code === "F1") { e.preventDefault(); this.debug.toggle(); }
       if (e.code === "F2") { e.preventDefault(); this.debug.showCollision = !this.debug.showCollision; }
+      if (e.code === "F3") { e.preventDefault(); this.debug.showFlow = !this.debug.showFlow; }
       if (e.code === "KeyR" && e.shiftKey) this.world.restart();
       const cycleAllowed = this.phase === "lobby" ||
         (this.phase === "playing" && this.world.mode === "survival");

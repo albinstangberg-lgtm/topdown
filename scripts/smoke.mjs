@@ -1589,6 +1589,101 @@ check("a spent alarm cannot go off again",
   alarmed.after.secondSpawned === 0 && alarmed.after.secondWaves === 0,
   JSON.stringify({ spawned: alarmed.after.secondSpawned, waves: alarmed.after.secondWaves }));
 
+// --- pathfinding ---------------------------------------------------------------
+//
+// A zombie that arrives with a wave knows roughly where the squad is and walks the
+// route, rather than shambling until the fight happens to find it. The wall here has
+// exactly one gap, in the corner furthest from both of them, so "walked round it" is
+// the only way across.
+
+const MAZE = [
+  "###############",
+  "#......#......#",
+  "#..P...#......#",
+  "#......#......#",
+  "#......#......#",
+  "#......#......#",
+  "#......#....E.#",
+  "#.............#",     // the only way through
+  "###############",
+].join("\n");
+
+const hunted = await zomPage.evaluate(async (art) => {
+  window.game.loadLevelText(art, "flow field");
+  await new Promise((r) => setTimeout(r, 300));
+  const w = window.game.world;
+  const T = 48;
+  w.mode = "story";
+  w.map.spawnZones.length = 0;
+  w.director.grace = 999;                  // this check is about the AI, not the director
+  const p = w.players[0];
+  p.health = p.maxHealth; p.downed = false; p.stance = "stand"; p.stanceTimer = 0;
+  p.x = 3.5 * T; p.y = 2.5 * T; p.prevX = p.x; p.prevY = p.y;
+
+  const e = w.enemies[0];
+  if (!e) return "no zombie in the maze";
+  e.x = 12.5 * T; e.y = 6.5 * T; e.prevX = e.x; e.prevY = e.y;
+  e.hunting = true;
+  e.state = "hunt";
+  e.alertness = 0;
+  e.stateTimer = 0;
+  const startDist = Math.hypot(p.x - e.x, p.y - e.y);
+  const sawAtStart = w.squadCanSee(e.x, e.y);
+
+  let crossed = false;
+  let closest = startDist;
+  // Deliberately runs the whole window rather than stopping at the crossing: getting
+  // through the gap is half the claim, closing on him afterwards is the other half.
+  const until = performance.now() + 9000;
+  while (performance.now() < until) {
+    if (e.x < 7 * T) crossed = true;       // through the gap, onto the player's side
+    closest = Math.min(closest, Math.hypot(p.x - e.x, p.y - e.y));
+    p.health = p.maxHealth;                // it will reach him; that is the point
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return {
+    sawAtStart,
+    crossed,
+    startDist: Math.round(startDist),
+    closest: Math.round(closest),
+    state: e.state,
+  };
+}, MAZE);
+check("a hunting zombie walks round a wall to reach the squad",
+  typeof hunted === "object" && !hunted.sawAtStart && hunted.crossed &&
+  hunted.closest < hunted.startDist / 2,
+  JSON.stringify(hunted));
+
+// And a wave arrives hunting, so the horde converges instead of milling about.
+await directorArena();
+const converge = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  w.enemies.length = 0;
+  w.director.grace = 0;
+  w.director.phase = "buildup";
+  w.director.waveTimer = 0;
+  const until = performance.now() + 2500;
+  while (performance.now() < until && w.director.waves === 0) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  const p = w.players[0];
+  const spread = () => w.enemies.reduce((n, e) => n + Math.hypot(p.x - e.x, p.y - e.y), 0) /
+    Math.max(1, w.enemies.length);
+  const before = spread();
+  const hunting = w.enemies.filter((e) => e.hunting).length;
+  await new Promise((r) => setTimeout(r, 2000));
+  return {
+    hunting,
+    count: w.enemies.length,
+    before: Math.round(before),
+    after: Math.round(spread()),
+  };
+});
+check("a wave arrives hunting and closes on the squad",
+  converge.count >= 4 && converge.hunting === converge.count &&
+  converge.after < converge.before - 60,
+  JSON.stringify(converge));
+
 check("zombie pages raised no exceptions", zomErrors.length === 0, zomErrors.join(" | "));
 
 await browser.close();
