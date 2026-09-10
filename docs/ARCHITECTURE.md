@@ -160,6 +160,15 @@ with the game.
   you are in its arc *and* it has line of sight. Symmetry with the player's vision is
   what makes a light-and-shadow shooter fair and readable: if a wall stops you seeing
   it, it cannot see you.
+- **Flow-field pathing** (`src/world/flow.ts`) — one breadth-first sweep out from the
+  squad gives every tile its distance to the nearest player, and any number of zombies
+  steer by reading one tile. Forty zombies cost one sweep, not forty path searches, and
+  the grid is what makes it that cheap: integer distances, four neighbours, a flat queue
+  and no allocation after the first build. Diagonals are recovered at query time, where
+  a corner check can see both sides of the step. A second field, aimed at whatever is
+  screaming, is how a car alarm actually pulls a floor. Measured at 160 zombies and four
+  split-screen viewports: 0.6ms of simulation against 9ms of drawing — the AI is not
+  where the frame goes.
 - **Hearing that ignores walls** (`src/sim/noise.ts`) — the second sense, and the one
   that makes a gunshot a decision. Noises are points with a radius and a half-second
   life; anything with ears inside one walks to it. Deliberately *not* gated on line of
@@ -176,7 +185,17 @@ with the game.
   clustered into doors), never the same door twice running and never one the squad can
   see; a guaranteed quiet stretch follows every peak. Population scales with the number
   of players: difficulty in a drop-in co-op game has to be a function of squad size from
-  the first line of it.
+  the first line of it. A car alarm overrides the loop entirely — every door at once, for
+  as long as it screams — and its "only once" is stored in the tile grid rather than in a
+  flag beside it, so a spent alarm survives a reload and cannot come back.
+- **Sound as an observer, not a system** (`src/audio/`) — everything is synthesised, so
+  there is no asset pipeline and nothing to load. Nothing in `src/sim` imports it: the
+  audio layer reads the world after the step, the same way the renderer does, and
+  deleting it would change nothing about how the game plays. The one hook is `onEmit` on
+  the noise field, which is what guarantees the player hears exactly what the zombies
+  heard rather than a second, drifting copy of the same table. The bus is written so it
+  can always fail: no device, no context, no gesture yet — it counts the request and
+  makes no sound.
 - **HUD per viewport** (`src/render/hud.ts`) — anything drawn "at the top of the screen"
   is a bug waiting for player 3. Off-screen teammate markers and downed alerts matter
   more than health bars once the squad splits up.

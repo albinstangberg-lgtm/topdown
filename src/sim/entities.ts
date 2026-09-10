@@ -129,6 +129,7 @@ export interface Enemy {
   maxHealth: number;
   /**
    * The zombie state machine.
+   * - `hunt` — knows roughly where the squad is and is walking there, by flow field
    * - `wander` — shambling with no idea you exist
    * - `investigate` — walking to a noise or to where you last were
    * - `chase` — has you in sight and is closing
@@ -136,7 +137,12 @@ export interface Enemy {
    * - `lunge` — committed to a direction, damage on contact
    * - `recover` — face down, cannot move or turn, takes extra damage
    */
-  state: "wander" | "investigate" | "chase" | "windup" | "lunge" | "recover";
+  state: "wander" | "hunt" | "investigate" | "chase" | "windup" | "lunge" | "recover";
+  /**
+   * Came in with a wave, so it has a heading. A horde that spawns and then mills about
+   * is not a horde. Ambient wanderers do not get this — being oblivious is their job.
+   */
+  hunting: boolean;
   /** Seconds left in windup / lunge / recover. Unused in the other states. */
   stateTimer: number;
   /** Locked in at the end of the windup: a lunge does not steer. */

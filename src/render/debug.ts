@@ -8,6 +8,7 @@ import { zombieDef } from "../sim/zombies";
 /** One colour per AI state, so the machine is readable at a glance. */
 const STATE_COLORS: Record<string, string> = {
   wander: "#4dff88",
+  hunt: "#4dd2ff",
   investigate: "#ffe14d",
   chase: "#ffaa4d",
   windup: "#ff4d4d",
@@ -23,6 +24,7 @@ const STATE_COLORS: Record<string, string> = {
 export class DebugOverlay {
   enabled = false;
   showCollision = false;
+  showFlow = false;
 
   toggle(): void { this.enabled = !this.enabled; }
 
@@ -41,6 +43,8 @@ export class DebugOverlay {
         }
       }
     }
+
+    if (this.showFlow) this.drawFlow(ctx, world, cam, vp);
 
     ctx.lineWidth = 1;
     for (const e of world.enemies) {
@@ -74,6 +78,34 @@ export class DebugOverlay {
     ctx.restore();
   }
 
+  /**
+   * The squad flow field, as one arrow per tile pointing downhill. The single fastest
+   * way to see why a horde is going the wrong way.
+   */
+  private drawFlow(
+    ctx: CanvasRenderingContext2D, world: GameWorld, cam: Camera, vp: Viewport,
+  ): void {
+    const field = world.lureFlow.goalCount > 0 ? world.lureFlow : world.squadFlow;
+    if (field.goalCount === 0) return;
+    const b = cam.visibleBounds(vp);
+    const dir = { x: 0, y: 0 };
+    ctx.strokeStyle = "rgba(90,210,255,0.5)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let ty = Math.floor(b.y0 / TILE); ty <= Math.ceil(b.y1 / TILE); ty++) {
+      for (let tx = Math.floor(b.x0 / TILE); tx <= Math.ceil(b.x1 / TILE); tx++) {
+        const cx = (tx + 0.5) * TILE;
+        const cy = (ty + 0.5) * TILE;
+        if (!field.steer(world.map, cx, cy, dir)) continue;
+        ctx.moveTo(cx - dir.x * 12, cy - dir.y * 12);
+        ctx.lineTo(cx + dir.x * 12, cy + dir.y * 12);
+        ctx.moveTo(cx + dir.x * 12, cy + dir.y * 12);
+        ctx.lineTo(cx + dir.x * 4 - dir.y * 5, cy + dir.y * 4 + dir.x * 5);
+      }
+    }
+    ctx.stroke();
+  }
+
   drawStats(
     ctx: CanvasRenderingContext2D, loop: GameLoop, world: GameWorld, dpr: number,
   ): void {
@@ -85,8 +117,9 @@ export class DebugOverlay {
       `bullets ${world.bullets.items.filter((b) => b.active).length}`,
       `director ${world.director.phase}  intensity ${world.director.intensity.toFixed(2)}`,
       `waves ${world.director.waves}  doors ${world.director.doorCount}  next ${Math.max(0, world.director.waveTimer).toFixed(1)}s`,
+      `grace ${world.director.grace.toFixed(1)}s  alarm ${world.alarm.active ? world.alarm.timeLeft.toFixed(1) + "s" : "-"}`,
       `vision pts ${world.players.reduce((n, p) => n + p.cone.poly.length / 2, 0).toFixed(0)}`,
-      `t ${world.time.toFixed(1)}s   [F2] collision grid`,
+      `t ${world.time.toFixed(1)}s   [F2] collision  [F3] flow field`,
     ];
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

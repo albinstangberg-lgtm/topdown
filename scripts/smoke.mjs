@@ -763,6 +763,10 @@ const deployed = await storyPage.evaluate(() => {
     map: w.map.name,
     placedZombies: w.map.enemySpawns.length,
     enemiesNow: w.enemies.length,
+    // Authored zombies inside the arrival bubble are dropped on purpose, so the two
+    // counts need not match — but nothing may end up standing on the squad.
+    nearSpawn: w.enemies.filter((e) => w.map.playerSpawns.some(
+      (p) => Math.hypot(p.x - e.x, p.y - e.y) < 300)).length,
     zones: w.map.spawnZones.length,
     stairs: w.map.stairs.length,
     objective: w.objective.kind,
@@ -770,7 +774,8 @@ const deployed = await storyPage.evaluate(() => {
 });
 check("a story mission loads with its placed zombies, zones and a way onward",
   deployed.phase === "playing" && deployed.mode === "story" &&
-  deployed.placedZombies > 0 && deployed.enemiesNow === deployed.placedZombies &&
+  deployed.placedZombies > 0 && deployed.enemiesNow > 0 &&
+  deployed.enemiesNow <= deployed.placedZombies && deployed.nearSpawn === 0 &&
   deployed.zones > 0 && deployed.stairs > 0 && deployed.objective === "stairs",
   JSON.stringify(deployed));
 
@@ -779,7 +784,9 @@ const zoneOnly = await storyPage.evaluate(async () => {
   const w = window.game.world;
   const zones = w.map.spawnZones;
   w.enemies.length = 0;
-  // Skip the opening breather: this check is about WHERE waves come from, not when.
+  // Skip the arrival grace and the opening breather: this check is about WHERE waves
+  // come from, not when.
+  w.director.grace = 0;
   w.director.phase = "buildup";
   w.director.waveTimer = 0;
 
@@ -1384,6 +1391,7 @@ check("touching zone tiles group into doors", doorCount === 4, `doors ${doorCoun
 const wave = await zomPage.evaluate(async () => {
   const w = window.game.world;
   w.enemies.length = 0;
+  w.director.grace = 0;
   w.director.phase = "buildup";
   w.director.waveTimer = 0;
 
@@ -1421,6 +1429,7 @@ const rotation = await zomPage.evaluate(async () => {
   const used = [];
   for (let i = 0; i < 4; i++) {
     w.enemies.length = 0;                 // stay under the cap so every wave lands
+    w.director.grace = 0;
     w.director.phase = "buildup";
     w.director.waveTimer = 0;
     const before = w.director.waves;
@@ -1443,6 +1452,7 @@ await directorArena();
 const peaked = await zomPage.evaluate(async () => {
   const w = window.game.world;
   const p = w.players[0];
+  w.director.grace = 0;
   w.director.phase = "buildup";
   w.director.waveTimer = 0;
   const until = performance.now() + 2500;
@@ -1468,6 +1478,323 @@ check("no new waves while the squad is at its peak",
   peaked.phaseAtPeak === "peak" && peaked.added === 0 &&
   (peaked.phaseAfter === "peak" || peaked.phaseAfter === "fade" || peaked.phaseAfter === "relax"),
   JSON.stringify(peaked));
+
+// --- arrival, cars and alarms -------------------------------------------------
+
+// Walking out of the stairwell into a bite is not difficulty. Nothing authored sits
+// inside the bubble around a spawn tile, and the director adds nothing for a moment.
+await zomPage.evaluate(async () => {
+  window.game.loadLevelText([
+    "###############",
+    "#.............#",
+    "#..P.......E..#",     // 8 tiles apart: outside the bubble, must survive
+    "#.............#",
+    "#....E........#",     // 2 tiles from the spawn: inside it, must be dropped
+    "###############",
+  ].join("\n"), "arrival safety");
+  await new Promise((r) => setTimeout(r, 300));
+});
+const arrival = await zomPage.evaluate(() => {
+  const w = window.game.world;
+  const T = 48;
+  const spawn = w.map.playerSpawns[0];
+  return {
+    authored: w.map.enemySpawns.length,
+    placed: w.enemies.length,
+    nearest: Math.round(Math.min(...w.enemies.map((e) => Math.hypot(e.x - spawn.x, e.y - spawn.y)))),
+    grace: w.director.grace > 0,
+    tile: T,
+  };
+});
+check("nothing is placed on top of where the squad arrives",
+  arrival.authored === 2 && arrival.placed === 1 && arrival.nearest > 300 && arrival.grace,
+  JSON.stringify(arrival));
+
+// A car is one body, however many tiles the author drew it with.
+const cars = await zomPage.evaluate(async () => {
+  window.game.loadLevelText([
+    "###############",
+    "#..P..........#",
+    "#....CC...AA..#",
+    "#....CC...AA..#",
+    "#.............#",
+    "###############",
+  ].join("\n"), "car bodies");
+  await new Promise((r) => setTimeout(r, 250));
+  const m = window.game.world.map;
+  return m.cars.map((c) => ({ tiles: c.tiles.length, w: c.w, h: c.h, alarmed: c.alarmed }));
+});
+check("touching car tiles are one vehicle, not four",
+  cars.length === 2 && cars.every((c) => c.tiles === 4 && c.w === 96 && c.h === 96) &&
+  cars.filter((c) => c.alarmed).length === 1,
+  JSON.stringify(cars));
+
+// The alarm: one bullet, every door at once, twenty seconds of noise — and never again
+// from that car, because the tiles themselves are spent.
+const alarmed = await zomPage.evaluate(async () => {
+  window.game.loadLevelText([
+    "#####################",
+    "#.........Z.........#",
+    "#...................#",
+    "#...................#",
+    "#...................#",
+    "#........AA.........#",
+    "#Z.......AA........Z#",
+    "#...................#",
+    "#.........P.........#",
+    "#...................#",
+    "#...................#",
+    "#...................#",
+    "#.........Z.........#",
+    "#####################",
+  ].join("\n"), "car alarm");
+  await new Promise((r) => setTimeout(r, 300));
+  const w = window.game.world;
+  const T = 48;
+  w.mode = "story";
+  w.enemies.length = 0;
+  w.director.grace = 0;
+  const p = w.players[0];
+  p.health = p.maxHealth; p.downed = false;
+
+  const before = { doors: w.director.doorCount, waves: w.director.waves, alarmTiles: 4 };
+  // Straight up into the car from below.
+  w.bullets.spawn(9.5 * T, 8.5 * T, -Math.PI / 2, 800, 10, "player", p.id, 1, "#fff");
+  await new Promise((r) => setTimeout(r, 500));
+
+  const after = {
+    ringing: w.alarm.active,
+    phase: w.director.phase,
+    spawned: w.enemies.length,
+    waves: w.director.waves,
+    stillAlarmed: w.map.cars.some((c) => c.alarmed),
+    carIntact: w.map.cars.length === 1 && w.map.cars[0].tiles.length === 4,
+    loud: w.noise.items.some((n) => n.active && n.kind === "alarm"),
+  };
+  // Shoot the same car again: it is spent, so nothing may happen a second time.
+  w.enemies.length = 0;
+  const wavesBefore = w.director.waves;
+  w.bullets.spawn(9.5 * T, 8.5 * T, -Math.PI / 2, 800, 10, "player", p.id, 1, "#fff");
+  await new Promise((r) => setTimeout(r, 300));
+  after.secondSpawned = w.enemies.length;
+  after.secondWaves = w.director.waves - wavesBefore;
+  return { before, after };
+});
+check("a bullet in an alarmed car opens every door, once",
+  alarmed.before.doors === 4 && alarmed.after.ringing && alarmed.after.phase === "panic" &&
+  alarmed.after.spawned >= 12 && alarmed.after.loud &&
+  !alarmed.after.stillAlarmed && alarmed.after.carIntact,
+  JSON.stringify(alarmed));
+check("a spent alarm cannot go off again",
+  alarmed.after.secondSpawned === 0 && alarmed.after.secondWaves === 0,
+  JSON.stringify({ spawned: alarmed.after.secondSpawned, waves: alarmed.after.secondWaves }));
+
+// --- pathfinding ---------------------------------------------------------------
+//
+// A zombie that arrives with a wave knows roughly where the squad is and walks the
+// route, rather than shambling until the fight happens to find it. The wall here has
+// exactly one gap, in the corner furthest from both of them, so "walked round it" is
+// the only way across.
+
+const MAZE = [
+  "###############",
+  "#......#......#",
+  "#..P...#......#",
+  "#......#......#",
+  "#......#......#",
+  "#......#......#",
+  "#......#....E.#",
+  "#.............#",     // the only way through
+  "###############",
+].join("\n");
+
+const hunted = await zomPage.evaluate(async (art) => {
+  window.game.loadLevelText(art, "flow field");
+  await new Promise((r) => setTimeout(r, 300));
+  const w = window.game.world;
+  const T = 48;
+  w.mode = "story";
+  w.map.spawnZones.length = 0;
+  w.director.grace = 999;                  // this check is about the AI, not the director
+  const p = w.players[0];
+  p.health = p.maxHealth; p.downed = false; p.stance = "stand"; p.stanceTimer = 0;
+  p.x = 3.5 * T; p.y = 2.5 * T; p.prevX = p.x; p.prevY = p.y;
+
+  const e = w.enemies[0];
+  if (!e) return "no zombie in the maze";
+  e.x = 12.5 * T; e.y = 6.5 * T; e.prevX = e.x; e.prevY = e.y;
+  e.hunting = true;
+  e.state = "hunt";
+  e.alertness = 0;
+  e.stateTimer = 0;
+  const startDist = Math.hypot(p.x - e.x, p.y - e.y);
+  const sawAtStart = w.squadCanSee(e.x, e.y);
+
+  let crossed = false;
+  let closest = startDist;
+  // Deliberately runs the whole window rather than stopping at the crossing: getting
+  // through the gap is half the claim, closing on him afterwards is the other half.
+  const until = performance.now() + 9000;
+  while (performance.now() < until) {
+    if (e.x < 7 * T) crossed = true;       // through the gap, onto the player's side
+    closest = Math.min(closest, Math.hypot(p.x - e.x, p.y - e.y));
+    p.health = p.maxHealth;                // it will reach him; that is the point
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return {
+    sawAtStart,
+    crossed,
+    startDist: Math.round(startDist),
+    closest: Math.round(closest),
+    state: e.state,
+  };
+}, MAZE);
+check("a hunting zombie walks round a wall to reach the squad",
+  typeof hunted === "object" && !hunted.sawAtStart && hunted.crossed &&
+  hunted.closest < hunted.startDist / 2,
+  JSON.stringify(hunted));
+
+// And a wave arrives hunting, so the horde converges instead of milling about.
+await directorArena();
+const converge = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  w.enemies.length = 0;
+  w.director.grace = 0;
+  w.director.phase = "buildup";
+  w.director.waveTimer = 0;
+  const until = performance.now() + 2500;
+  while (performance.now() < until && w.director.waves === 0) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  const p = w.players[0];
+  const spread = () => w.enemies.reduce((n, e) => n + Math.hypot(p.x - e.x, p.y - e.y), 0) /
+    Math.max(1, w.enemies.length);
+  const before = spread();
+  const hunting = w.enemies.filter((e) => e.hunting).length;
+  await new Promise((r) => setTimeout(r, 2000));
+  return {
+    hunting,
+    count: w.enemies.length,
+    before: Math.round(before),
+    after: Math.round(spread()),
+  };
+});
+check("a wave arrives hunting and closes on the squad",
+  converge.count >= 4 && converge.hunting === converge.count &&
+  converge.after < converge.before - 60,
+  JSON.stringify(converge));
+
+// --- audio ---------------------------------------------------------------------
+//
+// The bus counts every sound it is ASKED for, whether or not a device exists, so these
+// checks work in a headless runner with no output at all. What they are really testing
+// is the wiring: that the noise the zombies hear is the noise the player hears.
+
+const audible = await zomPage.evaluate(async () => {
+  const g = window.game, w = g.world;
+  window.game.loadLevelText([
+    "###############",
+    "#.............#",
+    "#..P......G...#",
+    "#.............#",
+    "###############",
+  ].join("\n"), "audio wiring");
+  await new Promise((r) => setTimeout(r, 300));
+  w.mode = "story";
+  w.map.spawnZones.length = 0;
+  w.enemies.length = 0;
+  w.director.grace = 999;
+  const T = 48;
+  const p = w.players[0];
+  p.health = p.maxHealth; p.downed = false; p.stance = "stand"; p.stanceTimer = 0;
+  p.x = 3.5 * T; p.y = 2.5 * T; p.prevX = p.x; p.prevY = p.y;
+  p.facing = 0; p.weaponUp = 1; p.weaponHold = 1;
+  p.ammo = p.weapon.magazine; p.reloadTimer = 0; p.fireCooldown = 0;
+
+  const before = { ...g.audio.bus.played };
+  // A real shot through the real fire path. Where it goes is up to the cursor, which
+  // has its own checks — so the pane gets its own bullet, down the real bullet path.
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }));
+  await new Promise((r) => setTimeout(r, 400));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space" }));
+  w.bullets.spawn(6 * T, 2.5 * T, 0, 800, 10, "player", p.id, 1, "#fff");
+  await new Promise((r) => setTimeout(r, 300));
+  const after = g.audio.bus.played;
+  const since = (k) => (after[k] ?? 0) - (before[k] ?? 0);
+  return { shot: since("shot"), glass: since("glass"), pane: w.map.tileAt(10, 2) };
+});
+check("firing is heard, and so is the pane it breaks",
+  audible.shot > 0 && audible.glass > 0 && audible.pane === 17,
+  JSON.stringify(audible));
+
+// Distance and side, against the nearest player.
+const placed = await zomPage.evaluate(() => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const ears = [{ x: p.x, y: p.y, facing: 0 }];
+  const bus = window.game.audio.bus;
+  const near = bus.place(p.x + 40, p.y, ears, false);
+  const right = bus.place(p.x + 300, p.y, ears, false);
+  const left = bus.place(p.x - 300, p.y, ears, false);
+  const away = bus.place(p.x + 5000, p.y, ears, false);
+  return {
+    near: +near.gain.toFixed(2),
+    far: +right.gain.toFixed(2),
+    rightPan: +right.pan.toFixed(2),
+    leftPan: +left.pan.toFixed(2),
+    away: away.gain,
+  };
+});
+check("sounds fall off with distance and sit on the right side",
+  placed.near > placed.far && placed.far > 0 && placed.away === 0 &&
+  placed.rightPan > 0.4 && placed.leftPan < -0.4,
+  JSON.stringify(placed));
+
+// The windup is a tell you can hear, which matters when it is behind you.
+const screech = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  const g = window.game;
+  const T = 48;
+  w.enemies.length = 0;
+  const before = g.audio.bus.played.screech ?? 0;
+  // Borrow a zombie by loading a map that has one, rather than reaching into the sim.
+  window.game.loadLevelText([
+    "###############",
+    "#.............#",
+    "#..P.......E..#",
+    "#.............#",
+    "###############",
+  ].join("\n"), "audio screech");
+  await new Promise((r) => setTimeout(r, 300));
+  w.director.grace = 999;
+  const p = w.players[0];
+  const e = w.enemies[0];
+  if (!e) return "no zombie";
+  p.x = 4.5 * T; p.y = 2.5 * T; p.prevX = p.x; p.prevY = p.y;
+  e.x = 7 * T; e.y = 2.5 * T; e.prevX = e.x; e.prevY = e.y;
+  e.facing = Math.PI; e.state = "wander"; e.alertness = 0; e.attackCooldown = 0;
+  const until = performance.now() + 3000;
+  while (performance.now() < until && (g.audio.bus.played.screech ?? 0) === before) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return { before, after: g.audio.bus.played.screech ?? 0, state: e.state };
+});
+check("a zombie winding up screeches",
+  typeof screech === "object" && screech.after > screech.before,
+  JSON.stringify(screech));
+
+// Mute is a preference, so it has to survive the page.
+const muting = await zomPage.evaluate(() => {
+  const a = window.game.audio;
+  const first = a.toggleMute();
+  const stored = localStorage.getItem("topdown.audio.muted");
+  const second = a.toggleMute();
+  return { first, stored, second, muted: a.bus.isMuted };
+});
+check("mute toggles and is remembered",
+  muting.first === true && muting.stored === "1" &&
+  muting.second === false && muting.muted === false,
+  JSON.stringify(muting));
 
 check("zombie pages raised no exceptions", zomErrors.length === 0, zomErrors.join(" | "));
 

@@ -22,6 +22,9 @@ import type { Enemy, Player } from "./entities";
  * - **relax** is a guaranteed quiet stretch — no waves at all, just the ambient
  *   wanderers, so the squad can move, reload and breathe.
  *
+ * A car alarm cuts across all of it: **panic** overrides whatever phase was running,
+ * opens every door at once and keeps feeding on a short timer until the alarm dies.
+ *
  * **Intensity** is the survivor-stress metric: it climbs when you take damage, when
  * zombies are close, and hard when someone goes down, and it decays whenever none of
  * that is happening. The squad's intensity is the worst player's, not the average —
@@ -33,7 +36,7 @@ import type { Enemy, Player } from "./entities";
  * several zones play differently each run: the same level, a different door each time.
  */
 
-export type DirectorPhase = "buildup" | "peak" | "fade" | "relax";
+export type DirectorPhase = "buildup" | "peak" | "fade" | "relax" | "panic";
 
 export interface DirectorTuning {
   /** Wanderers kept alive at all times, per player. The map is never empty. */
@@ -73,6 +76,13 @@ export const SURVIVAL_TUNING: DirectorTuning = {
   relax: [12, 20],
 };
 
+/** Seconds after a floor loads in which nothing at all arrives. You get to look around. */
+const ARRIVAL_GRACE = 6;
+/** Seconds between waves while an alarm is going. */
+const PANIC_GAP: [number, number] = [3, 5];
+/** The live cap is multiplied by this during a panic — a super wave needs the headroom. */
+const PANIC_CAP = 2.5;
+
 /** Intensity at which the squad counts as peaking. */
 const PEAK_INTENSITY = 0.85;
 /** Intensity the squad has to come back down to before a relax can start. */
@@ -111,8 +121,11 @@ export interface DirectorDeps {
   enemies: Enemy[];
   /** True when any player could see this point right now — the renderer's own test. */
   squadCanSee: (x: number, y: number) => boolean;
-  /** Put one zombie here. The world owns ids and kinds. */
-  spawn: (x: number, y: number) => void;
+  /**
+   * Put one zombie here. `hunting` means it arrived with a wave and knows roughly
+   * where the squad is; a wanderer does not.
+   */
+  spawn: (x: number, y: number, hunting: boolean) => void;
   /**
    * May a wave use plain floor when the map declares no zones? Survival says yes —
    * it is the endless mode and has to keep going. A story map says no: an authored
@@ -133,6 +146,10 @@ export class Director {
   lastDoor = -1;
   /** How many waves this floor has seen. Handy for the debug overlay. */
   waves = 0;
+  /** Seconds of car alarm left. While this is above zero the phase is `panic`. */
+  alarm = 0;
+  /** Seconds before the director may put anything on a freshly loaded floor. */
+  grace = ARRIVAL_GRACE;
 
   private doors: Door[] = [];
   private phaseTimer = 0;
@@ -160,6 +177,8 @@ export class Director {
   reset(): void {
     this.phase = "relax";
     this.phaseTimer = randRange(4, 7);
+    this.alarm = 0;
+    this.grace = ARRIVAL_GRACE;
     this.intensity = 0;
     this.waveTimer = randRange(...this.tuning.waveGap);
     this.waves = 0;
@@ -177,12 +196,23 @@ export class Director {
   update(dt: number, deps: DirectorDeps): void {
     if (deps.players.length === 0) return;
     this.updateIntensity(dt, deps);
+
+    // Arriving on a floor should be quiet. Walking out of the stairwell into a bite
+    // is not difficulty, it is the game starting before you did.
+    if (this.grace > 0) {
+      this.grace -= dt;
+      return;
+    }
+
     this.updatePhase(dt);
     this.updateAmbient(dt, deps);
 
-    if (this.phase !== "buildup") return;
+    if (this.phase !== "buildup" && this.phase !== "panic") return;
 
-    const cap = this.tuning.maxAlivePerPlayer * deps.players.length;
+    const panicking = this.phase === "panic";
+    const cap = Math.floor(
+      this.tuning.maxAlivePerPlayer * deps.players.length * (panicking ? PANIC_CAP : 1),
+    );
     this.waveTimer -= dt;
     if (this.waveTimer > 0 || deps.enemies.length >= cap) return;
 
@@ -190,13 +220,41 @@ export class Director {
       this.tuning.wavePerPlayer * deps.players.length, cap - deps.enemies.length,
     );
     if (size <= 0) return;
-    if (this.releaseWave(size, deps)) {
-      this.waveTimer = randRange(...this.tuning.waveGap);
+    if (this.releaseWave(size, deps, panicking)) {
+      this.waveTimer = randRange(...(panicking ? PANIC_GAP : this.tuning.waveGap));
       this.blockedFor = 0;
     } else {
       // Nowhere to put them yet. Try again next step rather than losing the wave.
       this.blockedFor += dt;
     }
+  }
+
+  /**
+   * A car alarm went off. Every door opens at once and keeps opening until it stops —
+   * this is the one thing that overrides the phase loop, including a relax, and it
+   * ignores the "not while anybody is watching" rule, because a panic event that
+   * politely waits to be unobserved is not a panic event.
+   */
+  panic(seconds: number, deps: DirectorDeps): number {
+    this.grace = 0;
+    this.alarm = seconds;
+    this.phase = "panic";
+    this.waveTimer = randRange(...PANIC_GAP);
+
+    const cap = Math.floor(this.tuning.maxAlivePerPlayer * deps.players.length * PANIC_CAP);
+    const perDoor = this.tuning.wavePerPlayer * deps.players.length;
+    let released = 0;
+    for (const door of this.doors) {
+      // `enemies` grows as we spawn, so it already counts everything released so far.
+      if (deps.enemies.length >= cap) break;
+      if (!this.farEnough(door, deps)) continue;
+      released += this.emptyDoor(door, perDoor, deps);
+    }
+    if (released > 0) {
+      this.waves++;
+      this.lastDoor = -1;      // every door just fired; none of them is "the last one"
+    }
+    return released;
   }
 
   /**
@@ -230,6 +288,18 @@ export class Director {
   }
 
   private updatePhase(dt: number): void {
+    if (this.phase === "panic") {
+      this.alarm -= dt;
+      if (this.alarm <= 0) {
+        this.alarm = 0;
+        // The alarm dies with the floor in uproar: straight into the fade, never
+        // into a fresh buildup.
+        this.phase = "fade";
+        this.phaseTimer = this.tuning.fadeMax;
+      }
+      return;
+    }
+
     this.phaseTimer -= dt;
     switch (this.phase) {
       case "buildup":
@@ -273,7 +343,7 @@ export class Director {
     this.ambientTimer = 3;
 
     const spot = this.pickAmbientSpot(deps);
-    if (spot) deps.spawn(spot.x, spot.y);
+    if (spot) deps.spawn(spot.x, spot.y, false);
   }
 
   private improviseDoor(deps: DirectorDeps): Door | null {
@@ -317,39 +387,50 @@ export class Director {
    * too close, which is a reason to wait rather than to spawn something in the
    * squad's face — up to a point, after which the furthest door is used anyway.
    */
-  private releaseWave(size: number, deps: DirectorDeps): boolean {
-    const door = this.pickDoor(deps);
+  private releaseWave(size: number, deps: DirectorDeps, ignoreSight = false): boolean {
+    const door = this.pickDoor(deps, ignoreSight);
     if (!door) return false;
-
-    // Spread the group across the door's tiles, cycling if the wave is wider than the
-    // door. Deliberately no jitter: a spawn is always exactly on a tile the author
-    // painted, and two zombies sharing one push apart on the first step anyway.
-    const tiles = shuffled(door.tiles);
-    for (let i = 0; i < size; i++) {
-      const tile = tiles[i % tiles.length];
-      deps.spawn(tile.x, tile.y);
-    }
+    this.emptyDoor(door, size, deps);
     this.lastDoor = this.doors.indexOf(door);   // -1 for an improvised one, which is fine
     this.waves++;
-    deps.onWave(door.cx, door.cy, size);
     return true;
   }
 
-  private pickDoor(deps: DirectorDeps): Door | null {
+  /**
+   * Put `size` zombies through one door. Spread across its tiles, cycling if the wave
+   * is wider than the door. Deliberately no jitter: a spawn is always exactly on a
+   * tile the author painted, and two zombies sharing one push apart on the first step.
+   */
+  private emptyDoor(door: Door, size: number, deps: DirectorDeps): number {
+    const tiles = shuffled(door.tiles);
+    for (let i = 0; i < size; i++) {
+      const tile = tiles[i % tiles.length];
+      deps.spawn(tile.x, tile.y, true);
+    }
+    deps.onWave(door.cx, door.cy, size);
+    return size;
+  }
+
+  private farEnough(door: Door, deps: DirectorDeps): boolean {
+    return deps.players.every(
+      (p) => Math.hypot(p.x - door.cx, p.y - door.cy) >= MIN_WAVE_DISTANCE,
+    );
+  }
+
+  private pickDoor(deps: DirectorDeps, ignoreSight = false): Door | null {
     if (this.doors.length === 0) {
       return deps.allowFallback ? this.improviseDoor(deps) : null;
     }
 
-    const farEnough = (d: Door) =>
-      deps.players.every((p) => Math.hypot(p.x - d.cx, p.y - d.cy) >= MIN_WAVE_DISTANCE);
-
     const candidates = this.doors.filter((d, i) => {
       if (i === this.lastDoor && this.doors.length > 1) return false;
-      return farEnough(d);
+      return this.farEnough(d, deps);
     });
     if (candidates.length === 0) return null;
 
-    const unseen = candidates.filter((d) => !deps.squadCanSee(d.cx, d.cy));
+    const unseen = ignoreSight
+      ? candidates
+      : candidates.filter((d) => !deps.squadCanSee(d.cx, d.cy));
     if (unseen.length > 0) return unseen[Math.floor(Math.random() * unseen.length)];
 
     // Every door is in view. Hold off — but not forever, or standing in the open

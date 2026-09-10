@@ -6,6 +6,7 @@ import { inCone } from "../vision/visibility";
 import type { Enemy, Player } from "./entities";
 import type { ParticlePool } from "./pools";
 import type { NoiseField } from "./noise";
+import type { FlowField } from "../world/flow";
 import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
 
 /**
@@ -14,7 +15,7 @@ import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
  * A six-state machine, and every number it runs on comes from the row in `ZOMBIE_DEFS`
  * named by `e.kind` — so a new kind of zombie is a table entry, not a new file.
  *
- *   wander → investigate → chase → windup → lunge → recover
+ *   wander → hunt → investigate → chase → windup → lunge → recover
  *
  * They have two senses, and both are the ones the player already understands:
  *
@@ -24,6 +25,17 @@ import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
  * - **Hearing** goes through walls. A gunshot pulls a room toward you whether or not
  *   anything could have watched you fire, which is what stops shooting from cover
  *   being free.
+ *
+ * Neither sense tells a zombie where you are when it has never seen or heard you, and
+ * a wave that spawns behind three walls would otherwise shamble around at random until
+ * the fight found it. So a zombie that arrives WITH A WAVE is `hunting`: it reads a
+ * heading off the squad flow field and walks the actual route to you. Ambient wanderers
+ * do not get one — being oblivious is what they are for.
+ *
+ * The field is also what gets an investigating zombie round a corner. A noise it cannot
+ * see the source of was almost always made by a player — a shot, a sprint, a pane going
+ * out — so when the straight line to the noise is blocked, the squad field is the right
+ * heading rather than a guess.
  *
  * They never shoot. The attack is a telegraphed leap you can dodge: it plants, it
  * winds up where you can see it, it commits to a direction, and if you are not there
@@ -36,7 +48,9 @@ const ARRIVED = 26;
 /** Seconds of alertness a fresh sighting or a noise is worth. Decays in `investigate`. */
 const ALERT_FULL = 1;
 
-export function createEnemy(id: number, x: number, y: number, kind = DEFAULT_ZOMBIE): Enemy {
+export function createEnemy(
+  id: number, x: number, y: number, kind = DEFAULT_ZOMBIE, hunting = false,
+): Enemy {
   const def = zombieDef(kind);
   return {
     id,
@@ -47,7 +61,8 @@ export function createEnemy(id: number, x: number, y: number, kind = DEFAULT_ZOM
     facing: randRange(0, TAU),
     health: def.health,
     maxHealth: def.health,
-    state: "wander",
+    state: hunting ? "hunt" : "wander",
+    hunting,
     stateTimer: 0,
     lungeDirX: 0,
     lungeDirY: 0,
@@ -68,6 +83,10 @@ export interface EnemyDeps {
   noise: NoiseField;
   enemies: Enemy[];
   players: Player[];
+  /** Distance-to-squad over the tile grid. The heading a hunting zombie walks. */
+  squadFlow: FlowField;
+  /** Distance to whatever is currently screaming, or an empty field when nothing is. */
+  lureFlow: FlowField;
   /** How a bite reaches a player. The world owns damage, so it can raise the event. */
   hurtPlayer: (p: Player, amount: number) => void;
 }
@@ -129,21 +148,48 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
       e.targetId = -1;
     }
 
-    if (e.alertness > 0) {
+    // A car alarm outranks everything a zombie has its own opinion about.
+    if (deps.lureFlow.goalCount > 0 && deps.lureFlow.steer(deps.map, e.x, e.y, heading)) {
+      e.state = "investigate";
+      e.alertness = ALERT_FULL;
+      e.targetId = -1;
+      speed = def.chaseSpeed;
+      desiredX = heading.x;
+      desiredY = heading.y;
+      lookAngle = Math.atan2(heading.y, heading.x);
+    } else if (e.alertness > 0) {
       e.state = "investigate";
       e.alertness -= dt * 0.25;
       const dx = e.lastSeenX - e.x;
       const dy = e.lastSeenY - e.y;
       const dist = Math.hypot(dx, dy);
-      if (dist > ARRIVED) {
-        desiredX = dx / dist;
-        desiredY = dy / dist;
-        lookAngle = Math.atan2(dy, dx);
-      } else {
+      if (dist <= ARRIVED) {
         // Arrived and found nothing: mill about, lose interest faster.
         e.alertness -= dt;
         lookAngle = e.facing + Math.sin(performance.now() * 0.002 + e.id) * 1.2;
+      } else if (hasLineOfSight(deps.map, e.x, e.y, e.lastSeenX, e.lastSeenY)) {
+        desiredX = dx / dist;
+        desiredY = dy / dist;
+        lookAngle = Math.atan2(dy, dx);
+      } else if (deps.squadFlow.steer(deps.map, e.x, e.y, heading)) {
+        // Can't see where the noise came from. A player made it, so the squad field
+        // is a better guess than walking into the wall between here and there.
+        desiredX = heading.x;
+        desiredY = heading.y;
+        lookAngle = Math.atan2(heading.y, heading.x);
+      } else {
+        desiredX = dx / dist;
+        desiredY = dy / dist;
+        lookAngle = Math.atan2(dy, dx);
       }
+    } else if (e.hunting && deps.squadFlow.steer(deps.map, e.x, e.y, heading)) {
+      // Came in with a wave: walk the route to the squad rather than wander into it.
+      e.state = "hunt";
+      e.targetId = -1;
+      speed = def.chaseSpeed * 0.85;
+      desiredX = heading.x;
+      desiredY = heading.y;
+      lookAngle = Math.atan2(heading.y, heading.x);
     } else {
       e.state = "wander";
       e.targetId = -1;
@@ -235,8 +281,9 @@ function bite(e: Enemy, deps: EnemyDeps, damage: number): boolean {
   return false;
 }
 
-/** Scratch vector for `applySeparation`, so the AI loop never allocates. */
+/** Scratch vectors, so the AI loop never allocates. */
 const separation = { x: 0, y: 0 };
+const heading = { x: 0, y: 0 };
 
 /** Keep zombies from piling into one blob. */
 function applySeparation(e: Enemy, deps: EnemyDeps): void {

@@ -16,6 +16,7 @@ import { DebugOverlay } from "./render/debug";
 import { Lobby, MAX_PLAYERS } from "./menu/lobby";
 import { ModeSelect } from "./menu/modeSelect";
 import { MissionSelect } from "./menu/missionSelect";
+import { GameAudio } from "./audio/gameAudio";
 import {
   CAMPAIGN, floorCount, loadProgress, missionLevel, saveProgress, type Mission,
 } from "./campaign/campaign";
@@ -55,6 +56,8 @@ export class Game {
   private readonly input: InputManager;
   readonly world = new GameWorld();
   private readonly debug = new DebugOverlay();
+  /** Public for the smoke tests: what the game sounds like. See `src/audio/`. */
+  readonly audio = new GameAudio();
   /** Public for the debug console and the smoke tests — one camera per viewport. */
   cameras: Camera[] = [];
   views: Viewport[] = [];
@@ -121,17 +124,30 @@ export class Game {
       this.relayout();
     }
 
+    this.audio.listenTo(this.world);
+    this.audio.cameraRotates = this.cameraMode === "rotating";
+    // Browsers will not start audio until the person has touched the page, so every
+    // first input doubles as the thing that switches the sound on.
+    const wake = (): void => this.audio.wake();
+    window.addEventListener("keydown", wake);
+    window.addEventListener("pointerdown", wake);
+    window.addEventListener("gamepadconnected", wake);
+
     window.addEventListener("resize", this.onResize);
     this.installLevelImport(canvas);
     window.addEventListener("keydown", (e) => {
       if (e.code === "F1") { e.preventDefault(); this.debug.toggle(); }
       if (e.code === "F2") { e.preventDefault(); this.debug.showCollision = !this.debug.showCollision; }
+      if (e.code === "F3") { e.preventDefault(); this.debug.showFlow = !this.debug.showFlow; }
       if (e.code === "KeyR" && e.shiftKey) this.world.restart();
       const cycleAllowed = this.phase === "lobby" ||
         (this.phase === "playing" && this.world.mode === "survival");
       if (e.code === "BracketLeft" && cycleAllowed) this.cycleLevel(-1);
       if (e.code === "BracketRight" && cycleAllowed) this.cycleLevel(1);
       if (e.code === "KeyC" && !e.ctrlKey && !e.metaKey) this.toggleCameraMode();
+      if (e.code === "KeyM" && !e.ctrlKey && !e.metaKey) {
+        this.setBanner(this.audio.toggleMute() ? "sound off" : "sound on");
+      }
     });
     this.onResize();
 
@@ -316,6 +332,7 @@ export class Game {
       const p = this.world.players[i];
       if (p) this.cameras[i].snapTo(p.x, p.y, p.facing);
     }
+    this.audio.cameraRotates = this.cameraMode === "rotating";
     this.setBanner(`camera: ${this.cameraMode}`);
   }
 
@@ -438,6 +455,8 @@ export class Game {
     }
 
     this.world.update(dt, this.inputOf, this.resolveAim);
+    this.audio.update(this.world, dt);
+    this.audio.handle(this.world.events);
     this.drainEvents();
     if (this.banner.time > 0) this.banner.time -= dt;
   }
@@ -479,6 +498,11 @@ export class Game {
     for (const ev of this.world.events) {
       if (ev.kind === "kill" && ev.x !== undefined && ev.y !== undefined) {
         this.shakeNear(ev.x, ev.y, 0.35, 520);
+      } else if (ev.kind === "alarm") {
+        // This one you DO get told about: it is a mistake with consequences, and the
+        // player has to be able to connect the bang to the twenty seconds that follow.
+        this.shakeAll(0.8);
+        if (ev.text) this.setBanner(ev.text);
       } else if (ev.kind === "horde") {
         // No banner: a wave should be something you hear and feel, not read.
         this.shakeAll(0.35);

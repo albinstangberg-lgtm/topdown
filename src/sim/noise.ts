@@ -11,7 +11,7 @@
  * walks toward the one that is nearer to filling its ears rather than the newer one.
  */
 
-export type NoiseKind = "shot" | "break" | "step" | "impact";
+export type NoiseKind = "shot" | "break" | "step" | "impact" | "alarm";
 
 export interface Noise {
   active: boolean;
@@ -32,6 +32,12 @@ const MAX_NOISES = 64;
 
 export class NoiseField {
   readonly items: Noise[] = [];
+  /**
+   * Optional observer, called for every emission. The audio layer hangs off this so
+   * what the player hears is exactly what the zombies heard; the sim itself neither
+   * knows nor cares whether anything is listening.
+   */
+  onEmit: ((n: Noise) => void) | null = null;
   private cursor = 0;
 
   constructor() {
@@ -50,6 +56,7 @@ export class NoiseField {
     n.radius = radius;
     n.kind = kind;
     n.life = NOISE_LIFE;
+    this.onEmit?.(n);
   }
 
   update(dt: number): void {
@@ -91,4 +98,6 @@ export const NOISE = {
   sprint: 180,
   /** Hitting the floor at the end of a dive. */
   dive: 250,
+  /** A car alarm. Loud enough to be heard across any floor — that is the point of it. */
+  alarm: 1600,
 } as const;

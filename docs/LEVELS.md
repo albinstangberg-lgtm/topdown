@@ -18,7 +18,7 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `7` | `>` | Exit | no | no | the safe room. Get the whole living squad standing on it to finish a story mission |
 | `8` | `Z` | Spawn zone | no | no | the director draws from these, picking a different one each time and never in sight |
 | `9` | `^` | Stairs | no | no | the way up. The whole squad standing on it loads the mission's next floor |
-| `10` | `C` | Car | yes | yes | a wreck. Cover you cannot see through — author them as 2×2 blocks |
+| `10` | `C` | Car | yes | yes | a wreck. Cover you cannot see through — author them as blocks, any size |
 | `11` | `W` | Window | yes | **no** | see and shoot through, nobody walks through — until a bullet smashes it. A zombie entry point either way |
 | `12` | `R` | Reception desk | yes | **no** | waist-high counter: blocks bodies, you shoot over it |
 | `13` | `c` | Cubicle wall | yes | yes | office partition. **Lowercase c** — `C` is a car |
@@ -27,6 +27,7 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `16` | `_` | Blocked floor | yes | no | looks and lights like floor, but nobody walks on it. Sight **and bullets** pass over — shape rooms with it |
 | `17` | `g` | Broken glass | no | no | what glass leaves behind: an open hole with shards on the floor. You rarely author this by hand |
 | `18` | `w` | Broken window | no | no | a smashed window: walk straight through, and **still** a way in for the director |
+| `19` | `A` | Alarmed car | yes | yes | a wreck with a live alarm. Shoot it and every door on the floor opens at once — once |
 
 `solid`, `opaque` and `blocksShots` are separate flags on purpose, because they are three
 different questions: **can a body pass, can a look pass, can a bullet pass.** Collision
@@ -47,6 +48,23 @@ keeps the zone.
 
 `breaksInto` on the tile is what drives all of this: point any tile at another and it
 becomes breakable.
+
+**Cars are one object, not a pile of tiles.** Touching `C` and `A` tiles (orthogonally —
+corner to corner is two cars) are gathered into a single vehicle with one outline, a roof
+panel down its long axis and a windscreen across the short one, so a 2×3 block reads as a
+car pointing north rather than as six squares. Draw them any size and any shape; the
+renderer works out which way the thing is facing from its bounding box.
+
+**Car alarms.** An `A` is a car with a live alarm, drawn in warning colours with hazard
+lights on its corners so you can tell it from an ordinary wreck. Put a bullet in it and
+the director drops whatever it was doing: a wave comes out of *every* door at once, and
+the car screams for twenty seconds, emitting a noise loud enough to pull every zombie on
+the floor toward it while more keep coming. Then it stops.
+
+It can only happen once per car, and the "once" is stored in the grid rather than beside
+it: the car's tiles become ordinary `C`, so a spent alarm survives a save, a reload and
+any refresh, and cannot come back. Use them sparingly — one or two on a floor is a trap
+worth respecting; a car park full of them is just a minefield.
 
 Blocked floor (`16`) is the one for shaping a level's look. It is lit like floor and you
 can see and shoot straight across it, so it reads as ground rather than as architecture —
@@ -138,7 +156,10 @@ cannot drift out of sync with the game — there is only one definition of what 
 - **Players**: authored `2` tiles first, one per player in grid order. With no `2` tiles,
   players spawn beside the squad, and the first player at the most open point on the map.
 - **Zombies (`3`)**: one enemy per tile, placed when the map loads, never replaced.
-  This is the part of an encounter a player can learn.
+  This is the part of an encounter a player can learn. **A `3` within 300 units (about
+  six tiles) of a `2` is skipped**, and the director adds nothing at all for the first
+  six seconds of a floor — arriving somewhere should give you a moment to read the room.
+  Put your welcoming party a little further back than feels right.
 - **Spawn zones (`8`)**: where reinforcements come from, in waves rather than a drip.
   **Zone tiles that touch each other are one door.** A row of twelve along a wall is a
   single way in, not twelve, and a wave comes out of one door at a time — never the same
