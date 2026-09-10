@@ -14,6 +14,7 @@ import { parseLevelText, type LevelData } from "../world/level";
  *   # wall   . floor      P player spawn   E zombie (placed)   Z spawn zone
  *   X crate  G glass      L lamp           > exit                ^ stairs / next floor
  *   C car    W window     R reception      c cubicle (lowercase)  f flare   D lift door
+ *   F signal flare (the extraction beacon — see the finale in `src/sim/world.ts`)
  */
 
 export interface Mission {
@@ -44,7 +45,7 @@ export const CAMPAIGN: Campaign = {
     {
       id: "tower",
       name: "Vertical Slice",
-      brief: "Six floors, bottom to roof. Light the flare and wait for the pickup.",
+      brief: "Six floors, bottom to roof. Light the flare, then hold it for two minutes.",
       node: { x: 0.1, y: 0.5 },
       requires: [],
       floors: [
@@ -170,25 +171,28 @@ WZ..........ZW
 ####WW^^WW####
 `,
 `
-############
-#....Z.....#
-#..........#
-#.....E....#
-#..........#
-#...>>>....#
-#...>f>....#
-#...>>>....#
-#..........#
-#Z...E....Z#
-#..........#
-#..........#
-#....E.....#
-#..........#
-#..........#
-#.........E#
-#....PP....#
-#....Z.....#
-############
+######################
+#...ZZZ........ZZZ...#
+#....................#
+#..##.....>>>.....##.#
+#..##.....>>>.....##.#
+#....E....>F>....E...#
+#....................#
+#Z...X.........X....Z#
+#Z...X....E....X....Z#
+#Z..................Z#
+#....................#
+#...L....E.....L.....#
+#....................#
+#..X..............X..#
+#..X..............X..#
+#....................#
+#....................#
+#..###..####...#.##..#
+#..#..PP..#...#..#...#
+#..#..PP..#...#..#...#
+#..#ZZ....#...#ZZ#...#
+######################
 `,
       ],
     },

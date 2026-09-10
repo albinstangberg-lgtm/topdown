@@ -96,6 +96,21 @@ export class GameAudio {
         case "alarm":
           this.bus.noise("alarmHit", at, { freq: 900, q: 0.8, decay: 0.5, level: 0.9, sweepTo: 200 });
           break;
+        case "flareLit":
+          // The pop of the cap and then the hiss it settles into.
+          this.bus.noise("flarePop", at, { freq: 1200, q: 0.8, decay: 0.18, level: 0.7, sweepTo: 400 });
+          this.bus.noise("flareHiss", at, { freq: 4200, q: 0.5, decay: 1.4, level: 0.35 });
+          break;
+        case "holdout":
+          // The clock being called. Dry and mechanical — it is information, not drama.
+          this.bus.tone("holdoutCall", CENTRE, { freq: 660, to: 660, type: "square", decay: 0.14, level: 0.3 });
+          break;
+        case "chopperInbound":
+          this.bus.tone("radio", CENTRE, { freq: 520, to: 780, type: "square", decay: 0.3, level: 0.3 });
+          break;
+        case "chopperDown":
+          this.bus.tone("touchdown", at, { freq: 120, to: 70, type: "sawtooth", decay: 0.6, level: 0.5 });
+          break;
         case "floorCleared":
         case "missionComplete":
           this.bus.tone("objective", CENTRE, { freq: 440, to: 880, type: "triangle", decay: 0.5, level: 0.4 });
@@ -142,6 +157,20 @@ export class GameAudio {
       case "impact":
         this.bus.noise("dive", at, { freq: 150, q: 0.7, decay: 0.26, level: 0.6 });
         break;
+      case "flare":
+        // The bang that lights it, heard as far as the zombies hear it.
+        this.bus.noise("flareBang", at, { freq: 700, q: 0.7, decay: 0.35, level: 0.7, sweepTo: 180 });
+        break;
+      case "rotor":
+        // One beat of the rotor per pulse: the thump, plus the air it moves. Alternating
+        // pitch gives it the two-stroke chop a single tone never has.
+        this.rotorUp = !this.rotorUp;
+        this.bus.tone("rotor", at, {
+          freq: this.rotorUp ? 62 : 54, to: 40, type: "square",
+          attack: 0.01, decay: 0.3, level: 0.42,
+        });
+        this.bus.noise("rotorWash", at, { freq: 320, q: 0.5, decay: 0.28, level: 0.3 });
+        break;
       case "alarm":
         // A two-tone whoop, alternating on each pulse.
         this.alarmUp = !this.alarmUp;
@@ -154,6 +183,7 @@ export class GameAudio {
   }
 
   private alarmUp = false;
+  private rotorUp = false;
 
   /** Damage and reloads, spotted by watching the numbers rather than adding events. */
   private watchPlayers(world: GameWorld): void {

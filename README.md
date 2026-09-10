@@ -205,6 +205,26 @@ corridors, the street outside, lobby, cubicle floor, roof. Stairs (`^`) join the
 and the squad carries its condition up, so it plays as one continuous climb. See
 [docs/LEVELS.md](docs/LEVELS.md#multi-floor-missions).
 
+## The extraction finale
+
+The roof does not end when you reach it. There is a helipad with nothing on it and an
+unlit signal flare sitting in the middle of it, and the mission ends the way it should
+end:
+
+**Light the flare** — one player standing on it for a moment and it goes up. **Hold for
+two minutes** — the director drops its phase loop and runs a holdout instead, closing
+the gap between waves from eight seconds to three and raising the live cap as the clock
+runs down, so the heaviest wave lands on the pickup rather than somewhere in the middle.
+The burning flare is a lure as well as a light: everything that cannot see a player
+walks toward it, which is what makes the roof a place to defend. Then **nine seconds of
+helicopter**, coming in from off the map with the rotor thumping into the noise field —
+as loud to the horde as it is to you — and only once the skids are down is the pad an
+exit at all.
+
+It is two glyphs to author: a block of exit tiles for the pad and one `F` for the
+beacon. Any floor can have one. The details are in
+[docs/LEVELS.md](docs/LEVELS.md#the-extraction-finale).
+
 ## Sound
 
 Everything is synthesised — oscillators, filtered noise and envelopes. There are no
@@ -266,6 +286,15 @@ keep arriving every 3–5 seconds. A second flow field, aimed at the open ring a
 car, is what actually routes them there. Then it fades. Once per car, ever — the tiles are spent
 and become an ordinary wreck.
 
+**A lit signal flare** cuts across it the other way. Where a panic is a shock, a
+**holdout** is a scripted two minutes with a known end: the loop and its intensity gate
+are set aside, the gap between waves closes from eight seconds to three as the clock
+runs down and the live cap climbs with it, so the heaviest wave lands on the pickup
+rather than somewhere in the middle. The intensity gate has to go, because a squad
+pinned in one place is *permanently* at peak stress, and a director reading that would
+politely stop sending anything at exactly the wrong moment. See
+[the extraction finale](#the-extraction-finale).
+
 **Arriving is quiet.** No authored zombie is placed within about six tiles of a spawn
 tile, and the director adds nothing for the first six seconds of a floor. Walking out of
 a stairwell into a bite is not difficulty; it is the game starting before you did.
@@ -280,9 +309,9 @@ Tuning is two tables at the top of `src/sim/director.ts` — `STORY_TUNING` and
 ## Maps
 
 Levels are 2D arrays of tile ids — `0` floor, `1` wall, `2` player spawn, `3` zombie,
-`4` crate, `5` glass, `6` lamp, `7` exit, `8` spawn zone, `9` stairs, plus scenery
-(`10` car, `11` window, `12` reception desk, `13` cubicle, `14` flare, `15` lift door,
-`16` blocked floor, `17` broken glass, `18` broken window):
+`4` crate, `5` glass, `6` lamp, `7` exit, `8` spawn zone, `9` stairs, `20` signal flare,
+plus scenery (`10` car, `11` window, `12` reception desk, `13` cubicle, `14` flare,
+`15` lift door, `16` blocked floor, `17` broken glass, `18` broken window):
 
 ```
 [1,1,1,1,1,1,1],
@@ -318,10 +347,11 @@ Implemented: fixed-timestep loop, device-agnostic input with drop-in join, tile 
 driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones with
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
-hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director, HUD per viewport,
+hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director,
+a flare-and-helicopter extraction finale, HUD per viewport,
 a debug overlay, synthesised positional sound, the level format with a tolerant
 importer, and a map editor.
 
 Not built yet: music, menus and a controller-assignment screen, weapon pickups and
-progression, objectives, saves, and netcode. The architecture doc says where each of
+progression, saves, and netcode. The architecture doc says where each of
 those attaches.

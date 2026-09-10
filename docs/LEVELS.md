@@ -28,6 +28,7 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `17` | `g` | Broken glass | no | no | what glass leaves behind: an open hole with shards on the floor. You rarely author this by hand |
 | `18` | `w` | Broken window | no | no | a smashed window: walk straight through, and **still** a way in for the director |
 | `19` | `A` | Alarmed car | yes | yes | a wreck with a live alarm. Shoot it and every door on the floor opens at once — once |
+| `20` | `F` | Signal flare | no | no | the extraction beacon. Stand on it to light it, then hold the floor until the helicopter lands |
 
 `solid`, `opaque` and `blocksShots` are separate flags on purpose, because they are three
 different questions: **can a body pass, can a look pass, can a bullet pass.** Collision
@@ -172,9 +173,40 @@ cannot drift out of sync with the game — there is only one definition of what 
 - **Exits (`7`)**: a story mission ends when every living player stands on an exit tile
   together for 0.8s. Downed players do not block it. A map with no exit has no
   objective, which is exactly what survival is.
+- **Signal flares (`20`)**: see the extraction finale below. One per floor; on a floor
+  with an exit it is what that exit is waiting for.
 - **Stairs (`9`)**: the same rule, but it loads the mission's next floor instead of
   ending it. Stairs take priority over exits, so a floor with both is never the last
   one — put exits only on the top floor.
+
+## The extraction finale
+
+Put a signal flare (`F`) on a floor that also has an exit and the floor stops being
+"walk to the safe room". It becomes four beats:
+
+1. **Light it.** One player standing on the flare for 1.5s sets it off. One, not the
+   squad: lighting a flare is not a thing four people do together, and the exit tiles
+   are inert until they do.
+2. **Hold.** Two minutes on the clock. The director drops its phase loop and runs a
+   **holdout** instead: the gap between waves closes from 8s to 3s and the live cap
+   climbs as the clock runs down, so the worst of it lands on the pickup rather than
+   somewhere in the middle. The burning flare is also a lure — every zombie that
+   cannot see a player walks toward it — which is what makes the roof a place to hold
+   rather than a timer to run away from.
+3. **The run in.** Nine seconds of helicopter, coming in from off the map. The rotor
+   pulses into the noise field the whole way, so it is exactly as loud to the horde as
+   it is to you.
+4. **Board.** The skids touch the pad and the exit tiles are an exit again, on the
+   ordinary rule: the whole living squad on them together for 0.8s.
+
+Authoring one is two glyphs. The exit tiles are the pad — draw a block of them big
+enough for the squad, because the helicopter lands at their centre — and one `F` is
+the beacon. Give the floor several separated zone groups: a holdout with one door is a
+corridor shoot, and the director rotates doors on purpose.
+
+A floor with a flare but no exit, or an exit but no flare, is an ordinary floor. And
+the ignition is world state rather than a tile edit, so a restart puts the flare back
+out and the finale is there to play again.
 
 ## Multi-floor missions
 

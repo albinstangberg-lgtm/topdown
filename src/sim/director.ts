@@ -1,4 +1,4 @@
-import { randRange } from "../core/math";
+import { lerp, randRange } from "../core/math";
 import { TILE, type TileMap } from "../world/tilemap";
 import type { Enemy, Player } from "./entities";
 
@@ -25,6 +25,12 @@ import type { Enemy, Player } from "./entities";
  * A car alarm cuts across all of it: **panic** overrides whatever phase was running,
  * opens every door at once and keeps feeding on a short timer until the alarm dies.
  *
+ * A lit signal flare cuts across it the other way: **holdout** is a scripted stretch of
+ * rising pressure with a known end. The gap between waves closes and the live cap rises
+ * as the clock runs down, so the worst of it lands exactly when the helicopter does —
+ * the phase loop is the right shape for a level you are moving through, and the wrong
+ * one for two minutes of standing still.
+ *
  * **Intensity** is the survivor-stress metric: it climbs when you take damage, when
  * zombies are close, and hard when someone goes down, and it decays whenever none of
  * that is happening. The squad's intensity is the worst player's, not the average —
@@ -36,7 +42,7 @@ import type { Enemy, Player } from "./entities";
  * several zones play differently each run: the same level, a different door each time.
  */
 
-export type DirectorPhase = "buildup" | "peak" | "fade" | "relax" | "panic";
+export type DirectorPhase = "buildup" | "peak" | "fade" | "relax" | "panic" | "holdout";
 
 export interface DirectorTuning {
   /** Wanderers kept alive at all times, per player. The map is never empty. */
@@ -82,6 +88,11 @@ const ARRIVAL_GRACE = 6;
 const PANIC_GAP: [number, number] = [3, 5];
 /** The live cap is multiplied by this during a panic — a super wave needs the headroom. */
 const PANIC_CAP = 2.5;
+
+/** Seconds between waves at the start of a holdout, and at the very end of one. */
+const HOLDOUT_GAP: [number, number] = [8, 3];
+/** The live cap is multiplied by this across a holdout, start to end. */
+const HOLDOUT_CAP: [number, number] = [1.2, 2.2];
 
 /** Intensity at which the squad counts as peaking. */
 const PEAK_INTENSITY = 0.85;
@@ -148,6 +159,9 @@ export class Director {
   waves = 0;
   /** Seconds of car alarm left. While this is above zero the phase is `panic`. */
   alarm = 0;
+  /** Seconds of holdout left, and what it started at. Zero when no flare is burning. */
+  holdout = 0;
+  holdoutTotal = 0;
   /** Seconds before the director may put anything on a freshly loaded floor. */
   grace = ARRIVAL_GRACE;
 
@@ -178,6 +192,8 @@ export class Director {
     this.phase = "relax";
     this.phaseTimer = randRange(4, 7);
     this.alarm = 0;
+    this.holdout = 0;
+    this.holdoutTotal = 0;
     this.grace = ARRIVAL_GRACE;
     this.intensity = 0;
     this.waveTimer = randRange(...this.tuning.waveGap);
@@ -207,12 +223,18 @@ export class Director {
     this.updatePhase(dt);
     this.updateAmbient(dt, deps);
 
-    if (this.phase !== "buildup" && this.phase !== "panic") return;
+    if (this.phase !== "buildup" && this.phase !== "panic" && this.phase !== "holdout") return;
 
     const panicking = this.phase === "panic";
-    const cap = Math.floor(
-      this.tuning.maxAlivePerPlayer * deps.players.length * (panicking ? PANIC_CAP : 1),
-    );
+    const sieging = this.phase === "holdout";
+    // How far through the holdout we are, 0 at the flare and 1 at the pickup.
+    const through = sieging && this.holdoutTotal > 0
+      ? 1 - this.holdout / this.holdoutTotal
+      : 0;
+    const multiplier = panicking ? PANIC_CAP
+      : sieging ? lerp(HOLDOUT_CAP[0], HOLDOUT_CAP[1], through)
+      : 1;
+    const cap = Math.floor(this.tuning.maxAlivePerPlayer * deps.players.length * multiplier);
     this.waveTimer -= dt;
     if (this.waveTimer > 0 || deps.enemies.length >= cap) return;
 
@@ -220,8 +242,12 @@ export class Director {
       this.tuning.wavePerPlayer * deps.players.length, cap - deps.enemies.length,
     );
     if (size <= 0) return;
-    if (this.releaseWave(size, deps, panicking)) {
-      this.waveTimer = randRange(...(panicking ? PANIC_GAP : this.tuning.waveGap));
+    // A flare and a helicopter are not things you can hide from: like a panic, a
+    // holdout wave comes out of a door the squad can see if that is all there is.
+    if (this.releaseWave(size, deps, panicking || sieging)) {
+      this.waveTimer = panicking ? randRange(...PANIC_GAP)
+        : sieging ? lerp(HOLDOUT_GAP[0], HOLDOUT_GAP[1], through) * randRange(0.85, 1.15)
+        : randRange(...this.tuning.waveGap);
       this.blockedFor = 0;
     } else {
       // Nowhere to put them yet. Try again next step rather than losing the wave.
@@ -255,6 +281,19 @@ export class Director {
       this.lastDoor = -1;      // every door just fired; none of them is "the last one"
     }
     return released;
+  }
+
+  /**
+   * The squad lit the signal flare and is going nowhere until the pickup. Waves for the
+   * whole countdown, closing up as it runs out. Like a panic it overrides the loop; the
+   * difference is that it has an end, and it aims its worst moment at that end.
+   */
+  beginHoldout(seconds: number): void {
+    this.grace = 0;
+    this.phase = "holdout";
+    this.holdout = seconds;
+    this.holdoutTotal = seconds;
+    this.waveTimer = randRange(2, 4);
   }
 
   /**
@@ -294,6 +333,18 @@ export class Director {
         this.alarm = 0;
         // The alarm dies with the floor in uproar: straight into the fade, never
         // into a fresh buildup.
+        this.phase = "fade";
+        this.phaseTimer = this.tuning.fadeMax;
+      }
+      return;
+    }
+
+    if (this.phase === "holdout") {
+      this.holdout -= dt;
+      if (this.holdout <= 0) {
+        this.holdout = 0;
+        // They are on the helicopter, or they are not; either way the roof is left
+        // to burn itself out rather than starting a fresh buildup.
         this.phase = "fade";
         this.phaseTimer = this.tuning.fadeMax;
       }

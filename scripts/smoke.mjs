@@ -814,6 +814,11 @@ const climbed = await storyPage.evaluate(async () => {
   const w = window.game.world;
   const p = w.players[0];
   const before = { map: w.map.name, x: p.x, y: p.y };
+  // The zone check above leaves a real fight behind, and it sometimes leaves the
+  // tester on the floor. This check is about what the stairs carry up, so it starts
+  // from a squad that is on its feet rather than from whoever won that scrap.
+  p.downed = false;
+  p.bleedout = 0;
   p.health = 41;
   p.ammo = 7;
   p.stamina = 33;
@@ -836,28 +841,112 @@ check("stairs move the squad up a floor, carrying its condition",
   climbed.health === 41 && climbed.ammo === 7 && climbed.inBounds && !climbed.solid,
   JSON.stringify(climbed));
 
-// Climb the rest of the building and extract off the roof.
+// Climb the rest of the building. The roof is where the climbing stops: it has no
+// stairs and its exit is a helipad that does nothing until the finale has run.
 const topped = await storyPage.evaluate(async () => {
   const g = window.game;
   const visited = [g.world.map.name];
   for (let i = 0; i < 8; i++) {
     const w = g.world;
-    const target = w.map.stairs[0] ?? w.map.exits[0];
-    if (!target || g.phase !== "playing") break;
+    const step = w.map.stairs[0];
+    if (!step || g.phase !== "playing") break;
     const p = w.players[0];
     p.health = p.maxHealth;
     p.downed = false;
-    p.x = target.x; p.y = target.y; p.prevX = p.x; p.prevY = p.y;
+    p.x = step.x; p.y = step.y; p.prevX = p.x; p.prevY = p.y;
     await new Promise((r) => setTimeout(r, 1300));
     if (g.phase === "playing" && !visited.includes(w.map.name)) visited.push(w.map.name);
   }
-  return { visited, phase: g.phase, completed: [...g.completed] };
+
+  // Standing on the pad with the flare unlit must achieve exactly nothing.
+  const w = g.world;
+  const p = w.players[0];
+  const exit = w.map.exits[0];
+  p.health = p.maxHealth;
+  p.downed = false;
+  p.x = exit.x; p.y = exit.y; p.prevX = p.x; p.prevY = p.y;
+  await new Promise((r) => setTimeout(r, 1200));
+  return {
+    visited,
+    phase: g.phase,
+    objective: w.objective.kind,
+    extraction: w.extraction.phase,
+    flares: w.map.signals.length,
+  };
 });
 // The previous check already took us to floor 2, so this climbs the remaining four.
-check("the whole building can be climbed, and the roof ends the mission",
+check("the whole building can be climbed, and the roof's pad is shut until the flare is lit",
   topped.visited.some((n) => n.includes("Floor 6")) && topped.visited.length === 5 &&
-  topped.phase === "missions" && topped.completed.includes("tower"),
+  topped.phase === "playing" && topped.flares === 1 &&
+  topped.extraction === "signal" && topped.objective === "signal",
   JSON.stringify(topped));
+
+// The finale: light it, hold it, board what turns up. The two minutes are skipped by
+// winding the clock on — the check is about the state machine and what gates the exit,
+// and sitting through the countdown twice would double the runtime of the suite.
+const finale = await storyPage.evaluate(async () => {
+  const g = window.game;
+  const w = g.world;
+  const p = w.players[0];
+  const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Keep the tester alive and the roof clear: this check is not about the fight.
+  const hold = () => {
+    p.health = p.maxHealth;
+    p.downed = false;
+    p.stance = "stand";
+    p.stanceTimer = 0;
+    w.enemies.length = 0;
+  };
+
+  const lampsBefore = w.staticLights.length;
+  const flare = w.map.signals[0];
+  hold();
+  p.x = flare.x; p.y = flare.y; p.prevX = p.x; p.prevY = p.y;
+  await settle(2200);
+  const lit = {
+    phase: w.extraction.phase,
+    seconds: Math.round(w.extraction.timeLeft),
+    director: w.director.phase,
+    lure: w.lureFlow.goalCount,
+    litTheRoof: w.staticLights.length > lampsBefore,
+  };
+
+  // Still nothing doing on the pad while the clock is running.
+  const exit = w.map.exits[0];
+  hold();
+  p.x = exit.x; p.y = exit.y; p.prevX = p.x; p.prevY = p.y;
+  await settle(1200);
+  const holding = { phase: g.phase, objective: w.objective.kind };
+
+  w.extraction.timeLeft = 0.2;
+  hold();
+  await settle(800);
+  const inbound = { phase: w.extraction.phase, flying: w.chopper.active };
+
+  w.extraction.timeLeft = 0.2;
+  hold();
+  await settle(800);
+  const landed = {
+    phase: w.extraction.phase,
+    onThePad: Math.hypot(w.chopper.x - w.extraction.padX, w.chopper.y - w.extraction.padY) < 1,
+    altitude: w.chopper.altitude,
+  };
+
+  // Skids down: now it is an exit like any other.
+  hold();
+  p.x = exit.x; p.y = exit.y; p.prevX = p.x; p.prevY = p.y;
+  await settle(1400);
+  return { lit, holding, inbound, landed, phase: g.phase, completed: [...g.completed] };
+});
+check("the flare starts the holdout, and only a landed helicopter is an exit",
+  finale.lit.phase === "holdout" && finale.lit.seconds >= 115 &&
+  finale.lit.director === "holdout" && finale.lit.lure > 0 && finale.lit.litTheRoof &&
+  finale.holding.phase === "playing" && finale.holding.objective === "holdout" &&
+  finale.inbound.phase === "inbound" && finale.inbound.flying === true &&
+  finale.landed.phase === "ready" && finale.landed.onThePad &&
+  finale.landed.altitude === 0 &&
+  finale.phase === "missions" && finale.completed.includes("tower"),
+  JSON.stringify(finale));
 
 // Progress persists across a reload and opens what required it.
 await storyPage.reload({ waitUntil: "load" });

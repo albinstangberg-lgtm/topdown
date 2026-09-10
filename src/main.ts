@@ -506,6 +506,14 @@ export class Game {
       } else if (ev.kind === "horde") {
         // No banner: a wave should be something you hear and feel, not read.
         this.shakeAll(0.35);
+      } else if (ev.kind === "flareLit") {
+        // The finale starting is worth a jolt: everything that follows is downstream
+        // of this one decision, so it should not slip past as another line of text.
+        this.shakeAll(0.5);
+        if (ev.text) this.setBanner(ev.text);
+      } else if (ev.kind === "chopperDown") {
+        this.shakeAll(0.7);
+        if (ev.text) this.setBanner(ev.text);
       } else if (ev.kind === "playerDown") {
         this.shakeAll(0.6);
         if (ev.text) this.setBanner(ev.text);

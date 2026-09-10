@@ -32,6 +32,11 @@ export interface TileDef {
   exit?: boolean;
   /** Standing on this with the whole squad moves the mission to its next floor. */
   stairs?: boolean;
+  /**
+   * The extraction beacon. Stand on it to light it, which calls the helicopter and
+   * starts the holdout — see the extraction section in `src/sim/world.ts`.
+   */
+  signal?: boolean;
   /** Purely visual variant — the renderer draws it as furniture, not as a wall face. */
   prop?: "car" | "reception" | "cubicle" | "door";
   /**
@@ -98,6 +103,9 @@ export const TILE_DEFS: readonly TileDef[] = [
     alarm: true, alarmSpent: 10,
     color: "#c25a3a", glyph: "A",
     hint: "a wreck with a live alarm. Put a bullet in it and every door on the floor opens at once — once" },
+  { id: 20, key: "signalFlare", name: "Signal flare", solid: false, opaque: false, signal: true,
+    color: "#ff3b3b", glyph: "F",
+    hint: "an unlit flare. Stand on it to light it, then hold the roof until the helicopter lands" },
 ];
 
 export const TILE_FLOOR = 0;

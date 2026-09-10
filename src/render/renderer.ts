@@ -103,6 +103,7 @@ export class Renderer {
     this.drawFloorDecals(ctx, world, bounds);
     this.drawExits(ctx, world, bounds);
     this.drawStairs(ctx, world, bounds);
+    this.drawSignals(ctx, world, bounds);
     this.drawLamps(ctx, world, bounds);
     this.drawParticles(ctx, world);
     this.drawActors(ctx, world, alpha);
@@ -119,6 +120,10 @@ export class Renderer {
     this.drawBullets(ctx, world);
     this.drawLightEdges(ctx, world);
     this.drawWalls(ctx, bounds, world);
+    // The helicopter is drawn over the darkness for the same reason a tracer is: it
+    // is a hundred decibels of landing lights, and hiding it in the dark would be a
+    // lie about what the squad can see.
+    this.drawChopper(ctx, world, alpha);
     this.drawTeammateMarkers(ctx, world, vp);
     ctx.restore();
 
@@ -355,17 +360,171 @@ export class Renderer {
   /**
    * The exit, drawn as a lit pad. It is the one tile the players are looking for, so it
    * gets a glow of its own rather than relying on someone's flashlight finding it.
+   *
+   * On a floor running the extraction finale the same tiles are a helipad, and they are
+   * drawn amber and dim until the helicopter is actually on them — an exit that looks
+   * open and does nothing is worse than no exit at all.
    */
   private drawExits(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
     if (world.map.exits.length === 0) return;
+    const phase = world.extraction.phase;
+    const locked = phase === "signal" || phase === "holdout" || phase === "inbound";
     const t = 0.55 + 0.45 * Math.sin(performance.now() * 0.003);
+    const rgb = locked ? "255,170,90" : "139,255,122";
+    const fill = locked ? 0.05 : 0.10;
+    const line = locked ? 0.18 : 0.35;
     for (const exit of world.map.exits) {
       if (exit.x < b.x0 || exit.x > b.x1 || exit.y < b.y0 || exit.y > b.y1) continue;
-      ctx.fillStyle = `rgba(139,255,122,${0.10 + t * 0.10})`;
+      ctx.fillStyle = `rgba(${rgb},${fill + t * fill})`;
       ctx.fillRect(exit.x - TILE / 2, exit.y - TILE / 2, TILE, TILE);
-      ctx.strokeStyle = `rgba(139,255,122,${0.35 + t * 0.35})`;
+      ctx.strokeStyle = `rgba(${rgb},${line + t * line})`;
       ctx.lineWidth = 2;
       ctx.strokeRect(exit.x - TILE / 2 + 3, exit.y - TILE / 2 + 3, TILE - 6, TILE - 6);
+    }
+  }
+
+  /**
+   * The signal flare: unlit, a canister with a marker ring so it can be found; lit, the
+   * same burning flare an authored `f` tile draws, over the light the world baked when
+   * it went up.
+   */
+  private drawSignals(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    if (world.map.signals.length === 0) return;
+    const lit = world.extraction.phase !== "none" && world.extraction.phase !== "signal";
+    const t = 0.55 + 0.45 * Math.sin(performance.now() * 0.004);
+    for (const flare of world.map.signals) {
+      if (flare.x < b.x0 || flare.x > b.x1 || flare.y < b.y0 || flare.y > b.y1) continue;
+      if (lit) {
+        drawBurningFlare(ctx, flare.x, flare.y);
+        continue;
+      }
+      ctx.strokeStyle = `rgba(255,90,80,${0.30 + t * 0.35})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(flare.x, flare.y, TILE * 0.36, 0, TAU);
+      ctx.stroke();
+      // The canister itself, cap up: unlit, so no glow of any kind.
+      ctx.fillStyle = "#c8342e";
+      ctx.fillRect(flare.x - 4, flare.y - 11, 8, 22);
+      ctx.fillStyle = "#e8e2d0";
+      ctx.fillRect(flare.x - 4, flare.y - 13, 8, 4);
+    }
+  }
+
+  /**
+   * The pickup. Body, boom and a rotor disc, scaled by how high it still is — bigger
+   * means further from the roof and nearer the camera — with a shadow underneath that
+   * closes on it as it comes down. Drawn after the darkness pass, so it is visible from
+   * the moment it appears at the edge of the map.
+   */
+  private drawChopper(ctx: CanvasRenderingContext2D, world: GameWorld, alpha: number): void {
+    const c = world.chopper;
+    if (!c.active) return;
+    const scale = 1 + c.altitude * 0.55;
+    const spin = performance.now() * 0.018;
+
+    // Shadow, sliding in under the aircraft as it descends.
+    ctx.save();
+    ctx.globalAlpha = 0.3 * (1 - c.altitude * 0.4);
+    ctx.fillStyle = "#000000";
+    ctx.beginPath();
+    ctx.ellipse(c.x + c.altitude * 70, c.y + c.altitude * 80, 66, 30, c.angle, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+
+    // Landing light: a pool of white thrown down on whatever it is coming for.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const pool = ctx.createRadialGradient(c.x, c.y, 8, c.x, c.y, 190);
+    pool.addColorStop(0, `rgba(255,246,220,${0.35 * (1 - c.altitude * 0.5)})`);
+    pool.addColorStop(1, "rgba(255,246,220,0)");
+    ctx.fillStyle = pool;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 190, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.angle);
+    ctx.scale(scale, scale);
+
+    ctx.fillStyle = "#242a33";
+    ctx.strokeStyle = "#0b0e13";
+    ctx.lineWidth = 3;
+    // Tail boom and fin.
+    ctx.fillRect(-104, -7, 86, 14);
+    ctx.strokeRect(-104, -7, 86, 14);
+    ctx.fillRect(-112, -22, 12, 44);
+    ctx.strokeRect(-112, -22, 12, 44);
+    // Skids, under the body.
+    ctx.strokeStyle = "#11151b";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(-34, -30); ctx.lineTo(44, -30);
+    ctx.moveTo(-34, 30); ctx.lineTo(44, 30);
+    ctx.stroke();
+    // Fuselage.
+    ctx.fillStyle = "#2e3641";
+    ctx.strokeStyle = "#0b0e13";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 62, 26, 0, 0, TAU);
+    ctx.fill();
+    ctx.stroke();
+    // Cockpit glass, at the nose.
+    ctx.fillStyle = "rgba(150,220,255,0.45)";
+    ctx.beginPath();
+    ctx.ellipse(36, 0, 22, 17, 0, 0, TAU);
+    ctx.fill();
+    // Open door down the side you board from.
+    ctx.fillStyle = "rgba(10,14,20,0.85)";
+    ctx.fillRect(-16, 14, 34, 12);
+
+    // Navigation lights: red to port, green to starboard, a white strobe on the tail.
+    const strobe = (performance.now() % 1000) < 90 ? 1 : 0.15;
+    ctx.fillStyle = "rgba(255,70,70,0.95)";
+    ctx.beginPath(); ctx.arc(6, -26, 4, 0, TAU); ctx.fill();
+    ctx.fillStyle = "rgba(90,255,120,0.95)";
+    ctx.beginPath(); ctx.arc(6, 26, 4, 0, TAU); ctx.fill();
+    ctx.fillStyle = `rgba(255,255,255,${strobe})`;
+    ctx.beginPath(); ctx.arc(-108, 0, 4, 0, TAU); ctx.fill();
+
+    // Rotor: four blades and the disc they smear into.
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = "rgba(180,200,230,0.05)";
+    ctx.beginPath();
+    ctx.arc(6, 0, 124, 0, TAU);
+    ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = "rgba(215,225,240,0.4)";
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const a = spin + (i * TAU) / 4;
+      ctx.moveTo(6, 0);
+      ctx.lineTo(6 + Math.cos(a) * 124, Math.sin(a) * 124);
+    }
+    ctx.stroke();
+    // Tail rotor, spinning the other way and much faster.
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let i = 0; i < 2; i++) {
+      const a = -spin * 2.4 + (i * Math.PI);
+      ctx.moveTo(-106 - Math.cos(a) * 22, -Math.sin(a) * 22);
+      ctx.lineTo(-106 + Math.cos(a) * 22, Math.sin(a) * 22);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    // Anything standing under the fuselage is drawn again on top of it. Boarding is the
+    // one moment where losing sight of your own player would be unforgivable — and a
+    // zombie hidden under the helicopter is a bite out of nowhere.
+    for (const e of world.enemies) {
+      if (e.visible && Math.hypot(e.x - c.x, e.y - c.y) < 96) drawZombie(ctx, e, alpha);
+    }
+    for (const p of world.players) {
+      if (Math.hypot(p.x - c.x, p.y - c.y) < 96) this.drawPlayer(ctx, p, alpha);
     }
   }
 
@@ -498,18 +657,7 @@ export class Renderer {
         Math.floor(lamp.x / TILE), Math.floor(lamp.y / TILE),
       ));
       if (def.key === "flare") {
-        // A burning flare: a hot core with a flickering halo, not a tidy fixture.
-        const flicker = 0.75 + 0.25 * Math.sin(performance.now() * 0.02 + lamp.x);
-        ctx.globalCompositeOperation = "lighter";
-        ctx.fillStyle = `rgba(255,110,60,${0.22 * flicker})`;
-        ctx.beginPath();
-        ctx.arc(lamp.x, lamp.y, 26 * flicker, 0, TAU);
-        ctx.fill();
-        ctx.fillStyle = `rgba(255,220,180,${0.9 * flicker})`;
-        ctx.beginPath();
-        ctx.arc(lamp.x, lamp.y, 6, 0, TAU);
-        ctx.fill();
-        ctx.globalCompositeOperation = "source-over";
+        drawBurningFlare(ctx, lamp.x, lamp.y);
         continue;
       }
       ctx.fillStyle = "rgba(255,236,180,0.95)";
@@ -527,37 +675,40 @@ export class Renderer {
       drawZombie(ctx, e, alpha);
     }
 
-    for (const p of world.players) {
-      // The body follows the lean part-way; the eye (light and muzzle) goes all the
-      // way, so a peek reads as a peek without detaching the sprite from its hitbox.
-      const x = lerp(p.prevX, p.x, alpha) + (p.eyeX - p.x) * 0.55;
-      const y = lerp(p.prevY, p.y, alpha) + (p.eyeY - p.y) * 0.55;
-      const body = p.downed ? "#6b6b6b" : (p.hurtFlash > 0.15 ? "#ffffff" : p.color);
-      // The barrel extends as the weapon comes up and the body flattens as you go to
-      // the floor — both stances are readable off the world, without UI.
-      drawBlockActor(
-        ctx, x, y, p.facing, p.radius, body, "#ffffff", true,
-        0.45 + p.weaponUp * 0.55, proneAmount(p),
-      );
+    for (const p of world.players) this.drawPlayer(ctx, p, alpha);
+  }
 
-      if (p.muzzleFlash > 0) {
-        const mx = x + Math.cos(p.facing) * (p.radius + 14);
-        const my = y + Math.sin(p.facing) * (p.radius + 14);
-        ctx.globalCompositeOperation = "lighter";
-        ctx.fillStyle = `rgba(255,232,160,${0.55 * p.muzzleFlash})`;
-        ctx.beginPath();
-        ctx.arc(mx, my, 16 * p.muzzleFlash, 0, TAU);
-        ctx.fill();
-        ctx.globalCompositeOperation = "source-over";
-      }
+  /** One player. Its own method because the helicopter has to redraw whoever is under it. */
+  private drawPlayer(ctx: CanvasRenderingContext2D, p: Player, alpha: number): void {
+    // The body follows the lean part-way; the eye (light and muzzle) goes all the
+    // way, so a peek reads as a peek without detaching the sprite from its hitbox.
+    const x = lerp(p.prevX, p.x, alpha) + (p.eyeX - p.x) * 0.55;
+    const y = lerp(p.prevY, p.y, alpha) + (p.eyeY - p.y) * 0.55;
+    const body = p.downed ? "#6b6b6b" : (p.hurtFlash > 0.15 ? "#ffffff" : p.color);
+    // The barrel extends as the weapon comes up and the body flattens as you go to
+    // the floor — both stances are readable off the world, without UI.
+    drawBlockActor(
+      ctx, x, y, p.facing, p.radius, body, "#ffffff", true,
+      0.45 + p.weaponUp * 0.55, proneAmount(p),
+    );
 
-      if (p.downed) {
-        ctx.strokeStyle = "rgba(255,90,90,0.9)";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(x, y, p.radius + 12, -Math.PI / 2, -Math.PI / 2 + TAU * (p.reviveProgress / 2.2));
-        ctx.stroke();
-      }
+    if (p.muzzleFlash > 0) {
+      const mx = x + Math.cos(p.facing) * (p.radius + 14);
+      const my = y + Math.sin(p.facing) * (p.radius + 14);
+      ctx.globalCompositeOperation = "lighter";
+      ctx.fillStyle = `rgba(255,232,160,${0.55 * p.muzzleFlash})`;
+      ctx.beginPath();
+      ctx.arc(mx, my, 16 * p.muzzleFlash, 0, TAU);
+      ctx.fill();
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    if (p.downed) {
+      ctx.strokeStyle = "rgba(255,90,90,0.9)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, p.radius + 12, -Math.PI / 2, -Math.PI / 2 + TAU * (p.reviveProgress / 2.2));
+      ctx.stroke();
     }
   }
 
@@ -735,6 +886,21 @@ export class Renderer {
     }
     ctx.globalAlpha = 1;
   }
+}
+
+/** A burning flare: a hot core with a flickering halo, not a tidy fixture. */
+function drawBurningFlare(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  const flicker = 0.75 + 0.25 * Math.sin(performance.now() * 0.02 + x);
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = `rgba(255,110,60,${0.22 * flicker})`;
+  ctx.beginPath();
+  ctx.arc(x, y, 26 * flicker, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = `rgba(255,220,180,${0.9 * flicker})`;
+  ctx.beginPath();
+  ctx.arc(x, y, 6, 0, TAU);
+  ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
 }
 
 function tracePoly(ctx: CanvasRenderingContext2D, poly: number[]): boolean {
