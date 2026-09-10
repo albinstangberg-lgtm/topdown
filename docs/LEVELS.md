@@ -29,6 +29,14 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `18` | `w` | Broken window | no | no | a smashed window: walk straight through, and **still** a way in for the director |
 | `19` | `A` | Alarmed car | yes | yes | a wreck with a live alarm. Shoot it and every door on the floor opens at once — once |
 | `20` | `F` | Signal flare | no | no | the extraction beacon. Stand on it to light it, then hold the floor until the helicopter lands |
+| `21` | `T` | Terminal | no | no | a crew log. Stand on it and hold USE to read it — see [devices](#devices-and-the-objective-chain) |
+| `22` | `t` | Terminal (read) | no | no | what a terminal becomes once its log is read. You rarely author this |
+| `23` | `!` | Weapon locker | no | no | walk onto it and it hands you the next gun up from what you carry |
+| `24` | `i` | Weapon locker (empty) | no | no | a locker somebody already emptied |
+| `25` | `U` | Fusion socket | no | no | hold USE to seat a cell. **Every** socket on the floor primed brings main power back |
+| `26` | `u` | Fusion socket (primed) | no | no | a socket with its cell in, glowing. Rarely authored |
+| `27` | `B` | Blast door | yes | yes | dead without main power; with it, hold USE beside it and survive the 90s unseal |
+| `28` | `v` | Stairs down | no | no | the same rule as `^`, drawn and announced as a descent |
 
 `solid`, `opaque` and `blocksShots` are separate flags on purpose, because they are three
 different questions: **can a body pass, can a look pass, can a bullet pass.** Collision
@@ -178,6 +186,87 @@ cannot drift out of sync with the game — there is only one definition of what 
 - **Stairs (`9`)**: the same rule, but it loads the mission's next floor instead of
   ending it. Stairs take priority over exits, so a floor with both is never the last
   one — put exits only on the top floor.
+
+## Devices and the objective chain
+
+Four tiles turn a map into something other than "walk to the exit". They all work the
+same way — **stand on it, hold USE (`F` / `Y`)** — and they all share one trick: *using
+one rewrites the grid.* A read terminal becomes tile `22`, a primed socket becomes `26`,
+an emptied locker becomes `24`. So a floor that reloads remembers what the squad already
+did, and a mission that restarts puts every one of them back, exactly the way a spent car
+alarm works. The dwell in progress is the only thing held in memory.
+
+The logic lives in [`src/sim/devices.ts`](../src/sim/devices.ts); what any of it *means*
+lives in `src/sim/world.ts`, which is the seam that keeps the device system from turning
+into a second copy of the game rules.
+
+### Terminals (`T`)
+
+1.4 seconds of holding USE and a crew log comes up across the bottom of the screen. They
+gate nothing at all, which is the point — the story is a detour you choose to take.
+
+The **text is not on the tile**, because a tile id cannot carry a paragraph. It is on the
+mission's floor spec, as a list of strings, and terminal *n* on the floor reads log *n*
+counting top to bottom, left to right. That index is stable whether or not a terminal has
+been read, so reading the first one does not reshuffle the rest.
+
+### Weapon lockers (`!`)
+
+Not a dwell — walk onto it and it opens. It hands out the **next gun up** from whatever
+that player is carrying: pistol → SMG → shotgun. Melee weapons are deliberately not on
+that ladder, so the first locker found by a squad that woke up with a crowbar hands out a
+real gun rather than a second crowbar. A locker that cannot upgrade you reloads you
+instead.
+
+### Fusion sockets (`U`)
+
+Seven seconds of holding USE, each, and they are the one device that is a squad problem:
+**every socket on the floor** has to be primed before anything happens. Seating the first
+cell tells the director to start a siege, so the floor turns from a search into a fight
+the moment the squad commits.
+
+When the last one goes in, **main power comes back** — and that is a mission-scoped flag,
+not a floor-scoped one. It survives every subsequent floor load: the lights come up, the
+ship goes into alarm, and any blast door on any later floor will now work. That single
+bit is what makes the second half of a mission a different place from the first.
+
+### Blast doors (`B`)
+
+Solid and opaque, and the only piece of geometry an objective can delete.
+
+- **Without main power** it is a wall. Walking up to one says so once, loudly — it also
+  opens every door on the floor at once for a few seconds — and then the floor's real
+  objective goes back to being whatever else is on it. A door you cannot work is not an
+  objective, so the HUD does not pretend it is.
+- **With main power**, holding USE beside it for a moment starts a **ninety-second
+  unseal**. Nobody has to stand there for it: the director runs a holdout for the whole
+  countdown, aiming its worst at the end, and the squad is free to fight. When it
+  finishes, the door tiles become floor and whatever is behind them — usually an exit —
+  is simply reachable.
+
+A floor with a blast door and no stairs makes the door the objective even unpowered,
+which is the escape hatch for a map that has nothing else to point at.
+
+## Floors that know more than their grid
+
+A mission's `floors` array takes a bare map string, or a `FloorSpec` when the floor needs
+to say something a grid of ids cannot:
+
+```ts
+{
+  name: "Reactor Core",
+  pressure: 1.6,      // director difficulty, as a multiple of the mode's tuning
+  blackout: true,     // unlit even by this game's standards
+  logs: ["ENG-09 // no date. Cells are seated…"],
+  map: `…glyph art…`,
+}
+```
+
+`pressure` is the campaign's difficulty curve. It multiplies wave size, the live cap and
+the ambient population, and it is re-applied after every floor load — so the same map
+played later in a mission is a harder map, which is what makes walking a deck twice worth
+doing. A mission can also declare a `loadout`, which is what the squad starts it holding;
+the ship campaign uses that to start you with a crowbar and no gun.
 
 ## The extraction finale
 

@@ -801,8 +801,12 @@ const zoneOnly = await storyPage.evaluate(async () => {
     await new Promise((r) => requestAnimationFrame(r));
   }
   const spawns = [...seen.values()];
+  // One tile of tolerance, not one unit. A zombie starts walking the moment it exists,
+  // so an exact test is really a test of whether the sampling loop caught the frame it
+  // appeared on — which a busy machine loses. A tile still says what this check means:
+  // a fallback spawn would be on open floor somewhere else entirely, not next door.
   const offZone = spawns.filter(
-    (p) => !zones.some((z) => Math.hypot(z.x - p.x, z.y - p.y) < 1),
+    (p) => !zones.some((z) => Math.hypot(z.x - p.x, z.y - p.y) < 48),
   );
   return { zoneCount: zones.length, spawned: spawns.length, offZone: offZone.length };
 });
@@ -1040,13 +1044,19 @@ const glassBreak = await camPage.evaluate(async () => {
   const p = w.players[0];
   const before = { id: m.tileAt(5, 2), solid: m.isSolid(5, 2) };
 
-  w.bullets.spawn(5.5 * T, 4.0 * T, -Math.PI / 2, 800, 10, "player", p.id, 1, "#fff");
-  let reachedAbove = false;
-  const until = performance.now() + 500;
+  // Deliberately slow (200 u/s, not the SMG's 900): "did the shot carry on" is sampled
+  // per animation frame, and a fast bullet crosses the band above the pane in a couple
+  // of frames — which makes the check a race that a busy machine loses. The speed is
+  // not what is under test, so take the speed that can be observed reliably. The
+  // minimum y ever seen is recorded rather than a flag, so one late frame still counts.
+  w.bullets.spawn(5.5 * T, 4.0 * T, -Math.PI / 2, 200, 10, "player", p.id, 1, "#fff");
+  let highest = Infinity;
+  const until = performance.now() + 900;
   while (performance.now() < until) {
-    for (const b of w.bullets.items) if (b.active && b.y < 1.5 * T) reachedAbove = true;
+    for (const b of w.bullets.items) if (b.active) highest = Math.min(highest, b.y);
     await new Promise((r) => requestAnimationFrame(r));
   }
+  const reachedAbove = highest < 1.5 * T;
 
   return {
     before,
@@ -1495,8 +1505,11 @@ const wave = await zomPage.evaluate(async () => {
   const spawns = [...seen.values()];
   const spread = Math.max(...spawns.map((a) =>
     Math.max(...spawns.map((b) => Math.hypot(a.x - b.x, a.y - b.y)))));
+  // A tile of tolerance: positions are read a frame after the wave lands, by which
+  // time they have taken a step. `spread` below is what actually pins them to one
+  // door — this only has to rule out a spawn somewhere else on the map.
   const onZone = spawns.every((sp) =>
-    w.map.spawnZones.some((z) => Math.hypot(z.x - sp.x, z.y - sp.y) < 1));
+    w.map.spawnZones.some((z) => Math.hypot(z.x - sp.x, z.y - sp.y) < 48));
   return {
     waves: w.director.waves,
     size: spawns.length,
@@ -1886,6 +1899,185 @@ check("mute toggles and is remembered",
   JSON.stringify(muting));
 
 check("zombie pages raised no exceptions", zomErrors.length === 0, zomErrors.join(" | "));
+
+// --- the story arc -----------------------------------------------------------
+//
+// The derelict is the mission the objective chain was built for, so it is the one
+// worth driving: a crowbar, a locker, a sealed door, three fusion cells and the
+// override. Each step is a different system, and they only mean anything in order.
+
+const arcPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const arcErrors = [];
+arcPage.on("pageerror", (e) => arcErrors.push(String(e)));
+await arcPage.goto(`${URL}?camera=fixed&players=1&mission=derelict`, { waitUntil: "load" });
+await arcPage.waitForTimeout(500);
+
+/** Keep the lone test player upright: one stationary survivor is not the thing under test. */
+const holdUp = () => arcPage.evaluate(() => {
+  const w = window.game.world;
+  const p = w.players[0];
+  p.health = p.maxHealth; p.downed = false; p.bleedout = 0;
+  p.stance = "stand"; p.stanceTimer = 0;
+  w.enemies.length = 0;
+});
+const arcState = () => arcPage.evaluate(() => {
+  const g = window.game;
+  const w = g.world;
+  return {
+    map: w.map.name, weapon: w.players[0].weapon.name, objective: w.objective.kind,
+    power: w.power.on, blackout: w.blackout, difficulty: w.difficulty,
+    door: w.devices.door, cells: w.devices.sockets(w.map),
+  };
+});
+
+let arc = await arcState();
+check("the derelict starts you with a melee weapon and nothing else",
+  arc.map === "Cryo Bay" && arc.weapon === "Crowbar" && arc.difficulty < 1,
+  JSON.stringify(arc));
+
+// A crowbar has to actually hurt something, or the whole first act is unplayable.
+await arcPage.waitForFunction(() => window.game.world.enemies.length > 0, null, { timeout: 9000 });
+const target = await arcPage.evaluate(() => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const e = w.enemies[0];
+  e.x = p.x + Math.cos(p.facing) * 42;
+  e.y = p.y + Math.sin(p.facing) * 42;
+  e.prevX = e.x; e.prevY = e.y;
+  e.health = e.maxHealth = 400;
+  e.state = "wander"; e.stateTimer = 99;
+  return { id: e.id, health: e.health };
+});
+await arcPage.keyboard.down("Space");
+await arcPage.waitForTimeout(1400);
+await arcPage.keyboard.up("Space");
+const swung = await arcPage.evaluate((id) => {
+  const e = window.game.world.enemies.find((x) => x.id === id);
+  return { gone: !e, health: e ? e.health : 0 };
+}, target.id);
+check("the crowbar connects with what is in front of it",
+  swung.gone || swung.health < target.health,
+  `${target.health} -> ${JSON.stringify(swung)}`);
+
+// A terminal is a dwell that rewrites the grid, so it has to survive being read.
+await holdUp();
+await arcPage.evaluate(() => {
+  const w = window.game.world;
+  const t = w.map.devices.find((d) => d.kind === "terminal");
+  const p = w.players[0];
+  p.x = t.x; p.y = t.y; p.prevX = p.x; p.prevY = p.y;
+});
+await arcPage.keyboard.down("KeyF");
+await arcPage.waitForTimeout(2200);
+await arcPage.keyboard.up("KeyF");
+const logRead = await arcPage.evaluate(() => ({
+  spent: window.game.world.map.devices.find((d) => d.kind === "terminal").spent,
+  shown: window.game.logPanel.text.length,
+}));
+check("holding USE on a terminal reads its log and spends the tile",
+  logRead.spent === true && logRead.shown > 20, JSON.stringify(logRead));
+
+// The armoury: the first gun on the ship. A locker must never hand out more melee.
+await arcPage.evaluate(() => window.game.advanceFloor());
+await arcPage.waitForTimeout(250);
+await holdUp();
+const armed = await arcPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const l = w.map.devices.find((d) => d.kind === "locker");
+  p.x = l.x; p.y = l.y; p.prevX = p.x; p.prevY = p.y;
+  await new Promise((r) => setTimeout(r, 300));
+  return { weapon: p.weapon.name, ammo: p.ammo, melee: p.weapon.melee === true };
+});
+check("a weapon locker hands out a gun, loaded",
+  armed.melee === false && armed.ammo > 0, JSON.stringify(armed));
+
+// The wall: a dead door is not an objective, and walking into it wakes the deck.
+await arcPage.evaluate(() => { window.game.advanceFloor(); window.game.advanceFloor(); });
+await arcPage.waitForTimeout(250);
+await holdUp();
+const wall = await arcPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const d = w.map.blastDoors[0];
+  p.x = d.x; p.y = d.y + 60; p.prevX = p.x; p.prevY = p.y;
+  await new Promise((r) => setTimeout(r, 400));
+  return { door: w.devices.door, objective: w.objective.kind, phase: w.director.phase };
+});
+check("an unpowered blast door points the squad down instead of at itself",
+  wall.door === "sealed" && wall.objective === "stairs" && wall.phase === "panic",
+  JSON.stringify(wall));
+
+// The reactor: three dwells, and a state flag that changes the rest of the mission.
+await arcPage.evaluate(() => { window.game.advanceFloor(); window.game.advanceFloor(); });
+await arcPage.waitForTimeout(250);
+await holdUp();
+arc = await arcState();
+check("the reactor deck is dark and wants three cells",
+  arc.blackout === true && arc.objective === "reactor" && arc.cells.total === 3,
+  JSON.stringify(arc));
+
+await arcPage.keyboard.down("KeyF");
+for (let cell = 0; cell < 3; cell++) {
+  for (let t = 0; t < 17; t++) {
+    await arcPage.evaluate(() => {
+      const w = window.game.world;
+      const socket = w.map.devices.find((d) => d.kind === "socket" && !d.spent);
+      const p = w.players[0];
+      if (socket) { p.x = socket.x; p.y = socket.y; p.prevX = p.x; p.prevY = p.y; }
+      p.health = p.maxHealth; p.downed = false; p.bleedout = 0;
+      w.enemies.length = 0;
+    });
+    await arcPage.waitForTimeout(500);
+  }
+}
+await arcPage.keyboard.up("KeyF");
+arc = await arcState();
+check("every cell seated brings main power back and frees the stairs",
+  arc.power === true && arc.cells.primed === 3 && arc.objective === "stairs",
+  JSON.stringify(arc));
+
+// Act IV: power crosses the floor loads, and the door that was a wall is now a fight.
+await arcPage.evaluate(() => {
+  window.game.advanceFloor(); window.game.advanceFloor(); window.game.advanceFloor();
+});
+await arcPage.waitForTimeout(250);
+await holdUp();
+arc = await arcState();
+check("power survives the climb, and the last floor leans hardest",
+  arc.map === "The Bridge" && arc.power === true && arc.difficulty > 2,
+  JSON.stringify(arc));
+
+await arcPage.evaluate(() => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const d = w.map.blastDoors[0];
+  p.x = d.x; p.y = d.y + 50; p.prevX = p.x; p.prevY = p.y;
+});
+await arcPage.keyboard.down("KeyF");
+await arcPage.waitForTimeout(2400);
+await arcPage.keyboard.up("KeyF");
+const unsealing = await arcState();
+check("with power, holding the panel starts the unseal",
+  unsealing.door === "unsealing" && unsealing.objective === "unseal",
+  JSON.stringify(unsealing));
+
+const opened = await arcPage.evaluate(async () => {
+  const w = window.game.world;
+  // Skip the ninety seconds: the clock is a constant, the tile edit is the mechanism.
+  w.devices.doorTimer = 0.05;
+  await new Promise((r) => setTimeout(r, 400));
+  return {
+    door: w.devices.door, blastDoors: w.map.blastDoors.length,
+    objective: w.objective.kind, exits: w.map.exits.length,
+  };
+});
+check("the unseal deletes the door and the bridge becomes the exit",
+  opened.door === "open" && opened.blastDoors === 0 && opened.objective === "exit" &&
+  opened.exits > 0,
+  JSON.stringify(opened));
+
+check("the story arc raised no exceptions", arcErrors.length === 0, arcErrors.join(" | "));
 
 await browser.close();
 

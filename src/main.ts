@@ -11,15 +11,17 @@ import { emptyInput } from "./input/types";
 import { Camera, type CameraMode } from "./render/camera";
 import { Renderer } from "./render/renderer";
 import { layoutViewports, type Viewport } from "./render/viewport";
-import { drawBanner, drawHud, drawSplitBorders } from "./render/hud";
+import { drawBanner, drawHud, drawLog, drawSplitBorders } from "./render/hud";
 import { DebugOverlay } from "./render/debug";
 import { Lobby, MAX_PLAYERS } from "./menu/lobby";
 import { ModeSelect } from "./menu/modeSelect";
 import { MissionSelect } from "./menu/missionSelect";
 import { GameAudio } from "./audio/gameAudio";
 import {
-  CAMPAIGN, floorCount, loadProgress, missionLevel, saveProgress, type Mission,
+  CAMPAIGN, floorCount, floorSpec, loadProgress, missionLevel, saveProgress, type Mission,
 } from "./campaign/campaign";
+import { giveWeapon } from "./sim/player";
+import { WEAPONS } from "./sim/entities";
 import type { GameMode } from "./sim/world";
 import { computeVisibility, makeLight } from "./vision/visibility";
 
@@ -62,6 +64,11 @@ export class Game {
   cameras: Camera[] = [];
   views: Viewport[] = [];
   private banner = { text: "", time: 0 };
+  /**
+   * The crew log currently on screen. Held longer than a banner and drawn full width,
+   * because a paragraph of story is not a status line.
+   */
+  private logPanel = { text: "", time: 0 };
   private levelIndex = 0;
   private cameraMode: CameraMode = "rotating";
   /** Reusable per-player command buffer — the sim sees this, not the raw device. */
@@ -267,8 +274,41 @@ export class Game {
   private launchMission(mission: Mission): void {
     this.activeMission = mission;
     this.activeFloor = 0;
+    this.logPanel.time = 0;
     this.beginMatch(missionLevel(mission, 0), "story");
-    if (floorCount(mission) > 1) this.setBanner(`FLOOR 1 / ${floorCount(mission)}`);
+    // The loadout is a mission property, so it is applied on launch and not on every
+    // floor: the ship hands you a crowbar once, and what you find on the way is yours.
+    for (const p of this.world.players) {
+      giveWeapon(p, mission.loadout ?? WEAPONS.smg);
+    }
+    this.applyFloorSpec();
+    if (floorCount(mission) > 1) this.setBanner(this.floorLabel());
+  }
+
+  /**
+   * The two things a floor knows that its grid does not: how hard the director should
+   * lean on it, and how dark it is. Applied after every load, including the first.
+   */
+  private applyFloorSpec(): void {
+    const mission = this.activeMission;
+    if (!mission) {
+      this.world.difficulty = 1;
+      this.world.blackout = false;
+      return;
+    }
+    const spec = floorSpec(mission, this.activeFloor);
+    this.world.difficulty = spec.pressure ?? 1;
+    this.world.blackout = spec.blackout === true;
+  }
+
+  /** "FLOOR 3 / 9", or the floor's own name when it has one. */
+  private floorLabel(): string {
+    const mission = this.activeMission;
+    if (!mission) return this.world.map.name;
+    const spec = floorSpec(mission, this.activeFloor);
+    const count = floorCount(mission);
+    const where = `${this.activeFloor + 1} / ${count}`;
+    return spec.name ? `${spec.name.toUpperCase()}  ·  ${where}` : `FLOOR ${where}`;
   }
 
   /**
@@ -284,8 +324,9 @@ export class Game {
       return;
     }
     this.world.loadLevel(missionLevel(mission, this.activeFloor), { keepSquad: true });
+    this.applyFloorSpec();
     this.relayout();
-    this.setBanner(`FLOOR ${this.activeFloor + 1} / ${floorCount(mission)}`);
+    this.setBanner(this.floorLabel());
   }
 
   private completeMission(): void {
@@ -451,6 +492,7 @@ export class Game {
     if (this.phase !== "playing") {
       this.updateMenus(dt);
       if (this.banner.time > 0) this.banner.time -= dt;
+      if (this.logPanel.time > 0) this.logPanel.time -= dt;
       return;
     }
 
@@ -459,6 +501,7 @@ export class Game {
     this.audio.handle(this.world.events);
     this.drainEvents();
     if (this.banner.time > 0) this.banner.time -= dt;
+    if (this.logPanel.time > 0) this.logPanel.time -= dt;
   }
 
   private updateMenus(dt: number): void {
@@ -506,6 +549,19 @@ export class Game {
       } else if (ev.kind === "horde") {
         // No banner: a wave should be something you hear and feel, not read.
         this.shakeAll(0.35);
+      } else if (ev.kind === "log") {
+        this.showLog(ev.index ?? 0);
+      } else if (ev.kind === "power") {
+        // The lights coming on is the biggest single moment in the mission: a jolt, a
+        // banner, and from here the whole ship looks different.
+        this.shakeAll(0.9);
+        if (ev.text) this.setBanner(ev.text);
+      } else if (ev.kind === "siren") {
+        // Sound only. A banner every four seconds for the rest of the run would be a
+        // lot of reading for something the screen is already telling you in red.
+      } else if (ev.kind === "doorSealed" || ev.kind === "unsealing") {
+        this.shakeAll(0.6);
+        if (ev.text) this.setBanner(ev.text);
       } else if (ev.kind === "flareLit") {
         // The finale starting is worth a jolt: everything that follows is downstream
         // of this one decision, so it should not slip past as another line of text.
@@ -539,6 +595,26 @@ export class Game {
   private setBanner(text: string): void {
     this.banner.text = text;
     this.banner.time = 2.2;
+  }
+
+  /**
+   * Show the crew log a terminal just gave up. The world raises *which* log was read;
+   * the text lives on the mission, because a tile id cannot carry a paragraph and the
+   * simulation has no business holding the story.
+   */
+  private showLog(index: number): void {
+    const mission = this.activeMission;
+    const logs = mission ? floorSpec(mission, this.activeFloor).logs ?? [] : [];
+    const text = logs[index];
+    if (!text) {
+      // A terminal with no log behind it: still worth acknowledging, so a level author
+      // testing a map can see the terminal working before they have written the text.
+      this.setBanner("LOG CORRUPTED — NOTHING LEGIBLE");
+      return;
+    }
+    this.logPanel.text = text;
+    // Long enough to read a paragraph at a walk, and it holds while you keep moving.
+    this.logPanel.time = 11;
   }
 
   private shakeAll(amount: number): void {
@@ -628,6 +704,12 @@ export class Game {
     }
     drawSplitBorders(renderer.ctx, this.views, world, renderer.dpr);
 
+    if (this.logPanel.time > 0) {
+      drawLog(
+        renderer.ctx, this.logPanel.text, Math.min(1, this.logPanel.time),
+        renderer.width, renderer.height, renderer.dpr,
+      );
+    }
     if (this.banner.time > 0) {
       drawBanner(
         renderer.ctx, this.banner.text, Math.min(1, this.banner.time),

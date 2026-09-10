@@ -111,6 +111,50 @@ export class GameAudio {
         case "chopperDown":
           this.bus.tone("touchdown", at, { freq: 120, to: 70, type: "sawtooth", decay: 0.6, level: 0.5 });
           break;
+        case "log":
+          // A terminal waking up: a soft chirp, then the hum of a screen with something
+          // still on it.
+          this.bus.tone("logChirp", CENTRE, { freq: 880, to: 1240, type: "square", decay: 0.09, level: 0.22 });
+          this.bus.tone("logHum", CENTRE, { freq: 220, to: 210, type: "triangle", attack: 0.05, decay: 0.6, level: 0.12 });
+          break;
+        case "pickup":
+          // Metal on metal: a locker door, and a weapon coming out of it.
+          this.bus.noise("lockerOpen", at, { freq: 1800, q: 2.2, decay: 0.08, level: 0.4 });
+          this.bus.tone("lockerTake", CENTRE, { freq: 300, to: 520, type: "square", decay: 0.16, level: 0.28 });
+          break;
+        case "reactor":
+          // A contactor closing somewhere below you. Heavy, and it stays with you.
+          this.bus.noise("cellSeat", at, { freq: 260, q: 0.9, decay: 0.3, level: 0.6 });
+          this.bus.tone("cellSpin", at, { freq: 70, to: 190, type: "sawtooth", attack: 0.1, decay: 1.1, level: 0.3 });
+          break;
+        case "power":
+          // The ship coming back on: a rising surge, and the mains settling into a hum.
+          this.bus.tone("surge", CENTRE, { freq: 55, to: 330, type: "sawtooth", attack: 0.25, decay: 1.8, level: 0.5 });
+          this.bus.tone("mains", CENTRE, { freq: 110, to: 110, type: "triangle", attack: 0.4, decay: 2.4, level: 0.2 });
+          break;
+        case "siren":
+          // The alarm the ship runs from then on. Two-tone, alternating, and quiet
+          // enough to sit under a firefight — it is atmosphere, not an event.
+          this.sirenUp = !this.sirenUp;
+          this.bus.tone("siren", CENTRE, {
+            freq: this.sirenUp ? 440 : 330, to: this.sirenUp ? 330 : 440,
+            type: "triangle", attack: 0.15, decay: 1.1, level: 0.16,
+          });
+          break;
+        case "doorSealed":
+          // A dead lock: the clunk of something refusing, then a klaxon somewhere else.
+          this.bus.noise("lockDead", at, { freq: 180, q: 1.1, decay: 0.24, level: 0.6 });
+          this.bus.tone("lockRefuse", CENTRE, { freq: 260, to: 120, type: "square", decay: 0.5, level: 0.35 });
+          break;
+        case "unsealing":
+          // Ninety seconds of machinery starting. It should sound like a commitment.
+          this.bus.tone("unseal", at, { freq: 48, to: 82, type: "sawtooth", attack: 0.3, decay: 1.6, level: 0.45 });
+          this.bus.noise("unsealGrind", at, { freq: 420, q: 0.5, decay: 1.2, level: 0.3 });
+          break;
+        case "unsealed":
+          this.bus.noise("doorOpen", at, { freq: 300, q: 0.6, decay: 0.7, level: 0.6, sweepTo: 900 });
+          this.bus.tone("doorClear", CENTRE, { freq: 520, to: 880, type: "triangle", decay: 0.5, level: 0.4 });
+          break;
         case "floorCleared":
         case "missionComplete":
           this.bus.tone("objective", CENTRE, { freq: 440, to: 880, type: "triangle", decay: 0.5, level: 0.4 });
@@ -184,6 +228,7 @@ export class GameAudio {
 
   private alarmUp = false;
   private rotorUp = false;
+  private sirenUp = false;
 
   /** Damage and reloads, spotted by watching the numbers rather than adding events. */
   private watchPlayers(world: GameWorld): void {

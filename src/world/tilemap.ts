@@ -22,6 +22,24 @@ export interface CarBody {
 }
 
 /**
+ * One device tile: a terminal, a fusion socket or a weapon locker. Collected in
+ * row-major order so a device's INDEX is stable whether or not it has been used —
+ * which is what lets a mission hand a floor a list of logs and have terminal 2 keep
+ * reading log 2 after terminal 1 has been read. See `src/sim/devices.ts`.
+ */
+export interface DeviceTile {
+  kind: "terminal" | "socket" | "locker";
+  /** Tile coordinates, so using one can rewrite the grid. */
+  tx: number;
+  ty: number;
+  /** Centre of the tile, in world units. */
+  x: number;
+  y: number;
+  /** Already used. Still listed, because the index has to stay put. */
+  spent: boolean;
+}
+
+/**
  * CORE 3a — The world grid.
  *
  * Static geometry is a grid of tile ids. A grid buys three things a polygon soup does
@@ -52,6 +70,13 @@ export class TileMap {
    * exit stays shut until the flare is lit and the helicopter has come for you.
    */
   readonly signals: Point[] = [];
+  /**
+   * Terminals, fusion sockets and weapon lockers, in row-major order. Used and unused
+   * alike — see `DeviceTile`.
+   */
+  readonly devices: DeviceTile[] = [];
+  /** Sealed blast doors. Solid, and the reason a floor can have an exit you cannot use. */
+  readonly blastDoors: Point[] = [];
   readonly lamps: { x: number; y: number; range: number }[] = [];
   /** Vehicles, gathered from touching car tiles. See `CarBody`. */
   readonly cars: CarBody[] = [];
@@ -90,6 +115,8 @@ export class TileMap {
     this.exits.length = 0;
     this.stairs.length = 0;
     this.signals.length = 0;
+    this.devices.length = 0;
+    this.blastDoors.length = 0;
     this.lamps.length = 0;
     this.cars.length = 0;
     this.walkable = [];
@@ -105,6 +132,9 @@ export class TileMap {
         // A SOLID tile can still be a spawn point — a window is the case that matters.
         // Nothing can stand inside it, so the spawn lands on the open tile next to it.
         if (def.solid) {
+          // A blast door is solid, so it is collected here rather than below. It is
+          // the one piece of geometry an objective can delete.
+          if (def.blastDoor) this.blastDoors.push(this.tileCenter(tx, ty));
           if (def.spawn === "zone") {
             const beside = this.firstOpenNeighbour(tx, ty);
             if (beside) this.spawnZones.push(beside);
@@ -124,6 +154,9 @@ export class TileMap {
         if (def.exit) this.exits.push(c);
         if (def.stairs) this.stairs.push(c);
         if (def.signal) this.signals.push(c);
+        if (def.device) {
+          this.devices.push({ kind: def.device, tx, ty, x: c.x, y: c.y, spent: def.spent === true });
+        }
         if (def.light) this.lamps.push({ x: c.x, y: c.y, range: def.light });
       }
     }
@@ -225,6 +258,13 @@ export class TileMap {
 
   isSignalAt(x: number, y: number): boolean {
     return tileDef(this.tileAt(Math.floor(x / TILE), Math.floor(y / TILE))).signal === true;
+  }
+
+  /** The unused device under this point, if any. A spent one answers null. */
+  deviceAt(x: number, y: number): DeviceTile | null {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    return this.devices.find((d) => d.tx === tx && d.ty === ty && !d.spent) ?? null;
   }
 
   /** The first walkable tile orthogonally adjacent to this one, if any. */

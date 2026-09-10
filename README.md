@@ -38,6 +38,7 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Lean left / right | `Q` / `E` | LB / RB |
 | Reload | `R` | X |
 | Revive teammate | Hold `F` | Hold Y |
+| Use a device (terminal, fusion socket, blast door) | Hold `F` | Hold Y |
 | Join the game | `ENTER` in the lobby | `START` in the lobby |
 | Menus | `WASD` / arrows, `ENTER`, `ESC` | stick or D-pad, `START`, `B` |
 
@@ -200,10 +201,42 @@ glyph art, each with a node position on the mission map and a list of missions i
 requires. Adding one is an entry in that array — the mission select screen has no
 per-mission code in it.
 
-The opening mission, **Vertical Slice**, is a six-floor building: car park, service
-corridors, the street outside, lobby, cubicle floor, roof. Stairs (`^`) join the floors
-and the squad carries its condition up, so it plays as one continuous climb. See
+**Vertical Slice** is a six-floor building: car park, service corridors, the street
+outside, lobby, cubicle floor, roof. Stairs (`^`) join the floors and the squad carries
+its condition up, so it plays as one continuous climb. See
 [docs/LEVELS.md](docs/LEVELS.md#multi-floor-missions).
+
+## Dead in Space
+
+The other opening mission is nine decks of a derelict colony ship, and it is the one the
+objective chain was built for. It runs in four acts:
+
+**Act I — wake up.** Cryo-sleep sickness has taken everyone's memory and the ship is
+running on dying emergency batteries. You start with a **crowbar and no gun at all**,
+which changes the whole texture of a floor: melee is quiet, so a deck cleared with it
+stays cleared, and two zombies in a doorway is a fight rather than a formality. Standing
+orders say report to the security hub — and the first gun on the ship is in its armoury,
+along with a log that starts to explain what happened.
+
+**Act II — the wall.** Up through the residential deck to the bridge, where the blast
+door is dead: *no main power, manual bypass at the reactor.* Walking up to it is loud.
+The director drops whatever it was doing, opens every door on the deck at once, and from
+here the ship is hunting you rather than merely containing you.
+
+**Act III — the descent.** Down into engineering and the reactor, the two darkest decks
+in the game. Three fusion sockets, each one seven seconds of holding a button while
+somebody else watches the door — and seating the first cell starts a siege that runs
+until the last one is in. When it is, **main power comes back**: the lights slam on
+across every deck, the alarm starts, and the director is handed everything left.
+
+**Act IV — the run back.** The same maps, walked the other way with the alarm blazing:
+cabins sealed that were open, vents broken through that were not, and a director leaning
+more than twice as hard as it did on the way down. At the top, the blast door finally
+answers — a ninety-second unseal you have to survive on the catwalk before the bridge is
+yours.
+
+Four crew terminals along the way carry the story. They gate nothing, which is exactly
+why they are worth the detour.
 
 ## The extraction finale
 
@@ -311,7 +344,9 @@ Tuning is two tables at the top of `src/sim/director.ts` — `STORY_TUNING` and
 Levels are 2D arrays of tile ids — `0` floor, `1` wall, `2` player spawn, `3` zombie,
 `4` crate, `5` glass, `6` lamp, `7` exit, `8` spawn zone, `9` stairs, `20` signal flare,
 plus scenery (`10` car, `11` window, `12` reception desk, `13` cubicle, `14` flare,
-`15` lift door, `16` blocked floor, `17` broken glass, `18` broken window):
+`15` lift door, `16` blocked floor, `17` broken glass, `18` broken window) and the
+objective devices (`21` terminal, `23` weapon locker, `25` fusion socket, `27` blast
+door, `28` stairs down):
 
 ```
 [1,1,1,1,1,1,1],
@@ -348,10 +383,12 @@ driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
 hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director,
-a flare-and-helicopter extraction finale, HUD per viewport,
+a flare-and-helicopter extraction finale, melee weapons, hold-to-use devices
+(terminals, weapon lockers, fusion sockets and a blast door) driving a multi-act
+objective chain, per-floor difficulty pressure, HUD per viewport,
 a debug overlay, synthesised positional sound, the level format with a tolerant
 importer, and a map editor.
 
-Not built yet: music, menus and a controller-assignment screen, weapon pickups and
-progression, saves, and netcode. The architecture doc says where each of
+Not built yet: music, menus and a controller-assignment screen, per-player loadouts and
+an ammo economy, saves, and netcode. The architecture doc says where each of
 those attaches.

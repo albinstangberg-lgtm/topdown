@@ -3,6 +3,7 @@ import { TILE } from "../world/tilemap";
 import { tileDef } from "../world/tiles";
 import { raycast } from "../world/raycast";
 import { PLAYER_TUNING } from "../sim/player";
+import { UNSEAL_TIME } from "../sim/devices";
 import type { Enemy, Player } from "../sim/entities";
 import { zombieDef } from "../sim/zombies";
 import type { GameWorld } from "../sim/world";
@@ -28,6 +29,18 @@ const COLOR_FLOOR = "#cfc9b4";
 const COLOR_WALL = "#07070c";
 const AMBIENT_DARKNESS = 0.94; // 1 = pitch black outside the cones
 /**
+ * How dark a blackout deck is: the reactor levels, where the flashlight is genuinely
+ * all you have. Only a few points darker than ambient, which is most of the difference
+ * between "unlit" and "you cannot read the room at all".
+ */
+const BLACKOUT_DARKNESS = 0.985;
+/**
+ * And with main power back. Not daylight — the ship is running on emergency lighting
+ * in an alarm state — but enough that the second half of the mission is visibly a
+ * different place from the first, which is the whole point of walking it twice.
+ */
+const POWERED_DARKNESS = 0.55;
+/**
  * Flashlight strength. REVEAL is how much darkness the cone removes (1 = fully lit
  * floor), GLOW is the additive warmth on top. Deliberately well under 1: a blown-out
  * cone hides tracers, muzzle flashes and anything else drawn bright.
@@ -38,6 +51,12 @@ const HALO_REVEAL = 0.34;
 const HALO_GLOW = 0.04;
 
 export interface Bounds { x0: number; y0: number; x1: number; y1: number }
+
+/** How dark this floor is right now: blackout, ordinary gloom, or lit by main power. */
+function darknessOf(world: GameWorld): number {
+  if (world.power.on) return POWERED_DARKNESS;
+  return world.blackout ? BLACKOUT_DARKNESS : AMBIENT_DARKNESS;
+}
 
 /** Skip lights that cannot touch this viewport — the single biggest split-screen win. */
 function lightVisible(light: VisionLight, b: Bounds): boolean {
@@ -104,6 +123,7 @@ export class Renderer {
     this.drawExits(ctx, world, bounds);
     this.drawStairs(ctx, world, bounds);
     this.drawSignals(ctx, world, bounds);
+    this.drawDevices(ctx, world, bounds);
     this.drawLamps(ctx, world, bounds);
     this.drawParticles(ctx, world);
     this.drawActors(ctx, world, alpha);
@@ -127,7 +147,28 @@ export class Renderer {
     this.drawTeammateMarkers(ctx, world, vp);
     ctx.restore();
 
+    this.drawAlert(ctx, world, vp);
     ctx.restore();
+  }
+
+  /**
+   * The alarm state, in screen space: a red pulse round the edge of every viewport once
+   * main power is back. It is the cheapest possible way to make the walk back UP the
+   * ship feel like a different game from the walk down, which is the whole reason the
+   * campaign reuses those maps.
+   */
+  private drawAlert(ctx: CanvasRenderingContext2D, world: GameWorld, vp: Viewport): void {
+    if (!world.power.on) return;
+    // Two beats a second, and never fully off — a strobe you can play under.
+    const beat = 0.35 + 0.65 * Math.pow(Math.abs(Math.sin(world.power.time * 2.1)), 3);
+    const edge = Math.min(vp.w, vp.h) * 0.42;
+    const wash = ctx.createRadialGradient(
+      vp.w / 2, vp.h / 2, edge * 0.55, vp.w / 2, vp.h / 2, Math.hypot(vp.w, vp.h) / 2,
+    );
+    wash.addColorStop(0, "rgba(255,40,30,0)");
+    wash.addColorStop(1, `rgba(255,40,30,${0.10 + 0.16 * beat})`);
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, vp.w, vp.h);
   }
 
   // --- world -----------------------------------------------------------------
@@ -247,7 +288,9 @@ export class Renderer {
     // Walls are one batched black path; everything else is furniture with its own look.
     // Cars are deliberately absent: they are drawn per VEHICLE from `map.cars`, not
     // per tile, so a 2x2 wreck is one body with one outline.
-    const props: Record<string, number[]> = { crate: [], glass: [], reception: [], cubicle: [], door: [] };
+    const props: Record<string, number[]> = {
+      crate: [], glass: [], reception: [], cubicle: [], door: [], blast: [],
+    };
 
     ctx.fillStyle = COLOR_WALL;
     ctx.beginPath();
@@ -261,7 +304,8 @@ export class Renderer {
         if (!def.solid) continue;
         if (def.key === "blocked") continue;   // drawn with the floor, not as geometry
         if (def.prop === "car") continue;         // drawn as a whole vehicle, below
-        const bucket = def.prop ?? (def.key === "crate" ? "crate" : def.key === "glass" ? "glass" : null);
+        const bucket = def.blastDoor ? "blast"
+          : def.prop ?? (def.key === "crate" ? "crate" : def.key === "glass" ? "glass" : null);
         if (bucket && props[bucket]) { props[bucket].push(tx, ty); continue; }
         ctx.rect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
       }
@@ -340,6 +384,46 @@ export class Renderer {
       }
     }
 
+    // The bridge blast door. Three states worth telling apart at a glance: dead (no
+    // power), live but shut, and grinding open — so the door reads as an objective
+    // rather than as a wall somebody painted orange.
+    const door = world.devices;
+    for (let i = 0; i < props.blast.length; i += 2) {
+      const x = props.blast[i] * TILE;
+      const y = props.blast[i + 1] * TILE;
+      const opening = door.door === "unsealing";
+      const live = world.power.on;
+      const beat = opening
+        ? 0.5 + 0.5 * Math.sin(performance.now() * 0.012)
+        : live ? 0.35 + 0.25 * Math.sin(performance.now() * 0.003) : 0.12;
+
+      ctx.fillStyle = "#08080c";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = live ? "#3a2620" : "#241f22";
+      ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+      // Hazard stripes across the leaf, so a row of these reads as one door.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x + 2, y + 2, TILE - 4, TILE - 4);
+      ctx.clip();
+      ctx.strokeStyle = `rgba(255,170,60,${0.12 + beat * 0.28})`;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      for (let k = -TILE; k < TILE * 2; k += 16) {
+        ctx.moveTo(x + k, y);
+        ctx.lineTo(x + k + TILE, y + TILE);
+      }
+      ctx.stroke();
+      ctx.restore();
+      // The centre seam, which is the bit that actually moves.
+      const gap = opening ? 3 + 9 * (1 - door.doorTimer / Math.max(1, UNSEAL_TIME)) : 3;
+      ctx.fillStyle = "#05050a";
+      ctx.fillRect(x + TILE / 2 - gap / 2, y + 2, gap, TILE - 4);
+      ctx.strokeStyle = `rgba(255,${live ? 150 : 90},${live ? 70 : 80},${0.25 + beat * 0.5})`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 2.5, y + 2.5, TILE - 5, TILE - 5);
+    }
+
     for (let i = 0; i < props.glass.length; i += 2) {
       const x = props.glass[i] * TILE;
       const y = props.glass[i + 1] * TILE;
@@ -408,6 +492,68 @@ export class Renderer {
       ctx.fillRect(flare.x - 4, flare.y - 11, 8, 22);
       ctx.fillStyle = "#e8e2d0";
       ctx.fillRect(flare.x - 4, flare.y - 13, 8, 4);
+    }
+  }
+
+  /**
+   * Terminals, lockers and fusion sockets. Each is a small lit thing on the floor,
+   * because in a blackout a device you cannot find is a device that does not exist —
+   * they carry their own glow in the tile table for exactly that reason.
+   */
+  private drawDevices(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    const t = 0.55 + 0.45 * Math.sin(performance.now() * 0.004);
+    for (const d of world.map.devices) {
+      if (d.x < b.x0 || d.x > b.x1 || d.y < b.y0 || d.y > b.y1) continue;
+      const half = TILE / 2;
+
+      if (d.kind === "terminal") {
+        // A console: a dark cabinet with a screen on it. Green while there is still
+        // something on it to read, dead grey once it has been read.
+        ctx.fillStyle = "#101820";
+        ctx.fillRect(d.x - half + 6, d.y - half + 8, TILE - 12, TILE - 16);
+        ctx.fillStyle = d.spent
+          ? "rgba(90,120,110,0.35)"
+          : `rgba(122,255,210,${0.35 + t * 0.45})`;
+        ctx.fillRect(d.x - half + 10, d.y - half + 12, TILE - 20, TILE - 26);
+        if (d.spent) continue;
+        ctx.strokeStyle = `rgba(122,255,210,${0.25 + t * 0.3})`;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(d.x - half + 5, d.y - half + 7, TILE - 10, TILE - 14);
+        continue;
+      }
+
+      if (d.kind === "locker") {
+        // A wall locker, hanging open once somebody has taken what was in it.
+        ctx.fillStyle = d.spent ? "#2a2622" : "#38301f";
+        ctx.fillRect(d.x - half + 7, d.y - half + 5, TILE - 14, TILE - 10);
+        ctx.strokeStyle = d.spent
+          ? "rgba(150,130,100,0.25)"
+          : `rgba(255,180,92,${0.4 + t * 0.4})`;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(d.x - half + 7, d.y - half + 5, TILE - 14, TILE - 10);
+        if (d.spent) continue;
+        // A cross, so it reads as supplies rather than as a crate.
+        ctx.beginPath();
+        ctx.moveTo(d.x, d.y - 8); ctx.lineTo(d.x, d.y + 8);
+        ctx.moveTo(d.x - 8, d.y); ctx.lineTo(d.x + 8, d.y);
+        ctx.stroke();
+        continue;
+      }
+
+      // A fusion socket: an empty housing, or one with a cell in it and running.
+      ctx.strokeStyle = d.spent
+        ? `rgba(139,255,122,${0.5 + t * 0.4})`
+        : `rgba(90,210,255,${0.3 + t * 0.35})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, TILE * 0.3, 0, TAU);
+      ctx.stroke();
+      ctx.fillStyle = d.spent
+        ? `rgba(139,255,122,${0.25 + t * 0.3})`
+        : "rgba(20,30,40,0.8)";
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, TILE * 0.16, 0, TAU);
+      ctx.fill();
     }
   }
 
@@ -686,10 +832,12 @@ export class Renderer {
     const y = lerp(p.prevY, p.y, alpha) + (p.eyeY - p.y) * 0.55;
     const body = p.downed ? "#6b6b6b" : (p.hurtFlash > 0.15 ? "#ffffff" : p.color);
     // The barrel extends as the weapon comes up and the body flattens as you go to
-    // the floor — both stances are readable off the world, without UI.
+    // the floor — both stances are readable off the world, without UI. A melee weapon
+    // gets a short stub of one rather than a rifle's worth: you can tell at a glance
+    // across the room who has found a gun and who is still carrying a crowbar.
+    const barrel = p.weapon.melee ? 0.3 + p.weaponUp * 0.25 : 0.45 + p.weaponUp * 0.55;
     drawBlockActor(
-      ctx, x, y, p.facing, p.radius, body, "#ffffff", true,
-      0.45 + p.weaponUp * 0.55, proneAmount(p),
+      ctx, x, y, p.facing, p.radius, body, "#ffffff", true, barrel, proneAmount(p),
     );
 
     if (p.muzzleFlash > 0) {
@@ -770,7 +918,7 @@ export class Renderer {
     lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     lctx.globalCompositeOperation = "source-over";
     lctx.clearRect(0, 0, vp.w, vp.h);
-    lctx.fillStyle = `rgba(10,8,18,${AMBIENT_DARKNESS})`;
+    lctx.fillStyle = `rgba(10,8,18,${darknessOf(world)})`;
     lctx.fillRect(0, 0, vp.w, vp.h);
 
     lctx.save();
@@ -806,7 +954,9 @@ export class Renderer {
   private drawAimLines(ctx: CanvasRenderingContext2D, world: GameWorld): void {
     ctx.globalCompositeOperation = "lighter";
     for (const p of world.players) {
-      if (p.weaponUp <= 0.02 || p.downed) continue;
+      // No laser on a crowbar: the laser exists to say exactly where a bullet would
+      // stop, and a melee weapon has nothing to say about that.
+      if (p.weaponUp <= 0.02 || p.downed || p.weapon.melee) continue;
 
       const cos = Math.cos(p.facing);
       const sin = Math.sin(p.facing);
