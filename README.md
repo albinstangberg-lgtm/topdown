@@ -205,6 +205,34 @@ corridors, the street outside, lobby, cubicle floor, roof. Stairs (`^`) join the
 and the squad carries its condition up, so it plays as one continuous climb. See
 [docs/LEVELS.md](docs/LEVELS.md#multi-floor-missions).
 
+## Sound
+
+Everything is synthesised — oscillators, filtered noise and envelopes. There are no
+sample files, no loader and nothing to 404, which is the same bet the renderer makes
+with blocks instead of sprites and for the same reason: one file you can read beats a
+folder of binaries you cannot diff.
+
+**Every noise the zombies hear is a sound you hear.** The noise field feeds the audio
+layer directly, so the loudness on screen is the same number the director uses — a
+shotgun is louder in your ears for exactly the reason it pulls a bigger room. That
+matters because the game now has a mechanic you cannot learn any other way.
+
+On top of that: a growl for the crowd, more often and higher the more of them are near
+and the more of them are hunting, so a horde sounds like a horde without forty voices; a
+rising **screech on the windup**, because a telegraph you can only see is no use when
+the thing is behind you; a whoosh on the leap; the two-tone whoop of a car alarm; and
+the ordinary business of hits, reloads, downs and revives.
+
+Sounds are placed against the **nearest** player and panned against that player's own
+view — split screen has no single pair of ears, and averaging four positions puts every
+sound in the middle of nowhere. Anything past about 23 tiles is inaudible. Voices are
+capped per frame, because a panic horde will happily ask for forty.
+
+The bus never throws: no audio device, a context that will not start, a headless test
+runner — all of them get a bus that counts what it was asked to play and makes no sound.
+`M` mutes, and the choice is remembered. Nothing in `src/sim` imports any of it; the
+audio layer watches the world from outside, the same way the renderer does.
+
 ## The director
 
 Pressure has a shape, modelled on Left 4 Dead's AI Director rather than on a spawn
@@ -291,8 +319,9 @@ driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
 hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director, HUD per viewport,
-a debug overlay, the level format with a tolerant importer, and a map editor.
+a debug overlay, synthesised positional sound, the level format with a tolerant
+importer, and a map editor.
 
-Not built yet: audible audio (the noise field is simulation only — nothing plays), menus and a controller-assignment screen, weapon pickups and
+Not built yet: music, menus and a controller-assignment screen, weapon pickups and
 progression, objectives, saves, and netcode. The architecture doc says where each of
 those attaches.

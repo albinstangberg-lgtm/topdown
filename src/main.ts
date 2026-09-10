@@ -16,6 +16,7 @@ import { DebugOverlay } from "./render/debug";
 import { Lobby, MAX_PLAYERS } from "./menu/lobby";
 import { ModeSelect } from "./menu/modeSelect";
 import { MissionSelect } from "./menu/missionSelect";
+import { GameAudio } from "./audio/gameAudio";
 import {
   CAMPAIGN, floorCount, loadProgress, missionLevel, saveProgress, type Mission,
 } from "./campaign/campaign";
@@ -55,6 +56,8 @@ export class Game {
   private readonly input: InputManager;
   readonly world = new GameWorld();
   private readonly debug = new DebugOverlay();
+  /** Public for the smoke tests: what the game sounds like. See `src/audio/`. */
+  readonly audio = new GameAudio();
   /** Public for the debug console and the smoke tests — one camera per viewport. */
   cameras: Camera[] = [];
   views: Viewport[] = [];
@@ -121,6 +124,15 @@ export class Game {
       this.relayout();
     }
 
+    this.audio.listenTo(this.world);
+    this.audio.cameraRotates = this.cameraMode === "rotating";
+    // Browsers will not start audio until the person has touched the page, so every
+    // first input doubles as the thing that switches the sound on.
+    const wake = (): void => this.audio.wake();
+    window.addEventListener("keydown", wake);
+    window.addEventListener("pointerdown", wake);
+    window.addEventListener("gamepadconnected", wake);
+
     window.addEventListener("resize", this.onResize);
     this.installLevelImport(canvas);
     window.addEventListener("keydown", (e) => {
@@ -133,6 +145,9 @@ export class Game {
       if (e.code === "BracketLeft" && cycleAllowed) this.cycleLevel(-1);
       if (e.code === "BracketRight" && cycleAllowed) this.cycleLevel(1);
       if (e.code === "KeyC" && !e.ctrlKey && !e.metaKey) this.toggleCameraMode();
+      if (e.code === "KeyM" && !e.ctrlKey && !e.metaKey) {
+        this.setBanner(this.audio.toggleMute() ? "sound off" : "sound on");
+      }
     });
     this.onResize();
 
@@ -317,6 +332,7 @@ export class Game {
       const p = this.world.players[i];
       if (p) this.cameras[i].snapTo(p.x, p.y, p.facing);
     }
+    this.audio.cameraRotates = this.cameraMode === "rotating";
     this.setBanner(`camera: ${this.cameraMode}`);
   }
 
@@ -439,6 +455,8 @@ export class Game {
     }
 
     this.world.update(dt, this.inputOf, this.resolveAim);
+    this.audio.update(this.world, dt);
+    this.audio.handle(this.world.events);
     this.drainEvents();
     if (this.banner.time > 0) this.banner.time -= dt;
   }

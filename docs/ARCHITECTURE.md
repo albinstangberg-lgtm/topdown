@@ -188,6 +188,14 @@ with the game.
   the first line of it. A car alarm overrides the loop entirely — every door at once, for
   as long as it screams — and its "only once" is stored in the tile grid rather than in a
   flag beside it, so a spent alarm survives a reload and cannot come back.
+- **Sound as an observer, not a system** (`src/audio/`) — everything is synthesised, so
+  there is no asset pipeline and nothing to load. Nothing in `src/sim` imports it: the
+  audio layer reads the world after the step, the same way the renderer does, and
+  deleting it would change nothing about how the game plays. The one hook is `onEmit` on
+  the noise field, which is what guarantees the player hears exactly what the zombies
+  heard rather than a second, drifting copy of the same table. The bus is written so it
+  can always fail: no device, no context, no gesture yet — it counts the request and
+  makes no sound.
 - **HUD per viewport** (`src/render/hud.ts`) — anything drawn "at the top of the screen"
   is a bug waiting for player 3. Off-screen teammate markers and downed alerts matter
   more than health bars once the squad splits up.

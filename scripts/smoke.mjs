@@ -1684,6 +1684,118 @@ check("a wave arrives hunting and closes on the squad",
   converge.after < converge.before - 60,
   JSON.stringify(converge));
 
+// --- audio ---------------------------------------------------------------------
+//
+// The bus counts every sound it is ASKED for, whether or not a device exists, so these
+// checks work in a headless runner with no output at all. What they are really testing
+// is the wiring: that the noise the zombies hear is the noise the player hears.
+
+const audible = await zomPage.evaluate(async () => {
+  const g = window.game, w = g.world;
+  window.game.loadLevelText([
+    "###############",
+    "#.............#",
+    "#..P......G...#",
+    "#.............#",
+    "###############",
+  ].join("\n"), "audio wiring");
+  await new Promise((r) => setTimeout(r, 300));
+  w.mode = "story";
+  w.map.spawnZones.length = 0;
+  w.enemies.length = 0;
+  w.director.grace = 999;
+  const T = 48;
+  const p = w.players[0];
+  p.health = p.maxHealth; p.downed = false; p.stance = "stand"; p.stanceTimer = 0;
+  p.x = 3.5 * T; p.y = 2.5 * T; p.prevX = p.x; p.prevY = p.y;
+  p.facing = 0; p.weaponUp = 1; p.weaponHold = 1;
+  p.ammo = p.weapon.magazine; p.reloadTimer = 0; p.fireCooldown = 0;
+
+  const before = { ...g.audio.bus.played };
+  // A real shot through the real fire path. Where it goes is up to the cursor, which
+  // has its own checks — so the pane gets its own bullet, down the real bullet path.
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }));
+  await new Promise((r) => setTimeout(r, 400));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space" }));
+  w.bullets.spawn(6 * T, 2.5 * T, 0, 800, 10, "player", p.id, 1, "#fff");
+  await new Promise((r) => setTimeout(r, 300));
+  const after = g.audio.bus.played;
+  const since = (k) => (after[k] ?? 0) - (before[k] ?? 0);
+  return { shot: since("shot"), glass: since("glass"), pane: w.map.tileAt(10, 2) };
+});
+check("firing is heard, and so is the pane it breaks",
+  audible.shot > 0 && audible.glass > 0 && audible.pane === 17,
+  JSON.stringify(audible));
+
+// Distance and side, against the nearest player.
+const placed = await zomPage.evaluate(() => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const ears = [{ x: p.x, y: p.y, facing: 0 }];
+  const bus = window.game.audio.bus;
+  const near = bus.place(p.x + 40, p.y, ears, false);
+  const right = bus.place(p.x + 300, p.y, ears, false);
+  const left = bus.place(p.x - 300, p.y, ears, false);
+  const away = bus.place(p.x + 5000, p.y, ears, false);
+  return {
+    near: +near.gain.toFixed(2),
+    far: +right.gain.toFixed(2),
+    rightPan: +right.pan.toFixed(2),
+    leftPan: +left.pan.toFixed(2),
+    away: away.gain,
+  };
+});
+check("sounds fall off with distance and sit on the right side",
+  placed.near > placed.far && placed.far > 0 && placed.away === 0 &&
+  placed.rightPan > 0.4 && placed.leftPan < -0.4,
+  JSON.stringify(placed));
+
+// The windup is a tell you can hear, which matters when it is behind you.
+const screech = await zomPage.evaluate(async () => {
+  const w = window.game.world;
+  const g = window.game;
+  const T = 48;
+  w.enemies.length = 0;
+  const before = g.audio.bus.played.screech ?? 0;
+  // Borrow a zombie by loading a map that has one, rather than reaching into the sim.
+  window.game.loadLevelText([
+    "###############",
+    "#.............#",
+    "#..P.......E..#",
+    "#.............#",
+    "###############",
+  ].join("\n"), "audio screech");
+  await new Promise((r) => setTimeout(r, 300));
+  w.director.grace = 999;
+  const p = w.players[0];
+  const e = w.enemies[0];
+  if (!e) return "no zombie";
+  p.x = 4.5 * T; p.y = 2.5 * T; p.prevX = p.x; p.prevY = p.y;
+  e.x = 7 * T; e.y = 2.5 * T; e.prevX = e.x; e.prevY = e.y;
+  e.facing = Math.PI; e.state = "wander"; e.alertness = 0; e.attackCooldown = 0;
+  const until = performance.now() + 3000;
+  while (performance.now() < until && (g.audio.bus.played.screech ?? 0) === before) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return { before, after: g.audio.bus.played.screech ?? 0, state: e.state };
+});
+check("a zombie winding up screeches",
+  typeof screech === "object" && screech.after > screech.before,
+  JSON.stringify(screech));
+
+// Mute is a preference, so it has to survive the page.
+const muting = await zomPage.evaluate(() => {
+  const a = window.game.audio;
+  const first = a.toggleMute();
+  const stored = localStorage.getItem("topdown.audio.muted");
+  const second = a.toggleMute();
+  return { first, stored, second, muted: a.bus.isMuted };
+});
+check("mute toggles and is remembered",
+  muting.first === true && muting.stored === "1" &&
+  muting.second === false && muting.muted === false,
+  JSON.stringify(muting));
+
 check("zombie pages raised no exceptions", zomErrors.length === 0, zomErrors.join(" | "));
 
 await browser.close();

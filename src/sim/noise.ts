@@ -32,6 +32,12 @@ const MAX_NOISES = 64;
 
 export class NoiseField {
   readonly items: Noise[] = [];
+  /**
+   * Optional observer, called for every emission. The audio layer hangs off this so
+   * what the player hears is exactly what the zombies heard; the sim itself neither
+   * knows nor cares whether anything is listening.
+   */
+  onEmit: ((n: Noise) => void) | null = null;
   private cursor = 0;
 
   constructor() {
@@ -50,6 +56,7 @@ export class NoiseField {
     n.radius = radius;
     n.kind = kind;
     n.life = NOISE_LIFE;
+    this.onEmit?.(n);
   }
 
   update(dt: number): void {
