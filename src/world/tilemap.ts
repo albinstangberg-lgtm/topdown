@@ -47,6 +47,11 @@ export class TileMap {
   readonly exits: Point[] = [];
   /** Stairs. A floor with these sends the squad up instead of ending the mission. */
   readonly stairs: Point[] = [];
+  /**
+   * Signal flares. A floor with one of these and an exit is an extraction finale: the
+   * exit stays shut until the flare is lit and the helicopter has come for you.
+   */
+  readonly signals: Point[] = [];
   readonly lamps: { x: number; y: number; range: number }[] = [];
   /** Vehicles, gathered from touching car tiles. See `CarBody`. */
   readonly cars: CarBody[] = [];
@@ -84,6 +89,7 @@ export class TileMap {
     this.spawnZones.length = 0;
     this.exits.length = 0;
     this.stairs.length = 0;
+    this.signals.length = 0;
     this.lamps.length = 0;
     this.cars.length = 0;
     this.walkable = [];
@@ -117,6 +123,7 @@ export class TileMap {
         else if (def.spawn === "zone") this.spawnZones.push(c);
         if (def.exit) this.exits.push(c);
         if (def.stairs) this.stairs.push(c);
+        if (def.signal) this.signals.push(c);
         if (def.light) this.lamps.push({ x: c.x, y: c.y, range: def.light });
       }
     }
@@ -214,6 +221,10 @@ export class TileMap {
 
   isStairsAt(x: number, y: number): boolean {
     return tileDef(this.tileAt(Math.floor(x / TILE), Math.floor(y / TILE))).stairs === true;
+  }
+
+  isSignalAt(x: number, y: number): boolean {
+    return tileDef(this.tileAt(Math.floor(x / TILE), Math.floor(y / TILE))).signal === true;
   }
 
   /** The first walkable tile orthogonally adjacent to this one, if any. */

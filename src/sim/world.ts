@@ -1,5 +1,5 @@
 import type { InputState } from "../input/types";
-import { randRange } from "../core/math";
+import { lerp, randRange } from "../core/math";
 import { TILE, type CarBody, type TileMap } from "../world/tilemap";
 import { tileDef } from "../world/tiles";
 import { buildTileMap, type LevelData } from "../world/level";
@@ -48,6 +48,27 @@ const FLOW_INTERVAL = 0.25;
 /** Seconds the whole squad has to stand on the exit before the mission ends. */
 const EXIT_DWELL = 0.8;
 
+// --- the extraction finale ---------------------------------------------------
+//
+// A floor carrying a signal flare (`F`) and an exit does not end when the squad
+// reaches the exit: the exit is a helipad with nothing on it. Somebody has to light
+// the flare, and then the roof has to be held until what it called actually arrives.
+
+/** Seconds one player has to stand on the flare to light it. */
+const FLARE_DWELL = 1.5;
+/** How long the squad holds the roof between lighting the flare and the pickup. */
+const HOLDOUT_TIME = 120;
+/** Seconds between the countdown running out and the skids touching the pad. */
+const CHOPPER_APPROACH = 9;
+/** How far out the helicopter starts its run in, in world units. */
+const CHOPPER_RUN_IN = 1600;
+/** Radius of the light a burning signal flare throws. */
+const FLARE_LIGHT = 340;
+/** Seconds between rotor noise pulses while the helicopter is over the map. */
+const ROTOR_PULSE = 0.5;
+/** Seconds remaining at which the holdout calls the time. */
+const HOLDOUT_CALLS = [60, 30, 10];
+
 /**
  * Survival is the endless procedural mode. Story runs an authored map with placed
  * zombies, spawn zones for variety, and an exit to reach. The only differences live
@@ -55,9 +76,16 @@ const EXIT_DWELL = 0.8;
  */
 export type GameMode = "survival" | "story";
 
+/**
+ * Where the finale has got to. `none` is every ordinary floor, including one with an
+ * exit but no flare — those still end the moment the squad reaches the safe room.
+ */
+export type ExtractionPhase = "none" | "signal" | "holdout" | "inbound" | "ready";
+
 export interface GameEvent {
   kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level" | "horde" | "alarm"
-      | "floorCleared" | "missionComplete" | "missionFailed";
+      | "floorCleared" | "missionComplete" | "missionFailed"
+      | "flareLit" | "holdout" | "chopperInbound" | "chopperDown";
   x?: number;
   y?: number;
   text?: string;
@@ -104,10 +132,51 @@ export class GameWorld {
    * are on it, and how far through the dwell they are.
    */
   readonly objective = {
-    kind: "none" as "none" | "exit" | "stairs",
+    kind: "none" as "none" | "exit" | "stairs" | "signal" | "holdout" | "inbound",
     onExit: 0,
     needed: 0,
     progress: 0,
+    /** Seconds left of the holdout, or of the helicopter's run in. Zero otherwise. */
+    timeLeft: 0,
+  };
+
+  /**
+   * CORE 17b — the extraction finale. Read by the HUD and the renderer; driven by
+   * `updateExtraction`. A floor with no signal flare leaves this at `none` and plays
+   * exactly as it always did.
+   */
+  readonly extraction = {
+    phase: "none" as ExtractionPhase,
+    /** Dwell on the flare so far, 0 to 1. */
+    lighting: 0,
+    /** Seconds left of the holdout, or of the helicopter's run in. */
+    timeLeft: 0,
+    /** What `timeLeft` started at, so the HUD can draw a bar. */
+    total: 0,
+    /** Where the flare is. */
+    x: 0,
+    y: 0,
+    /** The middle of the exit tiles — where the helicopter puts its skids down. */
+    padX: 0,
+    padY: 0,
+    /** Countdown calls already made, so each one is said once. */
+    called: 0,
+  };
+
+  /**
+   * The helicopter. Inactive until the countdown ends, then it flies in and lands on
+   * the pad. `altitude` is 1 out on the run in and 0 with the skids down.
+   */
+  readonly chopper = {
+    active: false,
+    x: 0,
+    y: 0,
+    fromX: 0,
+    fromY: 0,
+    angle: 0,
+    altitude: 1,
+    /** Seconds until the next rotor pulse. */
+    pulse: 0,
   };
 
   time = 0;
@@ -125,6 +194,7 @@ export class GameWorld {
     this.bakeStaticLights();
     this.director.rebuild(this.map);
     this.director.reset();
+    this.resetExtraction();
   }
 
   /**
@@ -141,6 +211,7 @@ export class GameWorld {
     this.objective.onExit = 0;
     this.objective.needed = 0;
     this.objective.progress = 0;
+    this.objective.timeLeft = 0;
     for (const b of this.bullets.items) b.active = false;
     for (const p of this.particles.items) p.active = false;
     this.noise.clear();
@@ -152,6 +223,7 @@ export class GameWorld {
     this.wipeTimer = 0;
     this.director.rebuild(this.map);
     this.director.reset();
+    this.resetExtraction();
 
     this.players.forEach((p, i) => {
       const spawn = this.playerSpawn(i);
@@ -378,8 +450,10 @@ export class GameWorld {
             this.map.setTile(tx, ty, hit.breaksInto);
             // Derived lists (what is walkable, where spawns are) change with the grid.
             this.map.refresh();
-            // A smashed window is a new way in. The director should know about it.
+            // A smashed window is a new way in. The director should know about it,
+            // and so should whatever the floor is currently walking toward.
             this.director.rebuild(this.map);
+            this.refreshLure();
             this.particles.burst(b.x, b.y, 14, 190, "#cfe9f5", 0.5, 3);
             // Breaking a pane is nearly as loud as the shot that broke it.
             this.noise.emit(b.x, b.y, NOISE.glass, "break");
@@ -470,7 +544,8 @@ export class GameWorld {
     }
     if (this.alarm.timeLeft <= 0) {
       this.alarm.active = false;
-      this.lureFlow.clear();
+      // The car is done screaming; a flare burning on the roof takes the lure back.
+      this.refreshLure();
     }
   }
 
@@ -561,9 +636,29 @@ export class GameWorld {
    * Extraction. The whole LIVING squad has to be standing on the exit together for a
    * moment — downed players do not block it, so a wipe-in-progress can still be saved
    * by the last one standing reaching the safe room.
+   *
+   * On a floor with a signal flare the exit is shut until the finale says otherwise:
+   * light the flare, hold the roof for two minutes, and board what turns up.
    */
   private updateObjective(dt: number): void {
     if (this.mode !== "story") return;
+    this.updateExtraction(dt);
+
+    // A pad with nothing on it is not an exit. While the finale is still running the
+    // objective IS the finale, and standing on the helipad achieves nothing.
+    const ex = this.extraction;
+    if (ex.phase === "signal" || ex.phase === "holdout" || ex.phase === "inbound") {
+      this.objective.kind = ex.phase;
+      this.objective.timeLeft = ex.timeLeft;
+      this.objective.progress = ex.phase === "signal"
+        ? ex.lighting
+        : ex.total > 0 ? 1 - ex.timeLeft / ex.total : 0;
+      this.objective.onExit = 0;
+      this.objective.needed = this.players.reduce((n, p) => n + (p.downed ? 0 : 1), 0);
+      this.exitTimer = 0;
+      return;
+    }
+    this.objective.timeLeft = 0;
 
     // Stairs win over an exit: a floor with a way up is not the end of the building.
     const kind = this.map.stairs.length > 0 ? "stairs"
@@ -595,6 +690,210 @@ export class GameWorld {
         text: this.map.name,
       });
     }
+  }
+
+  /**
+   * CORE 17b — the extraction finale.
+   *
+   * A floor that carries a signal flare and an exit runs this instead of simply
+   * ending at the exit:
+   *
+   *   signal   — the flare is out. One player standing on it lights it.
+   *   holdout  — two minutes on the roof with the director winding up underneath you.
+   *   inbound  — the helicopter is on its run in. Loud, and everything hears it.
+   *   ready    — skids down. Now the exit is an exit, on the ordinary squad-dwell rule.
+   *
+   * A floor with a flare but no exit, or an exit but no flare, is `none` and behaves
+   * exactly as it did before any of this existed.
+   */
+  private resetExtraction(): void {
+    const ex = this.extraction;
+    ex.lighting = 0;
+    ex.timeLeft = 0;
+    ex.total = 0;
+    ex.called = 0;
+    this.chopper.active = false;
+    this.chopper.altitude = 1;
+    this.chopper.pulse = 0;
+
+    const beacon = this.map.signals[0];
+    if (!beacon || this.map.exits.length === 0) {
+      ex.phase = "none";
+      return;
+    }
+    ex.phase = "signal";
+    ex.x = beacon.x;
+    ex.y = beacon.y;
+    // The pad is the middle of the exit tiles: authored as a block, so its centre is
+    // where a helicopter would sensibly put itself down.
+    let px = 0;
+    let py = 0;
+    for (const e of this.map.exits) { px += e.x; py += e.y; }
+    ex.padX = px / this.map.exits.length;
+    ex.padY = py / this.map.exits.length;
+  }
+
+  private updateExtraction(dt: number): void {
+    const ex = this.extraction;
+    if (ex.phase === "none") return;
+
+    if (ex.phase === "signal") {
+      // One person is enough. Lighting a flare is not a thing a squad does together,
+      // and asking four players to stand on one tile before anything can start would
+      // be the least interesting minute of the mission.
+      const onIt = this.players.some((p) => !p.downed && this.map.isSignalAt(p.x, p.y));
+      ex.lighting = onIt
+        ? Math.min(1, ex.lighting + dt / FLARE_DWELL)
+        : Math.max(0, ex.lighting - dt / FLARE_DWELL);
+      if (ex.lighting >= 1) this.lightFlare();
+      return;
+    }
+
+    if (ex.phase === "holdout") {
+      ex.timeLeft = Math.max(0, ex.timeLeft - dt);
+      this.callTheTime();
+      if (ex.timeLeft <= 0) this.callChopper();
+      return;
+    }
+
+    this.updateChopper(dt);
+  }
+
+  /**
+   * The flare goes up. Everything that follows hangs off this one moment, so it does
+   * four things at once: it lights the roof, it tells the director to start winding
+   * up, it becomes the thing every zombie on the floor walks toward, and it starts
+   * the clock.
+   *
+   * Deliberately NOT written into the tile grid, unlike a spent car alarm. The grid is
+   * the authored map, and a restart has to put the flare back out — a roof you can
+   * re-enter with the beacon already burning is a roof with no finale left in it.
+   */
+  private lightFlare(): void {
+    const ex = this.extraction;
+    ex.phase = "holdout";
+    ex.lighting = 1;
+    ex.timeLeft = HOLDOUT_TIME;
+    ex.total = HOLDOUT_TIME;
+
+    // Every flare tile on the floor goes up together, so a beacon authored as more
+    // than one tile behaves as one thing.
+    for (const tile of this.map.signals) {
+      const light = makeLight("#ff8a4a", Math.PI, FLARE_LIGHT, 0.9);
+      light.x = tile.x;
+      light.y = tile.y;
+      computeVisibility(this.map, light);
+      this.staticLights.push(light);
+    }
+
+    this.particles.burst(ex.x, ex.y, 30, 230, "#ffb45c", 0.9, 4);
+    this.noise.emit(ex.x, ex.y, NOISE.flare, "flare");
+    this.refreshLure();
+    // The director keeps the pressure on right through the landing, so the worst of
+    // it lands while the squad is trying to get on board.
+    this.director.beginHoldout(HOLDOUT_TIME + CHOPPER_APPROACH);
+    this.events.push({
+      kind: "flareLit", x: ex.x, y: ex.y, text: `FLARE LIT — HOLD ${clockText(HOLDOUT_TIME)}`,
+    });
+  }
+
+  /** Call the big round numbers as they go past, once each. */
+  private callTheTime(): void {
+    const ex = this.extraction;
+    while (ex.called < HOLDOUT_CALLS.length && ex.timeLeft <= HOLDOUT_CALLS[ex.called]) {
+      const seconds = HOLDOUT_CALLS[ex.called];
+      ex.called++;
+      this.events.push({ kind: "holdout", text: `${seconds} SECONDS` });
+    }
+  }
+
+  /**
+   * The countdown is done and the helicopter starts its run in. It comes from off the
+   * map on a fixed bearing rather than from a clever choice of edge: the roof is not
+   * where it came from, and a pickup that arrives from a different corner each run is
+   * a pickup nobody learns to be ready for.
+   */
+  private callChopper(): void {
+    const ex = this.extraction;
+    ex.phase = "inbound";
+    ex.timeLeft = CHOPPER_APPROACH;
+    ex.total = CHOPPER_APPROACH;
+
+    const c = this.chopper;
+    c.active = true;
+    c.fromX = ex.padX - CHOPPER_RUN_IN * 0.72;
+    c.fromY = ex.padY - CHOPPER_RUN_IN * 0.7;
+    c.x = c.fromX;
+    c.y = c.fromY;
+    c.angle = Math.atan2(ex.padY - c.y, ex.padX - c.x);
+    c.altitude = 1;
+    c.pulse = 0;
+    this.events.push({
+      kind: "chopperInbound", x: ex.padX, y: ex.padY, text: "HELICOPTER INBOUND",
+    });
+  }
+
+  /**
+   * The run in, and then the wait on the pad. The rotor pulses into the noise field
+   * the whole time, which means the zombies hear it exactly as loudly as the player
+   * does — the last thirty seconds are loud on purpose.
+   */
+  private updateChopper(dt: number): void {
+    const ex = this.extraction;
+    const c = this.chopper;
+
+    if (ex.phase === "inbound") {
+      ex.timeLeft = Math.max(0, ex.timeLeft - dt);
+      const t = ex.total > 0 ? 1 - ex.timeLeft / ex.total : 1;
+      // Smoothstep: it comes in fast and settles onto the pad rather than arriving
+      // at full speed and stopping dead.
+      const ease = t * t * (3 - 2 * t);
+      c.x = lerp(c.fromX, ex.padX, ease);
+      c.y = lerp(c.fromY, ex.padY, ease);
+      c.altitude = 1 - ease;
+      const dx = ex.padX - c.x;
+      const dy = ex.padY - c.y;
+      if (Math.hypot(dx, dy) > 8) c.angle = Math.atan2(dy, dx);
+      if (ex.timeLeft <= 0) {
+        ex.phase = "ready";
+        c.x = ex.padX;
+        c.y = ex.padY;
+        c.altitude = 0;
+        this.events.push({
+          kind: "chopperDown", x: ex.padX, y: ex.padY, text: "BIRD IS DOWN — GET ON IT",
+        });
+      }
+    }
+
+    c.pulse -= dt;
+    if (c.pulse <= 0) {
+      c.pulse = ROTOR_PULSE;
+      // Quieter while it is still a speck on the horizon, deafening once it is here.
+      this.noise.emit(c.x, c.y, NOISE.rotor * (1 - c.altitude * 0.55), "rotor");
+    }
+    if (c.altitude < 0.35) {
+      // Downwash: grit off the roof, thrown outward from under the rotor.
+      this.particles.burst(c.x, c.y, 3, 260, "#d8d2bd", 0.4, 2);
+    }
+  }
+
+  /**
+   * What the floor walks toward when it cannot see anybody. A screaming car outranks
+   * everything; failing that, a burning flare is the loudest, brightest thing on the
+   * roof and the horde comes to it — which is what makes a holdout a place to defend
+   * rather than a timer to run away from.
+   */
+  private refreshLure(): void {
+    if (this.alarm.active) return;
+    const ex = this.extraction;
+    if (ex.phase === "holdout" || ex.phase === "inbound" || ex.phase === "ready") {
+      const beacon = this.map.signals.length > 0
+        ? this.map.signals
+        : [{ x: ex.x, y: ex.y }];
+      this.lureFlow.rebuild(this.map, beacon);
+      return;
+    }
+    this.lureFlow.clear();
   }
 
   private updateBleedout(dt: number): void {
@@ -662,4 +961,10 @@ export class GameWorld {
     }
     this.loadLevel({ name: this.map.name, grid: this.map.toGrid() });
   }
+}
+
+/** m:ss, for the countdown the HUD and the banners both show. */
+export function clockText(seconds: number): string {
+  const whole = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }

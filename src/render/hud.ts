@@ -1,4 +1,5 @@
-import type { GameWorld } from "../sim/world";
+import { clockText, type GameWorld } from "../sim/world";
+import type { Player } from "../sim/entities";
 import type { Viewport } from "./viewport";
 
 /**
@@ -77,17 +78,21 @@ export function drawHud(
 
   // Extraction. Shown to everyone, because it is a squad condition, not a personal one.
   const obj = world.objective;
-  if (obj.needed > 0 && obj.kind !== "none") {
+  if (obj.kind === "signal" || obj.kind === "holdout" || obj.kind === "inbound") {
+    drawFinale(ctx, world, vp, p);
+  } else if (obj.needed > 0 && obj.kind !== "none") {
     const stairs = obj.kind === "stairs";
     const standing = stairs ? world.map.isStairsAt(p.x, p.y) : world.map.isExitAt(p.x, p.y);
     const all = obj.onExit === obj.needed;
     ctx.textAlign = "center";
     ctx.font = "700 13px ui-monospace, monospace";
     ctx.fillStyle = all ? "#8bff7a" : standing ? "#ffd257" : "rgba(200,210,228,0.75)";
+    const boarding = world.extraction.phase === "ready";
+    const waiting = stairs ? "AT THE STAIRS" : boarding ? "ON BOARD" : "AT THE EXIT";
     ctx.fillText(
       all
-        ? (stairs ? "MOVING UP…" : "EXTRACTING…")
-        : `SQUAD ${stairs ? "AT THE STAIRS" : "AT THE EXIT"}  ${obj.onExit}/${obj.needed}`,
+        ? (stairs ? "MOVING UP…" : boarding ? "LIFTING OFF…" : "EXTRACTING…")
+        : `SQUAD ${waiting}  ${obj.onExit}/${obj.needed}`,
       vp.w / 2, vp.h * 0.14,
     );
     if (obj.progress > 0) {
@@ -124,6 +129,63 @@ export function drawHud(
   }
 
   ctx.restore();
+}
+
+/**
+ * The finale, in one place: light it, hold it, watch it come in. Deliberately the
+ * loudest thing on the HUD — for two minutes the countdown IS the objective, and a
+ * player who has to work out how long is left is a player looking at the wrong thing.
+ */
+function drawFinale(
+  ctx: CanvasRenderingContext2D, world: GameWorld, vp: Viewport, p: Player,
+): void {
+  const obj = world.objective;
+  const y = vp.h * 0.13;
+  ctx.textAlign = "center";
+
+  if (obj.kind === "signal") {
+    const standing = world.map.isSignalAt(p.x, p.y);
+    ctx.font = "700 13px ui-monospace, monospace";
+    ctx.fillStyle = standing ? "#ffb45c" : "rgba(200,210,228,0.75)";
+    ctx.fillText(standing ? "LIGHTING THE FLARE…" : "LIGHT THE FLARE", vp.w / 2, y);
+    if (obj.progress > 0) {
+      const barW = Math.min(180, vp.w * 0.3);
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(vp.w / 2 - barW / 2, y + 12, barW, 5);
+      ctx.fillStyle = "#ff8a4a";
+      ctx.fillRect(vp.w / 2 - barW / 2, y + 12, barW * obj.progress, 5);
+    }
+    ctx.textAlign = "left";
+    return;
+  }
+
+  if (obj.kind === "inbound") {
+    ctx.font = "700 13px ui-monospace, monospace";
+    ctx.fillStyle = "#8bff7a";
+    ctx.fillText("HELICOPTER INBOUND", vp.w / 2, y);
+    ctx.font = "700 22px ui-monospace, monospace";
+    ctx.fillText(`${Math.ceil(obj.timeLeft)}`, vp.w / 2, y + 16);
+    ctx.textAlign = "left";
+    return;
+  }
+
+  // Holding. Under ten seconds the clock goes red and starts to pulse, because that
+  // is the stretch where the director is at its worst.
+  const urgent = obj.timeLeft <= 10;
+  const beat = urgent ? 0.6 + 0.4 * Math.abs(Math.sin(performance.now() * 0.006)) : 1;
+  ctx.font = "700 12px ui-monospace, monospace";
+  ctx.fillStyle = "rgba(200,210,228,0.75)";
+  ctx.fillText("HOLD THE ROOF", vp.w / 2, y);
+  ctx.font = "700 26px ui-monospace, monospace";
+  ctx.fillStyle = urgent ? `rgba(255,120,110,${beat})` : "#ffd257";
+  ctx.fillText(clockText(obj.timeLeft), vp.w / 2, y + 14);
+
+  const barW = Math.min(220, vp.w * 0.34);
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(vp.w / 2 - barW / 2, y + 46, barW, 5);
+  ctx.fillStyle = urgent ? "#ff6b6b" : "#ff8a4a";
+  ctx.fillRect(vp.w / 2 - barW / 2, y + 46, barW * obj.progress, 5);
+  ctx.textAlign = "left";
 }
 
 /** Thin dividers so four viewports do not bleed into one another. */

@@ -11,7 +11,7 @@
  * walks toward the one that is nearer to filling its ears rather than the newer one.
  */
 
-export type NoiseKind = "shot" | "break" | "step" | "impact" | "alarm";
+export type NoiseKind = "shot" | "break" | "step" | "impact" | "alarm" | "flare" | "rotor";
 
 export interface Noise {
   active: boolean;
@@ -100,4 +100,8 @@ export const NOISE = {
   dive: 250,
   /** A car alarm. Loud enough to be heard across any floor — that is the point of it. */
   alarm: 1600,
+  /** A signal flare going up. A bang and then a light every dead thing walks toward. */
+  flare: 900,
+  /** Rotor wash. The loudest thing in the game, and it is parked on your extraction. */
+  rotor: 1900,
 } as const;
