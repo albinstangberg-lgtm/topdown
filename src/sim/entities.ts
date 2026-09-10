@@ -35,9 +35,33 @@ export interface WeaponDef {
   range: number;
   /** How far the report carries, in world units. What the dead hear. */
   noise: number;
+  /**
+   * A melee weapon swings instead of firing. No bullets, no magazine, and quiet
+   * enough that clearing a room with one does not call the next one — which is the
+   * entire reason the first act of the ship has no gun in it.
+   */
+  melee?: boolean;
+  /** Melee only: how far past the body the swing reaches, in world units. */
+  reach?: number;
+  /** Melee only: half-angle of the arc it sweeps, in radians. */
+  arc?: number;
 }
 
 export const WEAPONS: Record<string, WeaponDef> = {
+  /**
+   * Melee. `magazine: 0` is what marks a weapon as ammo-less everywhere else — the
+   * reload path, the HUD and the locker all read it rather than checking `melee`.
+   */
+  crowbar: {
+    name: "Crowbar", fireRate: 1.8, bulletSpeed: 0, damage: 48, spread: 0,
+    pellets: 0, magazine: 0, reloadTime: 0, recoil: 0, auto: false, range: 0,
+    noise: 130, melee: true, reach: 46, arc: 0.85,
+  },
+  pipe: {
+    name: "Pipe", fireRate: 2.3, bulletSpeed: 0, damage: 34, spread: 0,
+    pellets: 0, magazine: 0, reloadTime: 0, recoil: 0, auto: false, range: 0,
+    noise: 110, melee: true, reach: 40, arc: 0.95,
+  },
   smg: {
     name: "SMG", fireRate: 9, bulletSpeed: 900, damage: 12, spread: 0.055,
     pellets: 1, magazine: 30, reloadTime: 1.3, recoil: 0.02, auto: true, range: 900,
@@ -54,6 +78,28 @@ export const WEAPONS: Record<string, WeaponDef> = {
     noise: 600,
   },
 };
+
+/**
+ * What a weapon locker hands out: the next gun up from whatever you are carrying.
+ *
+ * Deliberately guns only. Melee weapons are a *loadout* — what a mission decides you
+ * woke up holding — not a rung on this ladder, so anything not on the list counts as
+ * below all of it. That is what makes the first locker on the ship hand an unarmed
+ * squad a pistol rather than a second crowbar, and it is why the ladder does not have
+ * to know which melee weapons exist.
+ */
+export const WEAPON_LADDER = ["pistol", "smg", "shotgun"] as const;
+
+/**
+ * The next gun up, or null when you are already carrying the best thing on the ship.
+ * A locker that cannot upgrade you tops your magazine up instead — see `src/sim/devices.ts`.
+ */
+export function nextWeaponUp(current: WeaponDef): WeaponDef | null {
+  const at = WEAPON_LADDER.findIndex((key) => WEAPONS[key] === current);
+  if (at < 0) return WEAPONS[WEAPON_LADDER[0]];
+  const next = WEAPON_LADDER[at + 1];
+  return next ? WEAPONS[next] : null;
+}
 
 export interface Player {
   id: number;

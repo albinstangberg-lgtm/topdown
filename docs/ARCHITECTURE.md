@@ -133,6 +133,20 @@ Draw order is the whole trick:
 you light rooms for each other. That single decision is most of what makes co-op darkness
 social rather than four people playing alone next to each other.
 
+### 8b. The story arc — `src/campaign/campaign.ts`, `src/sim/devices.ts`
+
+The nine-deck ship mission is the thing the objective chain was built to carry, and it is
+worth reading as a worked example of what the pieces above buy you. Four acts, and each
+one is a different *rule* rather than a different set of assets:
+
+1. no gun at all, so a floor is quiet and melee is a decision;
+2. a door that will not open, so the objective is somewhere else entirely;
+3. three dwells in the dark that flip one flag;
+4. the first three decks again, with that flag set.
+
+None of it needed a scripting system. An act is a floor spec, a tile, and one branch in
+the objective chain.
+
 ---
 
 ### 9. The level format — `src/world/level.ts`, `src/levels/`
@@ -213,6 +227,40 @@ with the game.
   carried across the load and its position is not — reusing "spawn near the squad" for
   a map load put players outside the new map entirely, which is worth remembering as
   the shape of bug that hides in a fallback.
+- **Devices, and objectives as a chain** (`src/sim/devices.ts`) — a terminal, a weapon
+  locker, a fusion socket and a blast door are one system, because they are one idea:
+  *hold a button on a tile, and the tile changes into the used version of itself.* The
+  used state lives in the grid rather than beside it — the same trick as a spent car
+  alarm — so a floor that reloads remembers what the squad did and a mission restart puts
+  it all back, with no save format and no flags to keep in sync. Only the dwell in
+  progress is held in memory. The system answers "who is holding what, and what just
+  finished"; every consequence is in `world.ts`, and that seam is what stops it becoming
+  a second, competing copy of the game rules.
+  The objectives it produces are a *priority chain* rather than a state machine: an
+  unprimed reactor outranks a sealed door outranks stairs outranks an exit. Adding a beat
+  to a mission is adding a row to that order, and a floor with none of it plays exactly
+  as floors did before any of it existed. The one rule worth copying: **a door the squad
+  cannot work is not an objective**, it is a wall — an objective line that insists on
+  something inert is worse than no objective line.
+- **One state flag can be the whole second half of a game** (`GameWorld.power`) — main
+  power is mission-scoped, not floor-scoped: it survives every subsequent floor load. The
+  lights come up, the ship goes into alarm, the blast doors work, and the director is
+  handed more. That is what pays for reusing maps — the walk back up is visibly and
+  mechanically a different place from the walk down, at the cost of one boolean and a
+  handful of reads. Reusing a map with nothing changed is padding; reusing one whose
+  rules moved underneath it is a second level for free.
+- **Melee as a weapon row, not a weapon system** (`WeaponDef.melee` in
+  `src/sim/entities.ts`) — a crowbar is an entry in the same table as the SMG with
+  `magazine: 0`, a reach and an arc. Everything downstream reads `magazine <= 0` rather
+  than `melee`, so the reload path, the HUD and the locker all did the right thing
+  without knowing melee exists. The swing is resolved by a callback the world supplies,
+  for the same reason the zombie AI is handed `hurtPlayer`: the player module has no
+  business importing an `Enemy`.
+- **Difficulty as pressure, separate from tuning** (`Director.pressure`) — tuning is what
+  a *mode* is; pressure is where you have got to *within* one. The campaign turns it up
+  floor by floor, so the same map later in a mission is a harder map. Keeping them apart
+  matters because a floor load resets the director and must not reset the campaign's
+  curve — which it did, until `loadLevel` learned to put it back.
 - **Modes** (`GameMode` in `src/sim/world.ts`) — survival and story differ in exactly two
   places: what the director is allowed to do, and whether there is an objective. Every
   other system is untouched by the distinction, which is the test of whether a "mode" is
@@ -271,4 +319,8 @@ In rough order of when it starts hurting:
 | How hard you must push to raise the weapon | `WEAPON_RAISE_THRESHOLD` in `src/sim/player.ts` |
 | Vision ray density and shadow-edge sharpness | `BASE_STEP`, `REFINE_THRESHOLD` in `src/vision/visibility.ts` |
 | World size, room count, enemies per player | `src/world/tilemap.ts`, `src/sim/world.ts` |
+| How long a terminal, a fusion socket and the bridge door take | `src/sim/devices.ts` (top of file) |
+| Melee reach, arc and damage | `WEAPONS` in `src/sim/entities.ts` |
+| How hard a floor leans | `pressure` on the mission's floor spec |
+| How dark a blackout deck is, and how lit a powered ship is | `BLACKOUT_DARKNESS` / `POWERED_DARKNESS` in `src/render/renderer.ts` |
 | Zoom / world height per viewport | `VIEW_HEIGHT` in `src/render/camera.ts` |

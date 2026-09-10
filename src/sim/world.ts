@@ -10,9 +10,12 @@ import { circleOverlap, pointInWall } from "../world/collision";
 import { computeVisibility, inCone, type VisionLight } from "../vision/visibility";
 import { hasLineOfSight } from "../world/raycast";
 import {
-  createPlayer, damagePlayer, syncLights, updatePlayer, updateRevives, type AimCommand,
+  createPlayer, damagePlayer, giveWeapon, syncLights, updatePlayer, updateRevives,
+  type AimCommand,
 } from "./player";
 import { createEnemy, damageEnemy, updateEnemy } from "./enemy";
+import { DeviceSystem, UNSEAL_TIME, type DeviceOutcome } from "./devices";
+import { nextWeaponUp } from "./entities";
 import { randomZombieKind } from "./zombies";
 import { NOISE, NoiseField } from "./noise";
 import { Director, STORY_TUNING, SURVIVAL_TUNING, type DirectorDeps } from "./director";
@@ -69,6 +72,29 @@ const ROTOR_PULSE = 0.5;
 /** Seconds remaining at which the holdout calls the time. */
 const HOLDOUT_CALLS = [60, 30, 10];
 
+// --- the ship: power, the reactor and the bridge -----------------------------
+//
+// CORE 18b. The other objective chain, and the one the story campaign is built on:
+// find the reactor, bring main power back, and use it to open a door. Where the
+// extraction finale is a timer you defend, this is a state flag that changes the rest
+// of the mission — see `src/sim/devices.ts` for the devices themselves.
+
+/**
+ * Seconds of siege the director runs from the moment the first fusion cell is seated.
+ * The reactor floor is a search until then and a fight afterwards, and that switch is
+ * the player's to throw.
+ */
+const REACTOR_SIEGE = 100;
+/**
+ * Seconds of "every door at once" when the squad first reaches the sealed bridge. The
+ * pacing shift Act II asks for: the door does not open, and the ship notices you tried.
+ */
+const DOOR_KLAXON = 10;
+/** How far the bridge klaxon carries. It is meant to wake the whole deck. */
+const KLAXON_NOISE = 1500;
+/** Seconds between siren whoops once main power is back and the ship is in alarm. */
+const SIREN_INTERVAL = 4.5;
+
 /**
  * Survival is the endless procedural mode. Story runs an authored map with placed
  * zombies, spawn zones for variety, and an exit to reach. The only differences live
@@ -85,12 +111,17 @@ export type ExtractionPhase = "none" | "signal" | "holdout" | "inbound" | "ready
 export interface GameEvent {
   kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level" | "horde" | "alarm"
       | "floorCleared" | "missionComplete" | "missionFailed"
-      | "flareLit" | "holdout" | "chopperInbound" | "chopperDown";
+      | "flareLit" | "holdout" | "chopperInbound" | "chopperDown"
+      // The ship arc: a crew log, a locker, the reactor and the bridge door.
+      | "log" | "pickup" | "reactor" | "power" | "siren"
+      | "doorSealed" | "unsealing" | "unsealed";
   x?: number;
   y?: number;
   text?: string;
   /** How many zombies a `horde` event released. */
   count?: number;
+  /** `log` only: which of the floor's logs to show. The mission owns the text. */
+  index?: number;
 }
 
 export class GameWorld {
@@ -120,6 +151,41 @@ export class GameWorld {
   /** Lamps baked into the level. Static, so their visibility is solved once on load. */
   readonly staticLights: VisionLight[] = [];
 
+  /**
+   * CORE 18 — terminals, lockers, fusion sockets and the bridge door. See
+   * `src/sim/devices.ts`; this owns what any of it MEANS.
+   */
+  readonly devices = new DeviceSystem();
+  /**
+   * Main power. Deliberately **mission**-scoped rather than floor-scoped: it survives
+   * a floor load with the squad, because the whole shape of the story arc is that the
+   * ship is a different place on the way back up than it was on the way down.
+   */
+  readonly power = {
+    on: false,
+    /** Seconds since it came back. The renderer pulses the alarm off this. */
+    time: 0,
+    /** Counts down to the next siren whoop while the ship is in alarm. */
+    siren: 0,
+  };
+  /**
+   * This floor is unlit even by the standards of a game about a flashlight — the
+   * reactor decks. Presentation only: the renderer reads it and nothing else does.
+   * Set by the game shell from the mission's floor spec.
+   */
+  blackout = false;
+  /**
+   * Difficulty multiplier for the director, set per floor by the campaign so a mission
+   * gets heavier as it goes. Kept here rather than inside the director because a floor
+   * load resets the director and must not reset this.
+   */
+  private _difficulty = 1;
+  get difficulty(): number { return this._difficulty; }
+  set difficulty(next: number) {
+    this._difficulty = next;
+    this.director.setPressure(next);
+  }
+
   private _mode: GameMode = "survival";
   /** Setting the mode re-tunes the director: survival leans harder than story. */
   get mode(): GameMode { return this._mode; }
@@ -132,7 +198,8 @@ export class GameWorld {
    * are on it, and how far through the dwell they are.
    */
   readonly objective = {
-    kind: "none" as "none" | "exit" | "stairs" | "signal" | "holdout" | "inbound",
+    kind: "none" as "none" | "exit" | "stairs" | "signal" | "holdout" | "inbound"
+        | "reactor" | "sealed" | "unseal",
     onExit: 0,
     needed: 0,
     progress: 0,
@@ -194,6 +261,7 @@ export class GameWorld {
     this.bakeStaticLights();
     this.director.rebuild(this.map);
     this.director.reset();
+    this.devices.rebuild(this.map);
     this.resetExtraction();
   }
 
@@ -204,6 +272,13 @@ export class GameWorld {
    */
   loadLevel(level: LevelData, opts: { keepSquad?: boolean } = {}): void {
     this.map = buildTileMap(level);
+    // Power is the one thing that crosses a floor boundary, and only within a mission:
+    // keeping the squad means the same run, so the reactor stays on behind them.
+    if (!opts.keepSquad) {
+      this.power.on = false;
+      this.power.time = 0;
+      this.power.siren = 0;
+    }
     this.bakeStaticLights();
     this.enemies.length = 0;
     this.exitTimer = 0;
@@ -223,6 +298,9 @@ export class GameWorld {
     this.wipeTimer = 0;
     this.director.rebuild(this.map);
     this.director.reset();
+    // A floor load resets the director, so the campaign's difficulty has to go back on.
+    this.director.setPressure(this._difficulty);
+    this.devices.rebuild(this.map);
     this.resetExtraction();
 
     this.players.forEach((p, i) => {
@@ -276,13 +354,33 @@ export class GameWorld {
     );
   }
 
-  /** Lamp tiles never move, so solve their visibility polygons once instead of per frame. */
+  /**
+   * Lamp tiles never move, so solve their visibility polygons once instead of per frame.
+   *
+   * Re-run whenever the grid changes a light — priming a fusion socket makes it glow,
+   * reading a terminal dims it — which means this has to be idempotent, and a flare
+   * already burning has to survive it. Hence the second loop: the flare's light is not
+   * in the grid (see `lightFlare`), so baking from the grid alone would put it out.
+   */
   private bakeStaticLights(): void {
     this.staticLights.length = 0;
     for (const lamp of this.map.lamps) {
       const light = makeLight("#ffdca8", Math.PI, lamp.range, 0.8);
       light.x = lamp.x;
       light.y = lamp.y;
+      computeVisibility(this.map, light);
+      this.staticLights.push(light);
+    }
+    const phase = this.extraction?.phase;
+    if (phase && phase !== "none" && phase !== "signal") this.bakeFlareLights();
+  }
+
+  /** The burning signal flare, as light. Split out because the bake has to redo it. */
+  private bakeFlareLights(): void {
+    for (const tile of this.map.signals) {
+      const light = makeLight("#ff8a4a", Math.PI, FLARE_LIGHT, 0.9);
+      light.x = tile.x;
+      light.y = tile.y;
       computeVisibility(this.map, light);
       this.staticLights.push(light);
     }
@@ -353,6 +451,7 @@ export class GameWorld {
     this.time += dt;
     const deps = {
       map: this.map, bullets: this.bullets, particles: this.particles, noise: this.noise,
+      swing: this.swingMelee,
     };
 
     for (const p of this.players) {
@@ -381,6 +480,8 @@ export class GameWorld {
     // Noises age out after every listener has had a step to hear them.
     this.noise.update(dt);
     this.updateAlarm(dt);
+    this.updateSiren(dt);
+    this.updateDevices(dt, inputOf);
     this.updateDirector(dt);
     this.updateBleedout(dt);
     this.updateObjective(dt);
@@ -496,6 +597,39 @@ export class GameWorld {
   }
 
   /**
+   * A melee swing, resolved against everything in the arc at once. Bound, because the
+   * player module holds it as a callback — a crowbar has no business importing an Enemy.
+   *
+   * The arc test is deliberately generous at the edges (the reach counts from body to
+   * body, not centre to centre): a swing that visibly connects and does nothing is the
+   * fastest way to make melee feel broken.
+   */
+  private swingMelee = (p: Player, reach: number, arc: number, damage: number): number => {
+    let hits = 0;
+    for (const e of [...this.enemies]) {
+      if (e.health <= 0) continue;
+      const dx = e.x - p.eyeX;
+      const dy = e.y - p.eyeY;
+      const dist = Math.hypot(dx, dy);
+      if (dist > p.radius + reach + e.radius) continue;
+      // Straight past a wall is not a hit, however close the thing on the other side is.
+      if (!hasLineOfSight(this.map, p.eyeX, p.eyeY, e.x, e.y)) continue;
+      let off = Math.abs(Math.atan2(dy, dx) - p.facing) % (Math.PI * 2);
+      if (off > Math.PI) off = Math.PI * 2 - off;
+      if (off > arc) continue;
+      hits++;
+      // A hit shoves the body back — the reason a crowbar can hold a doorway at all.
+      const push = dist > 1 ? 150 / dist : 0;
+      e.vx += dx * push;
+      e.vy += dy * push;
+      e.lastSeenX = p.x;
+      e.lastSeenY = p.y;
+      if (damageEnemy(e, damage)) this.killEnemy(e, p.id);
+    }
+    return hits;
+  };
+
+  /**
    * The one way anything hurts a player, so "who is down" is raised in one place.
    * Bound, because the zombie AI holds it as a callback.
    */
@@ -605,6 +739,139 @@ export class GameWorld {
     return ring;
   }
 
+  // --- the ship ---------------------------------------------------------------
+
+  /**
+   * CORE 18 — devices. The system itself only answers "what finished this step"; every
+   * consequence is here, because a consequence is a game rule and game rules live in
+   * the world.
+   */
+  private updateDevices(dt: number, inputOf: (p: Player) => InputState): void {
+    const outcomes = this.devices.update(dt, {
+      map: this.map, players: this.players, inputOf, powered: this.power.on,
+    });
+    for (const o of outcomes) this.applyDevice(o);
+  }
+
+  private applyDevice(o: DeviceOutcome): void {
+    switch (o.kind) {
+      case "log":
+        // Using a device rewrites its tile, and every one of these tiles carries a
+        // light — so the static bake has to be redone or a read terminal keeps glowing
+        // as brightly as an unread one.
+        this.bakeStaticLights();
+        // The world does not know what the log SAYS — the mission owns the text and the
+        // shell looks it up. All the simulation has is which one was read and where.
+        this.events.push({ kind: "log", x: o.x, y: o.y, index: o.index });
+        break;
+
+      case "locker": {
+        this.bakeStaticLights();
+        const next = nextWeaponUp(o.player.weapon);
+        if (next) {
+          giveWeapon(o.player, next);
+          this.events.push({
+            kind: "pickup", x: o.x, y: o.y,
+            text: `P${o.player.id + 1} PICKED UP ${next.name.toUpperCase()}`,
+          });
+        } else {
+          // Nothing better in the ship: a locker you cannot be upgraded by is still
+          // worth opening, because it is full of ammunition for what you already carry.
+          o.player.ammo = o.player.weapon.magazine;
+          o.player.reloadTimer = 0;
+          this.events.push({ kind: "pickup", x: o.x, y: o.y, text: "AMMO" });
+        }
+        break;
+      }
+
+      case "reactorStarted":
+        // Seating the first cell is what turns the reactor deck from a search into a
+        // fight. The siege has a known end, which is what `beginHoldout` is for.
+        this.director.beginHoldout(REACTOR_SIEGE);
+        this.events.push({ kind: "reactor", x: o.x, y: o.y, text: "AUXILIARY POWER PRIMING" });
+        break;
+
+      case "socket":
+        this.bakeStaticLights();
+        this.noise.emit(o.x, o.y, NOISE.flare, "impact");
+        if (o.primed < o.total) {
+          this.events.push({
+            kind: "reactor", x: o.x, y: o.y, text: `FUSION CELL ${o.primed} / ${o.total}`,
+          });
+        }
+        break;
+
+      case "power":
+        this.restorePower(o.x, o.y);
+        break;
+
+      case "doorSealed":
+        // Act II's wall. The door does not open, and trying is loud: every door on the
+        // deck opens at once for a few seconds, which is the pacing shift the act asks
+        // for — from "walking through a dead ship" to "being hunted through one".
+        this.noise.emit(o.x, o.y, KLAXON_NOISE, "alarm");
+        this.director.panic(DOOR_KLAXON, this.directorDeps());
+        this.events.push({
+          kind: "doorSealed", x: o.x, y: o.y,
+          text: "BRIDGE SEALED — MANUAL BYPASS AT MAIN REACTOR",
+        });
+        break;
+
+      case "unsealing":
+        // Ninety seconds of standing still on a catwalk, with the director aiming its
+        // worst at the end of them. The same shape as the roof holdout, and for the
+        // same reason: a phase loop is wrong for a fight you cannot walk away from.
+        this.director.beginHoldout(UNSEAL_TIME);
+        this.noise.emit(o.x, o.y, KLAXON_NOISE, "alarm");
+        this.events.push({
+          kind: "unsealing", x: o.x, y: o.y, text: `BLAST DOOR UNSEALING — ${clockText(UNSEAL_TIME)}`,
+        });
+        break;
+
+      case "unsealed":
+        // The door tiles are gone from the grid, so the exit behind them is simply an
+        // exit now and the ordinary squad-dwell rule takes over.
+        this.director.endHoldout();
+        this.bakeStaticLights();
+        this.squadFlow.rebuild(this.map, this.players.filter((p) => !p.downed));
+        this.events.push({ kind: "unsealed", x: o.x, y: o.y, text: "BRIDGE OPEN" });
+        break;
+    }
+  }
+
+  /**
+   * Main power comes back. One flag, and most of the game changes around it: the lights
+   * are on, the ship is in alarm, the bridge door will work, and the director is handed
+   * everything that is left. Act III ends on this line.
+   */
+  private restorePower(x: number, y: number): void {
+    this.power.on = true;
+    this.power.time = 0;
+    this.power.siren = 0;
+    this.director.endHoldout();
+    // Every door at once, and then a floor that stays hard: the noise of a ship coming
+    // back to life is the loudest thing that has happened to it in a long time.
+    this.director.panic(DOOR_KLAXON * 1.5, this.directorDeps());
+    this.noise.emit(x, y, KLAXON_NOISE, "alarm");
+    this.particles.burst(x, y, 40, 260, "#8bff7a", 0.9, 4);
+    this.bakeStaticLights();
+    this.events.push({ kind: "power", x, y, text: "MAIN POWER RESTORED" });
+  }
+
+  /**
+   * The alarm the ship runs once its power is back. Purely a sound and a colour: it
+   * deliberately does NOT go into the noise field, because a siren the zombies could
+   * hear would pull the whole deck onto one arbitrary speaker for the rest of the run.
+   */
+  private updateSiren(dt: number): void {
+    if (!this.power.on) return;
+    this.power.time += dt;
+    this.power.siren -= dt;
+    if (this.power.siren > 0) return;
+    this.power.siren = SIREN_INTERVAL;
+    this.events.push({ kind: "siren" });
+  }
+
   /**
    * CORE 9 — the AI Director. The shape of the pressure lives in `director.ts`; this
    * is only the wiring, and the one rule the director must not own: a story map with
@@ -660,6 +927,11 @@ export class GameWorld {
     }
     this.objective.timeLeft = 0;
 
+    // The ship's objective chain outranks walking anywhere, in the order the arc runs:
+    // an unprimed reactor is what the floor is FOR, and a sealed bridge is a wall you
+    // do not get to walk past. Both fall through to the ordinary rules once done.
+    if (this.updateShipObjective()) return;
+
     // Stairs win over an exit: a floor with a way up is not the end of the building.
     const kind = this.map.stairs.length > 0 ? "stairs"
       : this.map.exits.length > 0 ? "exit" : "none";
@@ -690,6 +962,50 @@ export class GameWorld {
         text: this.map.name,
       });
     }
+  }
+
+  /**
+   * The ship's half of the objective chain, in priority order. Returns true when it has
+   * claimed the objective line, which means the ordinary stairs / exit rules do not run.
+   *
+   * The order is the story: you cannot leave the reactor deck with cells still out, and
+   * you cannot walk onto the bridge through a door that is shut.
+   */
+  private updateShipObjective(): boolean {
+    const cells = this.devices.sockets(this.map);
+    if (cells.total > 0 && cells.primed < cells.total) {
+      this.objective.kind = "reactor";
+      this.objective.onExit = cells.primed;
+      this.objective.needed = cells.total;
+      this.objective.progress = cells.primed / cells.total;
+      this.exitTimer = 0;
+      return true;
+    }
+
+    const door = this.devices.door;
+    // A door you cannot work is a wall, not an objective. While the ship has no power
+    // the real objective of the bridge approach is the way DOWN — the one-off "BRIDGE
+    // SEALED" banner says why, and an objective line insisting on a door that does
+    // nothing would just be wrong. A floor with no stairs is the exception: there the
+    // door is the only thing left to point at.
+    if (door === "sealed" && (this.power.on || this.map.stairs.length === 0)) {
+      this.objective.kind = "sealed";
+      this.objective.onExit = 0;
+      this.objective.needed = 0;
+      this.objective.progress = this.devices.doorArming;
+      this.exitTimer = 0;
+      return true;
+    }
+    if (door === "unsealing") {
+      this.objective.kind = "unseal";
+      this.objective.onExit = 0;
+      this.objective.needed = 0;
+      this.objective.timeLeft = this.devices.doorTimer;
+      this.objective.progress = 1 - this.devices.doorTimer / UNSEAL_TIME;
+      this.exitTimer = 0;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -778,13 +1094,7 @@ export class GameWorld {
 
     // Every flare tile on the floor goes up together, so a beacon authored as more
     // than one tile behaves as one thing.
-    for (const tile of this.map.signals) {
-      const light = makeLight("#ff8a4a", Math.PI, FLARE_LIGHT, 0.9);
-      light.x = tile.x;
-      light.y = tile.y;
-      computeVisibility(this.map, light);
-      this.staticLights.push(light);
-    }
+    this.bakeFlareLights();
 
     this.particles.burst(ex.x, ex.y, 30, 230, "#ffb45c", 0.9, 4);
     this.noise.emit(ex.x, ex.y, NOISE.flare, "flare");

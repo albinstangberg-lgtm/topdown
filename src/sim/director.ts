@@ -164,6 +164,16 @@ export class Director {
   holdoutTotal = 0;
   /** Seconds before the director may put anything on a freshly loaded floor. */
   grace = ARRIVAL_GRACE;
+  /**
+   * Difficulty multiplier on wave size and on the live cap, set by whatever owns the
+   * pacing above the director — the campaign turns it up floor by floor, so the same
+   * map played later in a mission is a harder map. 1 is the tuning as written.
+   *
+   * Deliberately NOT part of the tuning table: tuning is what a mode is, pressure is
+   * where you have got to within one, and a floor load resets the second but not the
+   * first.
+   */
+  pressure = 1;
 
   private doors: Door[] = [];
   private phaseTimer = 0;
@@ -176,6 +186,24 @@ export class Director {
 
   setTuning(tuning: DirectorTuning): void {
     this.tuning = tuning;
+  }
+
+  /** How hard this floor leans, as a multiple of the mode's tuning. See `pressure`. */
+  setPressure(scale: number): void {
+    this.pressure = Math.max(0.1, scale);
+  }
+
+  /**
+   * Call off a siege early. The reactor's is sized to how long priming *might* take, so
+   * finishing it has to be able to end it — otherwise beating the objective quickly is
+   * punished with a minute of waves for something that is already done.
+   */
+  endHoldout(): void {
+    if (this.phase !== "holdout") return;
+    this.holdout = 0;
+    this.holdoutTotal = 0;
+    this.phase = "fade";
+    this.phaseTimer = this.tuning.fadeMax;
   }
 
   /**
@@ -234,13 +262,11 @@ export class Director {
     const multiplier = panicking ? PANIC_CAP
       : sieging ? lerp(HOLDOUT_CAP[0], HOLDOUT_CAP[1], through)
       : 1;
-    const cap = Math.floor(this.tuning.maxAlivePerPlayer * deps.players.length * multiplier);
+    const cap = this.capFor(deps.players.length, multiplier);
     this.waveTimer -= dt;
     if (this.waveTimer > 0 || deps.enemies.length >= cap) return;
 
-    const size = Math.min(
-      this.tuning.wavePerPlayer * deps.players.length, cap - deps.enemies.length,
-    );
+    const size = Math.min(this.waveSize(deps.players.length), cap - deps.enemies.length);
     if (size <= 0) return;
     // A flare and a helicopter are not things you can hide from: like a panic, a
     // holdout wave comes out of a door the squad can see if that is all there is.
@@ -267,8 +293,8 @@ export class Director {
     this.phase = "panic";
     this.waveTimer = randRange(...PANIC_GAP);
 
-    const cap = Math.floor(this.tuning.maxAlivePerPlayer * deps.players.length * PANIC_CAP);
-    const perDoor = this.tuning.wavePerPlayer * deps.players.length;
+    const cap = this.capFor(deps.players.length, PANIC_CAP);
+    const perDoor = this.waveSize(deps.players.length);
     let released = 0;
     for (const door of this.doors) {
       // `enemies` grows as we spawn, so it already counts everything released so far.
@@ -294,6 +320,19 @@ export class Director {
     this.holdout = seconds;
     this.holdoutTotal = seconds;
     this.waveTimer = randRange(2, 4);
+  }
+
+  /**
+   * The live ceiling and the wave size, both scaled by squad size and by how far into
+   * the mission this floor is. One place each, so "how hard is it right now" has one
+   * answer rather than four copies of the same multiplication.
+   */
+  private capFor(players: number, multiplier: number): number {
+    return Math.floor(this.tuning.maxAlivePerPlayer * players * multiplier * this.pressure);
+  }
+
+  private waveSize(players: number): number {
+    return Math.max(1, Math.round(this.tuning.wavePerPlayer * players * this.pressure));
   }
 
   /**
@@ -387,7 +426,7 @@ export class Director {
    * the level having run out.
    */
   private updateAmbient(dt: number, deps: DirectorDeps): void {
-    const want = this.tuning.ambientPerPlayer * deps.players.length;
+    const want = Math.round(this.tuning.ambientPerPlayer * deps.players.length * this.pressure);
     if (deps.enemies.length >= want) return;
     this.ambientTimer -= dt;
     if (this.ambientTimer > 0) return;

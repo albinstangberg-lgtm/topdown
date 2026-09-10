@@ -3,7 +3,7 @@ import { clamp, damp, rotateToward } from "../core/math";
 import { moveCircle, pointInWall } from "../world/collision";
 import type { TileMap } from "../world/tilemap";
 import { makeLight } from "../vision/visibility";
-import { WEAPONS, type Player } from "./entities";
+import { WEAPONS, type Player, type WeaponDef } from "./entities";
 import type { BulletPool, ParticlePool } from "./pools";
 import { NOISE, type NoiseField } from "./noise";
 
@@ -139,6 +139,15 @@ export interface PlayerDeps {
   particles: ParticlePool;
   /** What the dead can hear. Walking is silent; shooting, sprinting and landing are not. */
   noise: NoiseField;
+  /**
+   * Resolve a melee swing: everything in the arc in front of `p` takes `damage`.
+   * Returns how many things it connected with.
+   *
+   * A callback rather than an enemy list, for the same reason the zombie AI is handed
+   * `hurtPlayer` rather than the player array: the player module has no business
+   * knowing what an Enemy is, and kill accounting stays in one place in the world.
+   */
+  swing: (p: Player, reach: number, arc: number, damage: number) => number;
 }
 
 /**
@@ -206,8 +215,13 @@ export function updatePlayer(
   // --- Shoot ---------------------------------------------------------------
   const w = p.weapon;
   p.fireCooldown = Math.max(0, p.fireCooldown - dt);
+  const wantsToFire = w.auto ? input.fire : input.firePressed;
 
-  if (p.reloadTimer > 0) {
+  if (w.magazine <= 0) {
+    // Ammo-less: a crowbar has nothing to reload and never runs dry, so the only
+    // question a swing has to answer is whether it is off cooldown.
+    if (wantsToFire && p.fireCooldown <= 0 && p.weaponUp >= 1 && canFire(p)) fire(p, deps);
+  } else if (p.reloadTimer > 0) {
     p.reloadTimer -= dt;
     if (p.reloadTimer <= 0) p.ammo = w.magazine;
   } else if (p.ammo <= 0) {
@@ -217,7 +231,6 @@ export function updatePlayer(
   } else if (input.reloadPressed && p.ammo < w.magazine && canFire(p)) {
     startReload(p, deps);
   } else {
-    const wantsToFire = w.auto ? input.fire : input.firePressed;
     // A lowered weapon cannot fire — but pulling the trigger raises it (see
     // updateWeaponStance), so the shot lands as soon as the gun is up rather than
     // the input being swallowed.
@@ -355,6 +368,7 @@ function updateStanceAndStamina(
 function fire(p: Player, deps: PlayerDeps): void {
   const w = p.weapon;
   p.fireCooldown = 1 / w.fireRate;
+  if (w.melee) { swing(p, deps); return; }
   p.ammo--;
   p.muzzleFlash = 1;
 
@@ -378,6 +392,43 @@ function fire(p: Player, deps: PlayerDeps): void {
   // Recoil pushes you back a little — free weight without an animation system.
   p.vx -= Math.cos(p.facing) * 26;
   p.vy -= Math.sin(p.facing) * 26;
+}
+
+/**
+ * A melee swing. Everything in the arc in front of you takes the hit at once, which is
+ * what makes a crowbar the answer to two zombies in a doorway and the wrong answer to
+ * five in a corridor.
+ *
+ * It makes a noise, but a small one. That difference is the whole first act: a floor
+ * cleared quietly stays cleared, and the first gun is a decision as much as a reward.
+ */
+function swing(p: Player, deps: PlayerDeps): void {
+  const w = p.weapon;
+  const reach = w.reach ?? 40;
+  const arc = w.arc ?? 0.9;
+  const tipX = p.eyeX + Math.cos(p.facing) * (p.radius + reach * 0.6);
+  const tipY = p.eyeY + Math.sin(p.facing) * (p.radius + reach * 0.6);
+
+  const hits = deps.swing(p, reach, arc, w.damage);
+  // A connected swing throws blood; a miss throws the dust it hit instead, so the
+  // player can tell the two apart without a hit marker.
+  deps.particles.burst(tipX, tipY, hits > 0 ? 8 : 3, hits > 0 ? 150 : 70,
+    hits > 0 ? "#c8443a" : "#9a9482", 0.3, 3);
+  deps.noise.emit(p.x, p.y, hits > 0 ? w.noise : w.noise * 0.5, "impact");
+  // A swing shoves you a little in the direction of it — weight, without an animation.
+  p.vx += Math.cos(p.facing) * 30;
+  p.vy += Math.sin(p.facing) * 30;
+}
+
+/**
+ * Hand a player a different weapon. Used by the mission loadout and by every weapon
+ * locker on the ship, so "what happens when you pick something up" has one answer.
+ */
+export function giveWeapon(p: Player, weapon: WeaponDef): void {
+  p.weapon = weapon;
+  p.ammo = weapon.magazine;
+  p.reloadTimer = 0;
+  p.fireCooldown = Math.max(p.fireCooldown, 0.25);
 }
 
 function updateDowned(p: Player, input: InputState, deps: PlayerDeps, dt: number): void {

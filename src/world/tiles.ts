@@ -47,6 +47,23 @@ export interface TileDef {
   alarm?: boolean;
   /** What an alarm tile turns into once it has gone off. */
   alarmSpent?: number;
+  /**
+   * A device you hold the interact button on. `terminal` reads a log, `socket` primes
+   * the reactor, `locker` hands out the next weapon up. See `src/sim/devices.ts` — the
+   * tile says what kind of thing it is, the device system says what using one does.
+   */
+  device?: "terminal" | "socket" | "locker";
+  /** True once a device has been used. Kept as a separate tile so a reload remembers. */
+  spent?: boolean;
+  /** What a device turns into once it has been used. */
+  usedInto?: number;
+  /**
+   * A sealed blast door. Solid until the squad unseals it, which needs main power —
+   * this is the wall Act II runs into and Act IV opens.
+   */
+  blastDoor?: boolean;
+  /** Stairs that go DOWN rather than up. Purely how it is drawn and announced. */
+  descends?: boolean;
   /** Editor palette colour. */
   color: string;
   /** Single character for the compact text form of a level. */
@@ -106,6 +123,35 @@ export const TILE_DEFS: readonly TileDef[] = [
   { id: 20, key: "signalFlare", name: "Signal flare", solid: false, opaque: false, signal: true,
     color: "#ff3b3b", glyph: "F",
     hint: "an unlit flare. Stand on it to light it, then hold the roof until the helicopter lands" },
+  { id: 21, key: "terminal", name: "Terminal", solid: false, opaque: false,
+    device: "terminal", usedInto: 22, light: 90,
+    color: "#7affd2", glyph: "T",
+    hint: "a crew terminal with a log still on it. Stand on it and hold USE to read it" },
+  { id: 22, key: "terminalRead", name: "Terminal (read)", solid: false, opaque: false,
+    device: "terminal", spent: true, light: 60,
+    color: "#3f7a68", glyph: "t",
+    hint: "a terminal whose log you have already read. Authored rarely — reading one makes it this" },
+  { id: 23, key: "locker", name: "Weapon locker", solid: false, opaque: false,
+    device: "locker", usedInto: 24, light: 80,
+    color: "#ffb45c", glyph: "!",
+    hint: "an armoury locker. Walk onto it to take the next weapon up from what you carry" },
+  { id: 24, key: "lockerEmpty", name: "Weapon locker (empty)", solid: false, opaque: false,
+    device: "locker", spent: true,
+    color: "#6b5a3f", glyph: "i", hint: "a locker somebody has already emptied" },
+  { id: 25, key: "socket", name: "Fusion socket", solid: false, opaque: false,
+    device: "socket", usedInto: 26, light: 70,
+    color: "#5ad2ff", glyph: "U",
+    hint: "a reactor socket. Hold USE to seat a fusion cell — every socket on the floor primed brings main power back" },
+  { id: 26, key: "socketPrimed", name: "Fusion socket (primed)", solid: false, opaque: false,
+    device: "socket", spent: true, light: 200,
+    color: "#8bff7a", glyph: "u", hint: "a socket with its cell seated and live" },
+  { id: 27, key: "blastDoor", name: "Blast door", solid: true, opaque: true, blastDoor: true,
+    color: "#c25a3a", glyph: "B",
+    hint: "the bridge door. Dead without main power; with it, hold USE beside it and survive the unseal" },
+  { id: 28, key: "stairsDown", name: "Stairs down", solid: false, opaque: false,
+    stairs: true, descends: true,
+    color: "#2f8fb8", glyph: "v",
+    hint: "the way DOWN. Same rule as ^ — the whole squad on it moves to the next floor" },
 ];
 
 export const TILE_FLOOR = 0;
