@@ -4,9 +4,10 @@ import { tileDef } from "../world/tiles";
 import { raycast } from "../world/raycast";
 import { PLAYER_TUNING } from "../sim/player";
 import { UNSEAL_TIME } from "../sim/devices";
+import { WELD_INTEGRITY } from "../sim/items";
 import type { Enemy, Player } from "../sim/entities";
 import { zombieDef } from "../sim/zombies";
-import type { GameWorld } from "../sim/world";
+import { VENT_SHADOW, type GameWorld } from "../sim/world";
 import type { VisionLight } from "../vision/visibility";
 import { drawActor, muzzleOffset, type HandsPose } from "./actorArt";
 import type { Camera } from "./camera";
@@ -52,6 +53,25 @@ const FLASHLIGHT_REVEAL = 0.55;
 const FLASHLIGHT_GLOW = 0.15;
 const HALO_REVEAL = 0.34;
 const HALO_GLOW = 0.04;
+/** Matches NOISE_LIFE in `sim/noise.ts` — how long a ring has to finish expanding. */
+const NOISE_RING_LIFE = 0.5;
+/**
+ * What each kind of sound looks like. Colour is the only thing separating "a shot over
+ * there" from "something is walking around in here", so the palette is deliberately
+ * categorical: warm for things the squad did, cold for things it did not.
+ */
+const RIPPLE_TONE: Record<string, string> = {
+  shot: "255,214,140",
+  break: "180,230,255",
+  step: "190,215,255",
+  impact: "255,150,150",
+  alarm: "255,120,90",
+  flare: "255,170,90",
+  rotor: "200,220,255",
+  beam: "255,240,190",
+  duct: "200,160,255",
+  arc: "190,240,255",
+};
 
 export interface Bounds { x0: number; y0: number; x1: number; y1: number }
 
@@ -142,6 +162,14 @@ export class Renderer {
     this.drawAimLines(ctx, world);
     this.drawBullets(ctx, world);
     this.drawLightEdges(ctx, world);
+    // Fog goes OVER the darkness: coolant does not care whose light is on, and a bank
+    // of it has to look like the reason you cannot see rather than like more night.
+    this.drawFog(ctx, world, bounds);
+    // A live puddle glows through the dark for the same reason a tracer does: it is a
+    // thing that will kill you, and being unable to see it would not be tension.
+    this.drawLiveWater(ctx, world, bounds);
+    // And the ripples go over the fog, because they are the thing you navigate it with.
+    this.drawNoiseRipples(ctx, world);
     this.drawWalls(ctx, bounds, world);
     // The helicopter is drawn over the darkness for the same reason a tracer is: it
     // is a hundred decibels of landing lights, and hiding it in the dark would be a
@@ -293,6 +321,7 @@ export class Renderer {
     // per tile, so a 2x2 wreck is one body with one outline.
     const props: Record<string, number[]> = {
       crate: [], glass: [], reception: [], cubicle: [], door: [], blast: [],
+      cable: [], coolant: [], welded: [],
     };
 
     ctx.fillStyle = COLOR_WALL;
@@ -308,6 +337,9 @@ export class Renderer {
         if (def.key === "blocked") continue;   // drawn with the floor, not as geometry
         if (def.prop === "car") continue;         // drawn as a whole vehicle, below
         const bucket = def.blastDoor ? "blast"
+          : def.cable ? "cable"
+          : def.coolant ? "coolant"
+          : def.welded ? "welded"
           : def.prop ?? (def.key === "crate" ? "crate" : def.key === "glass" ? "glass" : null);
         if (bucket && props[bucket]) { props[bucket].push(tx, ty); continue; }
         ctx.rect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
@@ -325,6 +357,84 @@ export class Renderer {
       ctx.strokeStyle = "rgba(190,150,90,0.35)";
       ctx.lineWidth = 2;
       ctx.strokeRect(x + 4, y + 4, TILE - 8, TILE - 8);
+    }
+
+    // A torn conduit. It sparks on its own so you can find it before you need it, and
+    // goes dark while it is recharging — a cable you have already used says so.
+    for (let i = 0; i < props.cable.length; i += 2) {
+      const tx = props.cable[i];
+      const ty = props.cable[i + 1];
+      const x = tx * TILE;
+      const y = ty * TILE;
+      ctx.fillStyle = "#0b0b10";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = "#2a2617";
+      ctx.fillRect(x + 5, y + 5, TILE - 10, TILE - 10);
+      ctx.strokeStyle = "rgba(216,194,74,0.8)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x + 8, y + TILE * 0.35);
+      ctx.lineTo(x + TILE - 8, y + TILE * 0.42);
+      ctx.moveTo(x + 8, y + TILE * 0.68);
+      ctx.lineTo(x + TILE - 8, y + TILE * 0.6);
+      ctx.stroke();
+      // The spark. Random per frame on purpose: live wiring is not on a timer.
+      if (Math.random() < 0.25) {
+        const sx = x + 10 + Math.random() * (TILE - 20);
+        const sy = y + 10 + Math.random() * (TILE - 20);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = "rgba(230,245,255,0.8)";
+        ctx.beginPath();
+        ctx.arc(sx, sy, 2.5, 0, TAU);
+        ctx.fill();
+        ctx.globalCompositeOperation = "source-over";
+      }
+    }
+
+    // A split coolant line. The pipe itself, venting toward the room it has filled.
+    for (let i = 0; i < props.coolant.length; i += 2) {
+      const x = props.coolant[i] * TILE;
+      const y = props.coolant[i + 1] * TILE;
+      ctx.fillStyle = "#0b0b10";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = "#243a3a";
+      ctx.fillRect(x + 3, y + 12, TILE - 6, TILE - 24);
+      ctx.strokeStyle = "rgba(159,232,216,0.7)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 3, y + 12, TILE - 6, TILE - 24);
+      ctx.fillStyle = "rgba(159,232,216,0.25)";
+      ctx.beginPath();
+      ctx.arc(x + TILE / 2, y + TILE / 2, 6 + 2 * Math.sin(performance.now() * 0.004), 0, TAU);
+      ctx.fill();
+    }
+
+    // A welded bulkhead, with the state of the weld written on it: the bead across the
+    // middle burns down as whatever is on the far side leans on it.
+    for (let i = 0; i < props.welded.length; i += 2) {
+      const tx = props.welded[i];
+      const ty = props.welded[i + 1];
+      const x = tx * TILE;
+      const y = ty * TILE;
+      ctx.fillStyle = "#171821";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = "#3a3d47";
+      ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+      ctx.strokeStyle = "rgba(201,162,58,0.9)";
+      ctx.lineWidth = 4;
+      const left = world.welds.get(`${tx},${ty}`);
+      const frac = left === undefined ? 1 : Math.max(0, Math.min(1, left / WELD_INTEGRITY));
+      ctx.beginPath();
+      ctx.moveTo(x + 5, y + TILE / 2);
+      ctx.lineTo(x + 5 + (TILE - 10) * frac, y + TILE / 2);
+      ctx.stroke();
+      if (frac < 1) {
+        ctx.strokeStyle = "rgba(255,120,90,0.5)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x + 5 + (TILE - 10) * frac, y + TILE / 2);
+        ctx.lineTo(x + TILE - 5, y + TILE / 2);
+        ctx.stroke();
+      }
     }
 
     this.drawCars(ctx, world, b);
@@ -691,9 +801,26 @@ export class Renderer {
 
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
-        const key = tileDef(map.tileAt(tx, ty)).key;
+        const def = tileDef(map.tileAt(tx, ty));
+        const key = def.key;
         const x = tx * TILE;
         const y = ty * TILE;
+
+        // Standing water, under everything else that might be on this tile.
+        if (def.flooded) {
+          drawWater(ctx, tx, ty, x, y);
+          continue;
+        }
+        // A grate overhead. Drawn on the floor because that is where you are looking,
+        // and deliberately bright enough to find in the dark: it is a place to shoot.
+        if (def.vent) {
+          drawVent(ctx, world, x, y);
+          continue;
+        }
+        if (def.bulkhead) {
+          drawBulkheadFrame(ctx, x, y);
+          continue;
+        }
 
         if (key === "brokenGlass" || key === "brokenWindow") {
           // A shattered pane: the frame is gone, so all that is left is glitter on the
@@ -818,6 +945,16 @@ export class Renderer {
   }
 
   private drawActors(ctx: CanvasRenderingContext2D, world: GameWorld, alpha: number): void {
+    // Tendrils first, under the bodies at both ends of them. A tendril is only drawn
+    // where it is lit, which is the point: the counterplay to a Strangler is somebody
+    // else's flashlight finding the rope in time to cut it.
+    for (const e of world.enemies) {
+      if (e.state !== "reel" || e.tendrilHealth <= 0) continue;
+      const target = world.players.find((p) => p.id === e.tendrilTargetId);
+      if (!target) continue;
+      drawTendril(ctx, e, target);
+    }
+
     for (const e of world.enemies) {
       // Nothing in the dark gets drawn — that is the whole point of the cone.
       if (!e.visible) continue;
@@ -825,6 +962,14 @@ export class Renderer {
     }
 
     for (const p of world.players) this.drawPlayer(ctx, p, alpha);
+
+    // Whatever is sitting on somebody is drawn last, over the body it is chewing.
+    for (const e of world.enemies) {
+      if (e.state !== "pin" || !e.visible) continue;
+      drawZombie(ctx, e, alpha);
+    }
+
+    for (const f of world.thrownFlares) drawBurningFlare(ctx, f.x, f.y);
   }
 
   /** One player. Its own method because the helicopter has to redraw whoever is under it. */
@@ -844,7 +989,9 @@ export class Renderer {
       body, outline: "#0c0d12",
       // Crawling is most of the way to flat: a downed player is on the floor, and the
       // stance machine is not what says so — `downed` is its own thing.
-      prone: p.downed ? 0.7 : proneAmount(p),
+      // Pinned is on the floor under something, which is a different picture from
+      // downed and has to read as one from across a room.
+      prone: p.downed ? 0.7 : p.restraint?.kind === "pin" ? 0.85 : proneAmount(p),
       walkPhase: p.walkPhase,
       // Gait depth off the actual speed: a walk steps, a sprint strides, a crawl drags.
       walkAmount: Math.min(1.15, Math.hypot(p.vx, p.vy) / PLAYER_TUNING.WALK_SPEED),
@@ -873,6 +1020,34 @@ export class Renderer {
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.arc(x, y, p.radius + 12, -Math.PI / 2, -Math.PI / 2 + TAU * (p.reviveProgress / 2.2));
+      ctx.stroke();
+    }
+
+    // Held. A ring that fills as a teammate shoves whatever is on you off — the same
+    // language a revive uses, because it is the same request: somebody come here.
+    const r = p.restraint;
+    if (r !== null) {
+      ctx.strokeStyle = "rgba(255,140,210,0.85)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(x, y, p.radius + 10, 0, TAU);
+      ctx.stroke();
+      if (r.kind === "pin" && r.shove > 0) {
+        ctx.strokeStyle = "rgba(220,255,220,0.95)";
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.arc(x, y, p.radius + 10, -Math.PI / 2, -Math.PI / 2 + TAU * Math.min(1, r.shove / 0.9));
+        ctx.stroke();
+      }
+    }
+
+    // Beam off: a small closed eye over the body, so the squad can see at a glance who
+    // is walking dark and stops wondering why that corridor is not lit.
+    if (!p.lightOn && !p.downed) {
+      ctx.strokeStyle = "rgba(150,165,190,0.75)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y - p.radius - 16, 5, 0.2 * Math.PI, 0.8 * Math.PI);
       ctx.stroke();
     }
   }
@@ -918,6 +1093,11 @@ export class Renderer {
     for (const light of world.staticLights) {
       if (lightVisible(light, b)) fillLight(ctx, light, 0.22);
     }
+    // A flare on the floor lights the room for everybody, which is the whole point of
+    // carrying one: light nobody has to keep pointing.
+    for (const f of world.thrownFlares) {
+      if (lightVisible(f.light, b)) fillLight(ctx, f.light, 0.3 * f.light.intensity);
+    }
     for (const light of this.ambientLights) {
       if (lightVisible(light, b)) fillLight(ctx, light, 0.16);
     }
@@ -949,6 +1129,9 @@ export class Renderer {
     }
     for (const light of world.staticLights) {
       if (lightVisible(light, b)) eraseLight(lctx, light, 0.85);
+    }
+    for (const f of world.thrownFlares) {
+      if (lightVisible(f.light, b)) eraseLight(lctx, f.light, 0.85 * f.light.intensity);
     }
     for (const light of this.ambientLights) {
       if (lightVisible(light, b)) eraseLight(lctx, light, 0.8);
@@ -1008,6 +1191,111 @@ export class Renderer {
     ctx.globalCompositeOperation = "source-over";
   }
 
+  /**
+   * Coolant fog. Drawn per tile straight off the baked thickness, over the darkness,
+   * so a room full of it reads as *filled* rather than as unlit — the difference
+   * matters, because one of those you fix with a flashlight and the other you do not.
+   */
+  private drawFog(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    const map = world.map;
+    const tx0 = Math.max(0, Math.floor(b.x0 / TILE));
+    const ty0 = Math.max(0, Math.floor(b.y0 / TILE));
+    const tx1 = Math.min(map.cols - 1, Math.ceil(b.x1 / TILE));
+    const ty1 = Math.min(map.rows - 1, Math.ceil(b.y1 / TILE));
+    const drift = performance.now() * 0.00018;
+
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const thickness = map.fogAt(tx * TILE + 1, ty * TILE + 1);
+        if (thickness <= 0.02) continue;
+        // A slow roll across the bank so it reads as vapour rather than as a filter.
+        const roll = 0.86 + 0.14 * Math.sin(drift * 6 + tx * 0.7 + ty * 0.5);
+        ctx.fillStyle = `rgba(198,226,224,${Math.min(0.93, thickness * 0.92 * roll)})`;
+        ctx.fillRect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
+      }
+    }
+  }
+
+  /**
+   * Current going through standing water. Drawn over the darkness, per tile of every
+   * charged puddle: a wash to say the whole body of water is live, and forked arcs
+   * jumping across it so it reads as electricity and not as a blue filter.
+   */
+  private drawLiveWater(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    if (world.liveWater.size === 0) return;
+    const map = world.map;
+    ctx.globalCompositeOperation = "lighter";
+    for (const [index] of world.liveWater) {
+      const puddle = map.puddles[index];
+      if (!puddle) continue;
+      for (const tile of puddle.tiles) {
+        const tx = tile % map.cols;
+        const ty = Math.floor(tile / map.cols);
+        const x = tx * TILE;
+        const y = ty * TILE;
+        if (x > b.x1 || x + TILE < b.x0 || y > b.y1 || y + TILE < b.y0) continue;
+
+        const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.05 + tx + ty);
+        ctx.fillStyle = `rgba(80,150,210,${0.1 + 0.14 * pulse})`;
+        ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+        ctx.strokeStyle = `rgba(215,245,255,${0.35 + 0.45 * pulse})`;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        for (let k = 0; k < 2; k++) {
+          const seed = performance.now() * 0.004 + tx * 3 + ty * 5 + k * 11;
+          let px = x + TILE * 0.5 + Math.sin(seed) * TILE * 0.35;
+          let py = y + TILE * 0.5 + Math.cos(seed * 1.3) * TILE * 0.35;
+          ctx.moveTo(px, py);
+          for (let s = 0; s < 3; s++) {
+            px += Math.sin(seed * (s + 2) * 1.7) * 9;
+            py += Math.cos(seed * (s + 3) * 1.3) * 9;
+            ctx.lineTo(px, py);
+          }
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /**
+   * Sound, drawn. Every live noise is a ring expanding from where it happened, coloured
+   * by what made it — and it is drawn on top of the darkness, which is the entire
+   * feature: in a blackout or a fog bank the ripples are all you have, and a shambler
+   * crossing a room you cannot see is still a thing you can point at.
+   */
+  private drawNoiseRipples(ctx: CanvasRenderingContext2D, world: GameWorld): void {
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineWidth = 2;
+    for (const n of world.noise.items) {
+      if (!n.active) continue;
+      // A noise lives half a second; the ring is where its leading edge has got to.
+      const t = 1 - n.life / NOISE_RING_LIFE;
+      if (t < 0 || t > 1) continue;
+      const radius = n.radius * 0.55 * t;
+      const fade = (1 - t) * (1 - t);
+      // The same kind of sound means two different things depending on what made it:
+      // a sprinting teammate and a shambler both make footfalls, and in a fog bank the
+      // difference between those two rings is the difference between walking toward
+      // help and walking into something.
+      const tone = n.byDead ? "150,230,170" : RIPPLE_TONE[n.kind] ?? "190,205,230";
+      // Quiet things get a quiet ring. A gunshot should wash the screen; a footstep
+      // should be something you have to be looking for.
+      const weight = Math.min(1, n.radius / 700);
+      ctx.strokeStyle = `rgba(${tone},${fade * (0.12 + 0.5 * weight)})`;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, Math.max(2, radius), 0, TAU);
+      ctx.stroke();
+      if (weight > 0.5) {
+        ctx.strokeStyle = `rgba(${tone},${fade * 0.25})`;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, Math.max(2, radius * 0.62), 0, TAU);
+        ctx.stroke();
+      }
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
   /** The bright rim where light meets a wall face. Cheap, and it sells the whole look. */
   private drawLightEdges(ctx: CanvasRenderingContext2D, world: GameWorld): void {
     ctx.globalCompositeOperation = "lighter";
@@ -1056,6 +1344,154 @@ export class Renderer {
 }
 
 /** A burning flare: a hot core with a flickering halo, not a tidy fixture. */
+/** Standing water, in whatever light happens to reach it. The charge is drawn later. */
+function drawWater(
+  ctx: CanvasRenderingContext2D, tx: number, ty: number, x: number, y: number,
+): void {
+  ctx.fillStyle = "#3d5a66";
+  ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+  // Deterministic ripples off the tile coordinates, so the surface does not crawl.
+  ctx.strokeStyle = "rgba(180,225,240,0.16)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let k = 0; k < 3; k++) {
+    const h = Math.abs(Math.sin(tx * 9.7 + ty * 4.3 + k * 2.1) * 43758.5) % 1;
+    const ry = y + 8 + h * (TILE - 16);
+    ctx.moveTo(x + 5, ry);
+    ctx.lineTo(x + TILE - 5, ry + 2);
+  }
+  ctx.stroke();
+}
+
+/**
+ * A ceiling vent. The grate, and — if something is dragging itself along above it —
+ * a shadow moving across the slats. That shadow is the only thing in the game you can
+ * shoot at that is not really in the room.
+ */
+function drawVent(
+  ctx: CanvasRenderingContext2D, world: GameWorld, x: number, y: number,
+): void {
+  ctx.fillStyle = "#4c5663";
+  ctx.fillRect(x + 4, y + 4, TILE - 8, TILE - 8);
+  ctx.strokeStyle = "rgba(20,24,30,0.8)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x + 4, y + 4, TILE - 8, TILE - 8);
+  ctx.strokeStyle = "rgba(190,205,225,0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 1; i < 5; i++) {
+    ctx.moveTo(x + 7, y + 4 + (i * (TILE - 8)) / 5);
+    ctx.lineTo(x + TILE - 7, y + 4 + (i * (TILE - 8)) / 5);
+  }
+  ctx.stroke();
+
+  // Something overhead, passing this grate.
+  const cx = x + TILE / 2;
+  const cy = y + TILE / 2;
+  let occupied = false;
+  for (const e of world.enemies) {
+    if (e.state !== "vent") continue;
+    if (Math.hypot(e.x - cx, e.y - cy) > VENT_SHADOW) continue;
+    occupied = true;
+    break;
+  }
+  if (!occupied) return;
+  const shift = Math.sin(performance.now() * 0.012) * 6;
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.beginPath();
+  ctx.ellipse(cx + shift, cy, TILE * 0.3, TILE * 0.22, 0, 0, TAU);
+  ctx.fill();
+}
+
+/** The frame of an open bulkhead: a doorway you can shut, if you are carrying the tool. */
+function drawBulkheadFrame(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  ctx.fillStyle = "rgba(120,130,145,0.14)";
+  ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+  ctx.strokeStyle = "rgba(190,200,215,0.55)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x + 2, y + 3); ctx.lineTo(x + TILE - 2, y + 3);
+  ctx.moveTo(x + 2, y + TILE - 3); ctx.lineTo(x + TILE - 2, y + TILE - 3);
+  ctx.stroke();
+  // Recessed door leaves, parked in the frame.
+  ctx.fillStyle = "rgba(150,160,175,0.3)";
+  ctx.fillRect(x + 2, y + 5, 6, TILE - 10);
+  ctx.fillRect(x + TILE - 8, y + 5, 6, TILE - 10);
+}
+
+/**
+ * A tendril: a thick, wet rope from the thing to the person it has. It sags, it pulses
+ * along its length toward the Strangler (so which end is pulling is never in doubt), and
+ * it frays as it is shot — the last few points of it look like something about to go,
+ * which is the feedback a teammate needs to know one more burst will do it.
+ *
+ * Drawn with the actors, under the darkness pass, so only the lit stretch of it shows.
+ * That is the counterplay rather than a side effect: the rope runs off into a black
+ * corridor, and somebody has to put a light on it before anybody can cut it.
+ */
+function drawTendril(ctx: CanvasRenderingContext2D, e: Enemy, target: Player): void {
+  const def = zombieDef(e.kind).tendril;
+  if (!def) return;
+  const t = Math.max(0, Math.min(1, e.tendrilHealth / def.health));
+  const ax = e.x;
+  const ay = e.y;
+  const bx = target.x;
+  const by = target.y;
+  // Sag, perpendicular to the line, so it reads as a thrown rope and not a laser.
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy) || 1;
+  const px = -dy / len;
+  const py = dx / len;
+  const sag = Math.sin(performance.now() * 0.004) * 6 + 10 * (1 - e.tendrilOut);
+  const mx = (ax + bx) / 2 + px * sag;
+  const my = (ay + by) / 2 + py * sag;
+
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(24,12,28,0.85)";
+  ctx.lineWidth = 9 * (0.55 + 0.45 * t);
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.quadraticCurveTo(mx, my, bx, by);
+  ctx.stroke();
+  ctx.strokeStyle = t > 0.35 ? "#b06ac0" : "#d46a7a";
+  ctx.lineWidth = 5 * (0.55 + 0.45 * t);
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.quadraticCurveTo(mx, my, bx, by);
+  ctx.stroke();
+
+  // A pulse travelling back up it, toward whatever is doing the pulling.
+  const phase = (performance.now() * 0.0009) % 1;
+  const k = 1 - phase;
+  const qx = (1 - k) * (1 - k) * ax + 2 * (1 - k) * k * mx + k * k * bx;
+  const qy = (1 - k) * (1 - k) * ay + 2 * (1 - k) * k * my + k * k * by;
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = "rgba(220,150,240,0.5)";
+  ctx.beginPath();
+  ctx.arc(qx, qy, 6, 0, TAU);
+  ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+
+  // Fraying: the closer it is to cut, the more of it is coming apart.
+  if (t < 0.7) {
+    ctx.strokeStyle = `rgba(255,140,160,${0.7 * (1 - t)})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const k2 = 0.25 + i * 0.12;
+      const fx = (1 - k2) * (1 - k2) * ax + 2 * (1 - k2) * k2 * mx + k2 * k2 * bx;
+      const fy = (1 - k2) * (1 - k2) * ay + 2 * (1 - k2) * k2 * my + k2 * k2 * by;
+      const spread = 7 * (1 - t);
+      ctx.moveTo(fx, fy);
+      ctx.lineTo(fx + px * spread * (i % 2 ? 1 : -1), fy + py * spread * (i % 2 ? 1 : -1));
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawBurningFlare(ctx: CanvasRenderingContext2D, x: number, y: number): void {
   const flicker = 0.75 + 0.25 * Math.sin(performance.now() * 0.02 + x);
   ctx.globalCompositeOperation = "lighter";
@@ -1152,14 +1588,45 @@ function drawZombie(ctx: CanvasRenderingContext2D, e: Enemy, alpha: number): voi
   drawActor(ctx, {
     x, y, facing: e.facing, radius: e.radius,
     body, outline: "#101a11",
-    prone: down ? 1 : 0,
+    // A Stalker is never upright: it goes about on all fours, which from above is a
+    // body squashed along its own length with its arms out ahead of it. Sitting on
+    // somebody it comes up onto its haunches, so you can see what is on your teammate.
+    prone: down ? 1 : def.pounce ? (e.state === "pin" ? 0.25 : 0.5) : 0,
     walkPhase: e.walkPhase,
     walkAmount: Math.min(1.2, Math.hypot(e.vx, e.vy) / def.wanderSpeed),
     // Carries nothing, so the arms are free to be the tell: out in front while it is
     // coming for you, and further out the moment it commits to the leap.
     hands: null,
-    shamble: e.state === "lunge" || e.state === "windup" ? 1 : 0.72,
+    shamble: e.state === "lunge" || e.state === "windup" || e.state === "pounce" ? 1 : 0.72,
   });
+
+  // A Strangler's tell, before it throws: the maw opens and it draws a bead on you.
+  if (e.state === "lurk" && e.tendrilTargetId >= 0) {
+    const t = 1 - Math.min(1, e.stateTimer / (def.tendril?.aim ?? 1));
+    ctx.strokeStyle = `rgba(200,110,220,${0.3 + 0.5 * t})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, e.radius + 20 - 14 * t, 0, TAU);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(200,110,220,${0.25 + 0.35 * t})`;
+    ctx.beginPath();
+    ctx.arc(x + Math.cos(e.facing) * (e.radius + 6), y + Math.sin(e.facing) * (e.radius + 6),
+      4 + 4 * t, 0, TAU);
+    ctx.fill();
+  }
+
+  // Blinded by a beam: it staggers, and says so.
+  if (e.blind > 0) {
+    ctx.strokeStyle = "rgba(255,246,200,0.7)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const a = performance.now() * 0.006 + (i * TAU) / 3;
+      ctx.moveTo(x + Math.cos(a) * (e.radius + 6), y + Math.sin(a) * (e.radius + 6));
+      ctx.lineTo(x + Math.cos(a) * (e.radius + 13), y + Math.sin(a) * (e.radius + 13));
+    }
+    ctx.stroke();
+  }
 
   if (e.state === "windup") {
     // The telegraph: a ring that closes on it as the leap gets closer.

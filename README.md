@@ -38,7 +38,10 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Lean left / right | `Q` / `E` | LB / RB |
 | Reload | `R` | X |
 | Revive teammate | Hold `F` | Hold Y |
+| Shove a mutant off a pinned teammate | Hold `F` | Hold Y |
 | Use a device (terminal, fusion socket, blast door) | Hold `F` | Hold Y |
+| Use the utility item (hold for a medkit or a welder) | `G` | R3 |
+| Flashlight on / off | `T` | LB + RB together |
 | Join the game | `ENTER` in the lobby | `START` in the lobby |
 | Menus | `WASD` / arrows, `ENTER`, `ESC` | stick or D-pad, `START`, `B` |
 
@@ -154,7 +157,9 @@ simulation:
 - **Zombies use the same rig** with a different posture: arms out in front, one leg
   dragging, the head lolled over, and a face the colour of something that has stopped
   circulating. Arms go fully out the moment one commits to a leap, which makes the
-  telegraph readable off the body as well as off the ring.
+  telegraph readable off the body as well as off the ring. A **Stalker** is the same rig
+  flattened along its own length — it goes about on all fours — and comes up onto its
+  haunches when it is sitting on somebody, so you can see what has your teammate.
 
 Adding a weapon is one row in `WEAPONS` (stats) and one row in `WEAPON_ART` (silhouette),
 joined by a single `art` field. Nothing else in the renderer learns its name.
@@ -214,6 +219,85 @@ kind of zombie is one entry in that table** — a runner is a walker with a bigg
 `chaseSpeed` and a shorter windup, a brute one with more health and a heavier bite. The
 state machine, the renderer and the director all read the table by key, so nothing else
 changes. `F1` draws each zombie's state and sense arc while you tune.
+
+## The mutants
+
+Two things on the ship are not walkers, and each one exists to break a habit the squad
+has already formed by the time they meet it.
+
+### The Strangler — the dark is not empty
+
+It never comes to you. It holds a corner outside your cone, reaches **400 units** — most
+of a corridor, and well past what a flashlight shows you — and drags whoever it catches
+away into the dark.
+
+- It winds up for **0.7s** before it throws, and it is audible doing it. Break the line
+  of sight during that and nothing happens at all.
+- A caught player is **reeled in at 155 units/second and cannot shoot.** That is the
+  whole design: the person in trouble is not the person who can solve it.
+- **Cutting the tendril takes 26 damage** — two or three rounds — against the 90 it takes
+  to kill the thing holding it. Cutting the rope is the panicked answer anyone can manage
+  across a dark room; killing it is the considered one. Both work, and a round spent
+  cutting is a round that does not reach the body, so it is a real choice.
+- The tendril is drawn under the darkness pass, so **only the lit stretch of it shows.**
+  Somebody has to put a beam on the rope before anybody can cut it.
+
+### The Stalker — splitting up is not free
+
+It reads the squad's overlapping cones and goes for whoever is outside them. Stay
+together and it will sit in the ducts all mission. (Playing alone, you are by definition
+the straggler — which is most of what makes a solo run of a deck with one on it feel
+different from a co-op one.)
+
+- **It only targets a player nobody else has eyes on.** Coverage is literally "is this
+  player inside another player's cone, with line of sight" — so covering each other is
+  the counterplay, not a suggestion.
+- It is **silent** — it makes no footfall at all — until the **wet skitter** half a
+  second before it goes. That is the only warning the target gets.
+- A pounce ends **on top of you**: pinned, unable to shoot, taking 15/second. A teammate
+  **shoves it off by holding USE** for about a second, or kills it. Adrenaline is the one
+  self-rescue.
+- **A beam full in its face blinds it** — 0.6s of light and it is out for two seconds,
+  including mid-leap, where it drops on the spot.
+- It uses the **ceiling ducts** to reposition. Up there nothing on the floor can touch
+  it, but it scrapes as it goes, and a shot through the grate it is crossing reaches it.
+  The shadow the renderer draws over the grate IS the hitbox — "shoot the shadow" is the
+  whole rule.
+
+## The utility slot
+
+One primary weapon, one utility item. That cap is the design: with two slots every
+pickup is a decision made out loud, and nothing needs an inventory screen. Items come
+from **supply caches** you walk onto, the same way a weapon locker works.
+
+| Item | What it does |
+| --- | --- |
+| **Medkit** | Hold `G` for 3 seconds. Puts back 70% of max health — yours, or a teammate's if one is in arm's reach. It will not pick somebody up off the floor: that is what reviving is for. |
+| **Adrenaline** | Instant. Faster, reloads in 60% of the time for 8 seconds — and it **tears you out of a grip**, which is the only way to free yourself. |
+| **Flare** | Throw it. Twenty seconds of a lit room, for everybody, with nobody holding a flashlight — which is the counter to both mutants at once. |
+| **Welding tool** | Three charges. Stand in a bulkhead and hold `G` to seal it. It buys time, not safety: whatever is on the far side chews through it. |
+
+## Hazards, and the light you choose to carry
+
+- **Exposed cables and standing water.** Touching flooded tiles gather into one puddle
+  the way car tiles gather into one car. Put a round into a cable touching a puddle and
+  the whole thing goes live for 2.4 seconds: it cooks anything standing in it, and it
+  **whites out the vision of anyone nearby, including you**. A cable needs 12 seconds
+  before it will do it again, so it is a tool rather than a doorway you can hold.
+- **Coolant leaks.** A split pipe fills the room with fog that is baked into the map at
+  load. In it your **cone is gone** and so is everybody else's — nothing inside a fog
+  bank can be seen at all — but the halo stays, so you can still see your own boots. You
+  navigate it by sound.
+- **Sound you can see.** Every noise draws an expanding ring, over the darkness and over
+  the fog, coloured by what made it and by whether a living thing or a dead one made it.
+  Shamblers now make footfalls for exactly this reason — the horde cannot hear its own
+  (or it would spend the mission walking toward itself), but you can. In a fog bank the
+  ripples are the game.
+- **Light-dependent aggro.** The flashlight is a **toggle** (`T`). In a room with its
+  emergency lights still on, having it on costs you nothing. In a dead-dark one it is a
+  lure on the same field a gunshot rides, every 0.9 seconds — so the dark is safer, and
+  you cannot see in it. Walking a black deck with the beam off is a real option and a
+  genuinely bad idea.
 
 ## Modes
 
@@ -375,9 +459,11 @@ Tuning is two tables at the top of `src/sim/director.ts` — `STORY_TUNING` and
 Levels are 2D arrays of tile ids — `0` floor, `1` wall, `2` player spawn, `3` zombie,
 `4` crate, `5` glass, `6` lamp, `7` exit, `8` spawn zone, `9` stairs, `20` signal flare,
 plus scenery (`10` car, `11` window, `12` reception desk, `13` cubicle, `14` flare,
-`15` lift door, `16` blocked floor, `17` broken glass, `18` broken window) and the
+`15` lift door, `16` blocked floor, `17` broken glass, `18` broken window), the
 objective devices (`21` terminal, `23` weapon locker, `25` fusion socket, `27` blast
-door, `28` stairs down):
+door, `28` stairs down), the ship's hazards (`29` ceiling vent, `30` flooded floor,
+`31` exposed cable, `32` coolant leak, `33` bulkhead) and what you find and fight in
+them (`35`–`38` supply caches, `40` Strangler, `41` Stalker):
 
 ```
 [1,1,1,1,1,1,1],
@@ -407,6 +493,11 @@ Adding a new tile type is one row in `TILE_DEFS` — the collision, vision, rend
 editor palette and importer all read from that one table.
 [docs/LEVELS.md](docs/LEVELS.md) has the full reference.
 
+Three built-in maps ship with the game, cycled with `[` and `]`: **Corridors**,
+**Tile Showcase**, and **Deck Hazards** — the last of which exists to put one of
+everything added since (both mutants, all four items, water and a cable, a coolant
+bank, vents and bulkheads) within walking distance of the spawn.
+
 ## Current state
 
 Implemented: fixed-timestep loop, device-agnostic input with drop-in join, tile world
@@ -415,7 +506,10 @@ adaptive shadow edges, per-viewport cameras and split-screen layout, the lightin
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
 hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director,
 a flare-and-helicopter extraction finale, top-down character art with a solved arm rig,
-distance-driven gaits and per-weapon silhouettes, melee weapons, hold-to-use devices
+distance-driven gaits and per-weapon silhouettes, two ambush mutants (a ranged grab and
+a pin) with vent travel, a one-slot utility inventory, electrified water, coolant fog,
+a toggleable flashlight that trades sight for attention, a sound-ripple visualiser,
+melee weapons, hold-to-use devices
 (terminals, weapon lockers, fusion sockets and a blast door) driving a multi-act
 objective chain, per-floor difficulty pressure, HUD per viewport,
 a debug overlay, synthesised positional sound, the level format with a tolerant

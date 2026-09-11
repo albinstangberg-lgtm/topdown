@@ -11,7 +11,19 @@
  * walks toward the one that is nearer to filling its ears rather than the newer one.
  */
 
-export type NoiseKind = "shot" | "break" | "step" | "impact" | "alarm" | "flare" | "rotor";
+export type NoiseKind =
+  | "shot" | "break" | "step" | "impact" | "alarm" | "flare" | "rotor"
+  /**
+   * Not a sound at all: a lit flashlight in a dead-dark room. It rides this field
+   * because the field is really the game's *attention* system — "what pulls the dead
+   * toward a point" — and a beam swinging round a black corridor does exactly that.
+   * The audio layer deliberately plays nothing for it.
+   */
+  | "beam"
+  /** A Stalker moving through the ducts overhead. The only warning you get. */
+  | "duct"
+  /** A discharge through standing water. Loud, and it carries. */
+  | "arc";
 
 export interface Noise {
   active: boolean;
@@ -21,6 +33,13 @@ export interface Noise {
   radius: number;
   kind: NoiseKind;
   life: number;
+  /**
+   * Made by something that is already dead. The horde does not investigate its own
+   * shuffling — otherwise a crowd would spend the mission walking toward itself — but
+   * a player watching the sound ripples absolutely should see it, which is the entire
+   * reason a shambler in a fog bank is findable at all.
+   */
+  byDead: boolean;
 }
 
 /**
@@ -42,11 +61,13 @@ export class NoiseField {
 
   constructor() {
     for (let i = 0; i < MAX_NOISES; i++) {
-      this.items.push({ active: false, x: 0, y: 0, radius: 0, kind: "step", life: 0 });
+      this.items.push({
+        active: false, x: 0, y: 0, radius: 0, kind: "step", life: 0, byDead: false,
+      });
     }
   }
 
-  emit(x: number, y: number, radius: number, kind: NoiseKind): void {
+  emit(x: number, y: number, radius: number, kind: NoiseKind, byDead = false): void {
     // Oldest slot wins when the field is full: a loud world should not go deaf.
     const n = this.items[this.cursor];
     this.cursor = (this.cursor + 1) % this.items.length;
@@ -56,6 +77,7 @@ export class NoiseField {
     n.radius = radius;
     n.kind = kind;
     n.life = NOISE_LIFE;
+    n.byDead = byDead;
     this.onEmit?.(n);
   }
 
@@ -79,7 +101,7 @@ export class NoiseField {
     let best: Noise | null = null;
     let bestLoudness = 0;
     for (const n of this.items) {
-      if (!n.active) continue;
+      if (!n.active || n.byDead) continue;
       const reach = n.radius * hearing;
       const d = Math.hypot(n.x - x, n.y - y);
       if (d >= reach) continue;
@@ -104,4 +126,18 @@ export const NOISE = {
   flare: 900,
   /** Rotor wash. The loudest thing in the game, and it is parked on your extraction. */
   rotor: 1900,
+  /**
+   * How far a lit beam carries in the dark. Short — this is "something moved in here",
+   * not a gunshot — but it is the whole reason to walk a black deck with the light off.
+   */
+  beam: 300,
+  /** Something dragging itself along a duct. Heard through the ceiling, not the walls. */
+  duct: 330,
+  /** Current going through standing water. */
+  arc: 780,
+  /**
+   * A shambling footfall. Nothing hunts it — it is tagged as made by the dead — but it
+   * is what you read the room by when coolant fog has taken your eyes.
+   */
+  shamble: 210,
 } as const;

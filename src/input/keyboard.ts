@@ -24,6 +24,8 @@ export class KeyboardMouseSource implements InputSource {
   private prevDive = false;
   private prevReload = false;
   private prevInteract = false;
+  private prevItem = false;
+  private prevLight = false;
   private prevStart = false;
   private prevCancel = false;
 
@@ -103,6 +105,8 @@ export class KeyboardMouseSource implements InputSource {
     const shifted = k.has("ShiftLeft") || k.has("ShiftRight");
     const reload = this.hit("KeyR") && !shifted;
     const interact = k.has("KeyF");
+    const item = k.has("KeyG");
+    const light = this.hit("KeyT");
     const lean = (k.has("KeyE") ? 1 : 0) - (k.has("KeyQ") ? 1 : 0);
     const start = this.hit("Enter") || this.hit("NumpadEnter");
     const cancel = this.hit("Escape") || this.hit("Backspace");
@@ -115,6 +119,9 @@ export class KeyboardMouseSource implements InputSource {
     out.lean = lean;
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
+    out.item = item;
+    out.itemPressed = item && !this.prevItem;
+    out.lightPressed = light && !this.prevLight;
     out.startPressed = start && !this.prevStart;
     out.cancelPressed = cancel && !this.prevCancel;
 
@@ -122,6 +129,8 @@ export class KeyboardMouseSource implements InputSource {
     this.prevDive = dive;
     this.prevReload = reload;
     this.prevInteract = interact;
+    this.prevItem = item;
+    this.prevLight = light;
     this.prevStart = start;
     this.prevCancel = cancel;
 

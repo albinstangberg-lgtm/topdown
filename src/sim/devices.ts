@@ -4,6 +4,13 @@ import type { InputState } from "../input/types";
 import type { Player } from "./entities";
 
 /**
+ * What a cache can hold. The union is the one on `TileDef.supply` — the tile says what
+ * is in the box, this system says that walking onto it empties the box, and the world
+ * says what a medkit is worth. Three systems, one fact each.
+ */
+export type SupplyItem = "medkit" | "adrenaline" | "flare" | "welder";
+
+/**
  * CORE 18 — Devices, and the objective chain they make.
  *
  * Everything in the story arc that is not "walk to the exit" is one of four things you
@@ -52,6 +59,8 @@ export type DeviceOutcome =
   | { kind: "log"; index: number; x: number; y: number }
   /** A locker was emptied by this player. */
   | { kind: "locker"; player: Player; x: number; y: number }
+  /** A supply cache was emptied. `item` is the key of what was in it. */
+  | { kind: "supply"; player: Player; item: SupplyItem; x: number; y: number }
   /** One fusion cell is in. `primed` of `total` sockets are now live. */
   | { kind: "socket"; player: Player; x: number; y: number; primed: number; total: number }
   /** The first cell went in — the reactor floor is now a fight, not a search. */
@@ -151,6 +160,17 @@ export class DeviceSystem {
           // A locker is not a dwell. Reaching an armoury at all was the hard part.
           this.spend(deps.map, index);
           out.push({ kind: "locker", player: p, x: device.x, y: device.y });
+          continue;
+        }
+
+        if (device.kind === "supply") {
+          // Same deal as a locker, and for the same reason. Taking the box is free;
+          // deciding to drop what you were already carrying for it is not.
+          const item = tileDef(deps.map.tileAt(device.tx, device.ty)).supply;
+          if (item !== undefined) {
+            this.spend(deps.map, index);
+            out.push({ kind: "supply", player: p, item, x: device.x, y: device.y });
+          }
           continue;
         }
 

@@ -52,7 +52,7 @@ export interface TileDef {
    * the reactor, `locker` hands out the next weapon up. See `src/sim/devices.ts` — the
    * tile says what kind of thing it is, the device system says what using one does.
    */
-  device?: "terminal" | "socket" | "locker";
+  device?: "terminal" | "socket" | "locker" | "supply";
   /** True once a device has been used. Kept as a separate tile so a reload remembers. */
   spent?: boolean;
   /** What a device turns into once it has been used. */
@@ -64,6 +64,43 @@ export interface TileDef {
   blastDoor?: boolean;
   /** Stairs that go DOWN rather than up. Purely how it is drawn and announced. */
   descends?: boolean;
+  /**
+   * A ceiling vent. The duct network is every vent on the floor, and a Stalker in it
+   * is overhead rather than in the room — you hear it travelling, and a shot into the
+   * grate is the only thing that can touch it up there. The tile itself is ordinary
+   * floor: the vent is above you, not underfoot.
+   */
+  vent?: boolean;
+  /**
+   * Standing water. Touching flooded tiles gather into one puddle (the same way car
+   * tiles gather into one car), and a puddle is what a cable electrifies.
+   */
+  flooded?: boolean;
+  /** A live cable. Put a bullet in it and the puddle it touches goes live. */
+  cable?: boolean;
+  /** Leaks coolant: thick fog out to this radius in world units, through open floor. */
+  coolant?: number;
+  /** An open bulkhead. The welding tool turns it into `weldsInto`. */
+  bulkhead?: boolean;
+  /** What a welded bulkhead becomes. Solid, and the squad is behind it. */
+  weldsInto?: number;
+  /** A welded bulkhead: solid, and taking hits from whatever is on the other side. */
+  welded?: boolean;
+  /** What a welded bulkhead falls back to once it has been chewed open. */
+  weldFailsInto?: number;
+  /**
+   * A supply cache. Walk onto it to take this utility item — the same walk-on device
+   * a weapon locker is. Keys come from `ITEMS` in `src/sim/items.ts`; the union is
+   * repeated here for the same reason `device` is, so this table imports nothing.
+   */
+  supply?: "medkit" | "adrenaline" | "flare" | "welder";
+  /**
+   * Which creature an enemy spawn puts down. Keys come from `ZOMBIE_DEFS` in
+   * `src/sim/zombies.ts`; left out, a spawn tile places the default walker. This is
+   * how the two mutants get onto a floor at all — neither is ever drawn at random,
+   * because both of them are about the place they are standing.
+   */
+  enemyKind?: "walker" | "strangler" | "stalker";
   /** Editor palette colour. */
   color: string;
   /** Single character for the compact text form of a level. */
@@ -152,6 +189,63 @@ export const TILE_DEFS: readonly TileDef[] = [
     stairs: true, descends: true,
     color: "#2f8fb8", glyph: "v",
     hint: "the way DOWN. Same rule as ^ — the whole squad on it moves to the next floor" },
+
+  // --- The ship's own hazards, and the things that live in them ---------------
+
+  { id: 29, key: "vent", name: "Ceiling vent", solid: false, opaque: false, vent: true,
+    color: "#6f7c8c", glyph: "n",
+    hint: "a duct grate overhead. Stalkers travel between vents; you hear one coming and can shoot it through the grate" },
+  { id: 30, key: "water", name: "Flooded floor", solid: false, opaque: false, flooded: true,
+    color: "#3d6b7a", glyph: "~",
+    hint: "ankle-deep water. Touching tiles are one puddle — and a puddle is what a cable electrifies" },
+  { id: 31, key: "cable", name: "Exposed cable", solid: true, opaque: false, blocksShots: true,
+    cable: true,
+    color: "#d8c24a", glyph: "=",
+    hint: "a torn conduit. Shoot it and every flooded tile it touches goes live: cooks the horde, blinds anyone near it" },
+  { id: 32, key: "coolant", name: "Coolant leak", solid: true, opaque: false, blocksShots: true,
+    coolant: 190,
+    color: "#9fe8d8", glyph: "%",
+    hint: "a split coolant line. Fills the room with fog that kills vision cones dead — in there you navigate by sound" },
+  { id: 33, key: "bulkhead", name: "Bulkhead door", solid: false, opaque: false, bulkhead: true,
+    weldsInto: 34, prop: "door",
+    color: "#8a8f9a", glyph: "H",
+    hint: "an open bulkhead. Stand in it with a welding tool and hold USE to seal it behind you" },
+  { id: 34, key: "bulkheadWelded", name: "Bulkhead (welded)", solid: true, opaque: true,
+    welded: true, weldFailsInto: 33, prop: "door",
+    color: "#c9a23a", glyph: "h",
+    hint: "a bulkhead welded shut. Solid — but whatever is on the other side will chew through it eventually" },
+
+  // --- Supply caches. One row per item; they all empty into the same box --------
+
+  { id: 35, key: "medkitCache", name: "Medkit cache", solid: false, opaque: false,
+    device: "supply", supply: "medkit", usedInto: 39, light: 60,
+    color: "#ff7a9a", glyph: "+",
+    hint: "a first-aid box. Walk onto it to take a medkit into your utility slot" },
+  { id: 36, key: "adrenalineCache", name: "Adrenaline cache", solid: false, opaque: false,
+    device: "supply", supply: "adrenaline", usedInto: 39, light: 60,
+    color: "#ffe66b", glyph: "j",
+    hint: "a stim locker. Walk onto it to take an adrenaline shot" },
+  { id: 37, key: "flareCache", name: "Flare cache", solid: false, opaque: false,
+    device: "supply", supply: "flare", usedInto: 39, light: 60,
+    color: "#ff9a4a", glyph: "k",
+    hint: "a box of hand flares. Walk onto it to take one you can throw" },
+  { id: 38, key: "welderCache", name: "Welder cache", solid: false, opaque: false,
+    device: "supply", supply: "welder", usedInto: 39, light: 60,
+    color: "#7ad2ff", glyph: "y",
+    hint: "a maintenance kit. Walk onto it to take a welding tool and its three charges" },
+  { id: 39, key: "cacheEmpty", name: "Supply cache (empty)", solid: false, opaque: false,
+    device: "supply", spent: true,
+    color: "#5a5f68", glyph: "x", hint: "a cache somebody has already emptied" },
+
+  // Placed mutants. Neither is ever drawn at random — see `weight: 0` in ZOMBIE_DEFS.
+  { id: 40, key: "stranglerSpawn", name: "Strangler", solid: false, opaque: false,
+    spawn: "enemy", enemyKind: "strangler",
+    color: "#8f6f9a", glyph: "S",
+    hint: "one Strangler, holding this exact spot. Put it in a dark corner with a long line down a corridor" },
+  { id: 41, key: "stalkerSpawn", name: "Stalker", solid: false, opaque: false,
+    spawn: "enemy", enemyKind: "stalker",
+    color: "#5c6f7a", glyph: "s",
+    hint: "one Stalker. It will take the ducts and come back at whoever is on their own" },
 ];
 
 export const TILE_FLOOR = 0;

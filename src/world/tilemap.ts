@@ -28,7 +28,7 @@ export interface CarBody {
  * reading log 2 after terminal 1 has been read. See `src/sim/devices.ts`.
  */
 export interface DeviceTile {
-  kind: "terminal" | "socket" | "locker";
+  kind: "terminal" | "socket" | "locker" | "supply";
   /** Tile coordinates, so using one can rewrite the grid. */
   tx: number;
   ty: number;
@@ -37,6 +37,36 @@ export interface DeviceTile {
   y: number;
   /** Already used. Still listed, because the index has to stay put. */
   spent: boolean;
+}
+
+/**
+ * One puddle, not one tile — gathered exactly the way a car is, and for the same
+ * reason: a current does not stop at a tile boundary. A cable put a bullet in
+ * electrifies the whole connected body of water, which is what makes standing in one
+ * a decision rather than a texture.
+ */
+export interface Puddle {
+  /** Tile indices making up this body of water. */
+  tiles: number[];
+  /** Centre in world units, for the noise and the light the discharge throws. */
+  x: number;
+  y: number;
+  /** Cable tiles touching it. No cable, no current, however deep the water is. */
+  cables: Point[];
+}
+
+/** A hand-placed creature: where it stands, and which row of `ZOMBIE_DEFS` it is. */
+export interface EnemySpawn extends Point {
+  /** Undefined means the default walker — see `DEFAULT_ZOMBIE`. */
+  kind?: string;
+}
+
+/** A ceiling vent: a grate over ordinary floor, and one node of the duct network. */
+export interface VentTile {
+  tx: number;
+  ty: number;
+  x: number;
+  y: number;
 }
 
 /**
@@ -57,8 +87,12 @@ export class TileMap {
   private readonly shotMask: Uint8Array;
 
   readonly playerSpawns: Point[] = [];
-  /** Hand-placed enemies. One zombie each, put down once when the map loads. */
-  readonly enemySpawns: Point[] = [];
+  /**
+   * Hand-placed enemies. One creature each, put down once when the map loads. `kind`
+   * names the row in `ZOMBIE_DEFS` — the two mutants are only ever placed, never
+   * rolled, so this is the only way either of them reaches a floor by hand.
+   */
+  readonly enemySpawns: EnemySpawn[] = [];
   /** Zones the director draws from, so pressure comes from a different door each time. */
   readonly spawnZones: Point[] = [];
   /** Exit tiles. A map with none simply has no objective — that is survival. */
@@ -80,6 +114,18 @@ export class TileMap {
   readonly lamps: { x: number; y: number; range: number }[] = [];
   /** Vehicles, gathered from touching car tiles. See `CarBody`. */
   readonly cars: CarBody[] = [];
+  /** Ceiling vents. The duct network a Stalker travels is simply all of these. */
+  readonly vents: VentTile[] = [];
+  /** Bodies of standing water, gathered from touching flooded tiles. See `Puddle`. */
+  readonly puddles: Puddle[] = [];
+  /** Open bulkheads a welding tool can seal, and welded ones waiting to be chewed open. */
+  readonly bulkheads: { tx: number; ty: number; x: number; y: number; welded: boolean }[] = [];
+  /**
+   * How thick the coolant fog is on each tile, 0..1. Baked at load from every leaking
+   * pipe, because fog is authored geometry rather than anything that moves — and a
+   * per-tile lookup is what lets the vision code ask "can I see in here" in O(1).
+   */
+  private fogMask: Float32Array;
   /** Tile indices you can stand on, for random placement. */
   private walkable: number[] = [];
 
@@ -91,6 +137,7 @@ export class TileMap {
     this.solidMask = new Uint8Array(cols * rows);
     this.opaqueMask = new Uint8Array(cols * rows);
     this.shotMask = new Uint8Array(cols * rows);
+    this.fogMask = new Float32Array(cols * rows);
     this.refresh();
   }
 
@@ -119,6 +166,9 @@ export class TileMap {
     this.blastDoors.length = 0;
     this.lamps.length = 0;
     this.cars.length = 0;
+    this.vents.length = 0;
+    this.puddles.length = 0;
+    this.bulkheads.length = 0;
     this.walkable = [];
 
     for (let ty = 0; ty < this.rows; ty++) {
@@ -143,13 +193,18 @@ export class TileMap {
             const c = this.tileCenter(tx, ty);
             this.lamps.push({ x: c.x, y: c.y, range: def.light });
           }
+          // A welded bulkhead is solid, so like a blast door it is collected up here.
+          if (def.welded) {
+            const c = this.tileCenter(tx, ty);
+            this.bulkheads.push({ tx, ty, x: c.x, y: c.y, welded: true });
+          }
           continue;
         }
 
         this.walkable.push(i);
         const c = this.tileCenter(tx, ty);
         if (def.spawn === "player") this.playerSpawns.push(c);
-        else if (def.spawn === "enemy") this.enemySpawns.push(c);
+        else if (def.spawn === "enemy") this.enemySpawns.push({ ...c, kind: def.enemyKind });
         else if (def.spawn === "zone") this.spawnZones.push(c);
         if (def.exit) this.exits.push(c);
         if (def.stairs) this.stairs.push(c);
@@ -158,9 +213,147 @@ export class TileMap {
           this.devices.push({ kind: def.device, tx, ty, x: c.x, y: c.y, spent: def.spent === true });
         }
         if (def.light) this.lamps.push({ x: c.x, y: c.y, range: def.light });
+        if (def.vent) this.vents.push({ tx, ty, x: c.x, y: c.y });
+        if (def.bulkhead) this.bulkheads.push({ tx, ty, x: c.x, y: c.y, welded: false });
       }
     }
     this.buildCars();
+    this.buildPuddles();
+    this.bakeFog();
+  }
+
+  /**
+   * Gather touching flooded tiles into puddles, and note which cables reach each one.
+   * Orthogonal neighbours only — the same rule cars use, so two pools either side of a
+   * doorway are two pools, which is what an author drawing them means.
+   */
+  private buildPuddles(): void {
+    const seen = new Set<number>();
+    for (let ty = 0; ty < this.rows; ty++) {
+      for (let tx = 0; tx < this.cols; tx++) {
+        const i = this.idx(tx, ty);
+        if (seen.has(i) || !tileDef(this.tiles[i]).flooded) continue;
+
+        const tiles: number[] = [];
+        const cables: Point[] = [];
+        const queue: [number, number][] = [[tx, ty]];
+        seen.add(i);
+        let sumX = 0;
+        let sumY = 0;
+        while (queue.length > 0) {
+          const [cx, cy] = queue.pop()!;
+          tiles.push(this.idx(cx, cy));
+          sumX += cx;
+          sumY += cy;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = cx + dx;
+            const ny = cy + dy;
+            if (!this.inBounds(nx, ny)) continue;
+            const ni = this.idx(nx, ny);
+            const ndef = tileDef(this.tiles[ni]);
+            // A cable beside the water is what makes the water dangerous. It is not
+            // part of the puddle, so it is recorded rather than walked into.
+            if (ndef.cable) {
+              const c = this.tileCenter(nx, ny);
+              if (!cables.some((p) => p.x === c.x && p.y === c.y)) cables.push(c);
+              continue;
+            }
+            if (seen.has(ni) || !ndef.flooded) continue;
+            seen.add(ni);
+            queue.push([nx, ny]);
+          }
+        }
+        this.puddles.push({
+          tiles,
+          x: (sumX / tiles.length + 0.5) * TILE,
+          y: (sumY / tiles.length + 0.5) * TILE,
+          cables,
+        });
+      }
+    }
+  }
+
+  /**
+   * Bake the coolant fog. Each leaking pipe fills the open floor around it, falling off
+   * with distance and stopping at anything sight cannot pass — so fog fills a room
+   * rather than seeping through its walls. Done once at load because a split pipe does
+   * not move; if fog ever needs to spread, this is the one function that changes.
+   */
+  private bakeFog(): void {
+    this.fogMask.fill(0);
+    for (let ty = 0; ty < this.rows; ty++) {
+      for (let tx = 0; tx < this.cols; tx++) {
+        const range = tileDef(this.tiles[this.idx(tx, ty)]).coolant;
+        if (!range) continue;
+        const reach = Math.ceil(range / TILE);
+        const src = this.tileCenter(tx, ty);
+        for (let oy = -reach; oy <= reach; oy++) {
+          for (let ox = -reach; ox <= reach; ox++) {
+            const nx = tx + ox;
+            const ny = ty + oy;
+            if (!this.inBounds(nx, ny) || this.isOpaque(nx, ny)) continue;
+            const c = this.tileCenter(nx, ny);
+            const d = Math.hypot(c.x - src.x, c.y - src.y);
+            if (d > range) continue;
+            if (!this.clearLine(tx, ty, nx, ny)) continue;
+            // Thickest at the pipe, thinning to nothing at the edge of the cloud.
+            const thickness = Math.min(1, 1.15 * (1 - d / range));
+            const i = this.idx(nx, ny);
+            this.fogMask[i] = Math.max(this.fogMask[i], thickness);
+          }
+        }
+      }
+    }
+  }
+
+  /** Whether sight passes between two tile centres. A coarse Bresenham, for the bake. */
+  private clearLine(x0: number, y0: number, x1: number, y1: number): boolean {
+    let dx = Math.abs(x1 - x0);
+    let dy = -Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx + dy;
+    let cx = x0;
+    let cy = y0;
+    for (let guard = 0; guard < 512; guard++) {
+      if (cx === x1 && cy === y1) return true;
+      if ((cx !== x0 || cy !== y0) && this.isOpaque(cx, cy)) return false;
+      const e2 = 2 * err;
+      if (e2 >= dy) { err += dy; cx += sx; }
+      if (e2 <= dx) { err += dx; cy += sy; }
+    }
+    return false;
+  }
+
+  /** How thick the fog is at a world point, 0 (clear) to 1 (you can see your hands). */
+  fogAt(x: number, y: number): number {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    if (!this.inBounds(tx, ty)) return 0;
+    return this.fogMask[this.idx(tx, ty)];
+  }
+
+  /** The puddle covering this world point, or null. */
+  puddleAt(x: number, y: number): Puddle | null {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    if (!this.inBounds(tx, ty)) return null;
+    const i = this.idx(tx, ty);
+    return this.puddles.find((p) => p.tiles.includes(i)) ?? null;
+  }
+
+  /** Is this world point an open bulkhead a welding tool could seal? */
+  isBulkheadAt(x: number, y: number): boolean {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    return tileDef(this.tileAt(tx, ty)).bulkhead === true;
+  }
+
+  /** The vent grate over this world point, or null. */
+  ventAt(x: number, y: number): VentTile | null {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    return this.vents.find((v) => v.tx === tx && v.ty === ty) ?? null;
   }
 
   /**

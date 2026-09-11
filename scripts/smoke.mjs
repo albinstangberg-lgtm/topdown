@@ -1409,11 +1409,15 @@ const loudness = await zomPage.evaluate(async () => {
   const p = w.players[0];
   w.enemies.length = 0;
 
+  // Only what the PLAYER made. The dead make footfalls of their own now — that is what
+  // the sound ripples are for — and they are tagged `byDead` precisely so that "is the
+  // squad being quiet" has an answer that a shambler two rooms away cannot change.
   const listen = async (ms) => {
+    w.noise.clear();
     const kinds = new Set();
     const until = performance.now() + ms;
     while (performance.now() < until) {
-      for (const n of w.noise.items) if (n.active) kinds.add(n.kind);
+      for (const n of w.noise.items) if (n.active && !n.byDead) kinds.add(n.kind);
       await new Promise((r) => requestAnimationFrame(r));
     }
     return [...kinds];
@@ -1423,7 +1427,14 @@ const loudness = await zomPage.evaluate(async () => {
     window.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { code }));
 
   p.stamina = p.maxStamina; p.exhausted = false;
+  // Beam off for the footstep half of this: a lit flashlight in a dark room is its own
+  // deliberate lure on the same field (see the light-and-aggro checks), and it would
+  // otherwise drown out the thing under test, which is feet.
+  p.lightOn = false;
   press("KeyW", true);
+  // A beam tell emitted a frame ago outlives the switch by half a second, so give the
+  // field a moment to age out before listening.
+  await new Promise((r) => setTimeout(r, 600));
   const walking = await listen(700);
   press("ShiftLeft", true);
   const sprinting = await listen(700);
@@ -1435,11 +1446,20 @@ const loudness = await zomPage.evaluate(async () => {
   const shooting = await listen(400);
   press("Space", false);
 
-  return { walking, sprinting, shooting };
+  // And the other half: standing perfectly still in the dark with the beam ON is NOT
+  // silent. That is the whole light-and-aggro trade, and it belongs in the same check
+  // as "walking is silent" because the two rules only make sense against each other.
+  w.noise.clear();
+  p.lightOn = true;
+  p.lightTell = 0;
+  const standingLit = await listen(1500);
+
+  return { walking, sprinting, shooting, standingLit };
 });
-check("walking is silent, sprinting and shooting are not",
+check("walking in the dark is silent; sprinting, shooting and a lit beam are not",
   loudness.walking.length === 0 &&
-  loudness.sprinting.includes("step") && loudness.shooting.includes("shot"),
+  loudness.sprinting.includes("step") && loudness.shooting.includes("shot") &&
+  loudness.standingLit.includes("beam"),
   JSON.stringify(loudness));
 
 // --- the director ------------------------------------------------------------
@@ -2078,6 +2098,423 @@ check("the unseal deletes the door and the bridge becomes the exit",
   JSON.stringify(opened));
 
 check("the story arc raised no exceptions", arcErrors.length === 0, arcErrors.join(" | "));
+
+// --- the mutants, the utility slot and the ship's hazards ---------------------
+//
+// Driven on the "Deck Hazards" map, which exists to put one of everything within
+// walking distance. Two players, because half of what is checked here is a thing one
+// player cannot do for themselves — which is the point of all of it.
+
+const hazPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const hazErrors = [];
+hazPage.on("pageerror", (e) => hazErrors.push(String(e)));
+await hazPage.goto(`${URL}?camera=fixed&players=2&level=hazards`, { waitUntil: "load" });
+await hazPage.waitForTimeout(600);
+
+const deck = await hazPage.evaluate(() => {
+  const m = window.game.world.map;
+  let fog = 0;
+  for (let ty = 0; ty < m.rows; ty++) {
+    for (let tx = 0; tx < m.cols; tx++) if (m.fogAt(tx * 48 + 1, ty * 48 + 1) > 0.1) fog++;
+  }
+  return {
+    vents: m.vents.length,
+    puddles: m.puddles.length,
+    cables: m.puddles.reduce((n, q) => n + q.cables.length, 0),
+    bulkheads: m.bulkheads.length,
+    caches: m.devices.filter((d) => d.kind === "supply").length,
+    kinds: [...new Set(window.game.world.enemies.map((e) => e.kind))].sort(),
+    fog,
+  };
+});
+check("the hazard deck brings up vents, water, cables, bulkheads, caches and fog",
+  deck.vents >= 4 && deck.puddles >= 1 && deck.cables >= 1 && deck.bulkheads >= 3 &&
+  deck.caches === 4 && deck.fog > 5 &&
+  deck.kinds.includes("strangler") && deck.kinds.includes("stalker"),
+  JSON.stringify(deck));
+
+// A Strangler reaches out of the dark, and a held player cannot shoot their way out.
+const grabbed = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const s = w.enemies.find((e) => e.kind === "strangler");
+  p.x = s.x; p.y = s.y + 200; p.prevX = p.x; p.prevY = p.y; p.eyeX = p.x; p.eyeY = p.y;
+  p.health = 100;
+  s.attackCooldown = 0;
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5000 && !p.restraint) await new Promise((r) => setTimeout(r, 40));
+  if (!p.restraint) return { held: null };
+  const startDist = Math.hypot(p.x - s.x, p.y - s.y);
+  const startHealth = p.health;
+  await new Promise((r) => setTimeout(r, 700));
+  return {
+    held: p.restraint?.kind ?? null,
+    state: s.state,
+    dragged: Math.hypot(p.x - s.x, p.y - s.y) < startDist - 20,
+    hurt: p.health < startHealth,
+  };
+});
+check("a Strangler takes hold from across a dark room, and drags",
+  grabbed.held === "tendril" && grabbed.state === "reel" && grabbed.dragged && grabbed.hurt,
+  JSON.stringify(grabbed));
+
+const cut = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const s = w.enemies.find((e) => e.kind === "strangler");
+  if (!p.restraint) return { skipped: "not held" };
+  // A teammate's burst, across the middle of the rope — re-aimed between rounds,
+  // because the rope is being reeled in the whole time somebody is shooting at it.
+  const before = s.tendrilHealth;
+  for (let i = 0; i < 6 && p.restraint; i++) {
+    const mx = (p.x + s.x) / 2;
+    const my = (p.y + s.y) / 2;
+    w.bullets.spawn(mx - 70, my, 0, 900, 12, "player", w.players[1].id, 0.4, "#fff");
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  await new Promise((r) => setTimeout(r, 200));
+  return { before, after: s.tendrilHealth, free: p.restraint === null, stranglerAlive: s.health > 0 };
+});
+check("shooting the tendril cuts it loose without killing the thing holding it",
+  cut.free === true && cut.stranglerAlive === true && cut.after < cut.before,
+  JSON.stringify(cut));
+
+// A Stalker goes for whoever the squad is not looking at, and pins them.
+const pinned = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const victim = w.players[1];
+  const helper = w.players[0];
+  const st = w.enemies.find((e) => e.kind === "stalker");
+  const spot = w.map.mostOpenPoint();
+  // Put the victim alone, facing away — a player staring at one blinds it, which is
+  // its own rule. This is about the person who did not see it coming.
+  victim.x = spot.x; victim.y = spot.y; victim.prevX = victim.x; victim.prevY = victim.y;
+  victim.eyeX = victim.x; victim.eyeY = victim.y;
+  victim.facing = Math.PI; victim.health = 100; victim.adrenaline = 0; victim.restraint = null;
+  helper.x = spot.x + 1200; helper.y = spot.y; helper.prevX = helper.x; helper.prevY = helper.y;
+  let placed = false;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    let clear = true;
+    for (let d = 0; d <= 150; d += 12) {
+      if (w.map.isSolidAt(spot.x + dx * d, spot.y + dy * d)) { clear = false; break; }
+    }
+    if (!clear) continue;
+    st.x = spot.x + dx * 150; st.y = spot.y + dy * 150; placed = true; break;
+  }
+  if (!placed) return { placed };
+  st.prevX = st.x; st.prevY = st.y;
+  st.state = "stalk"; st.blind = 0; st.attackCooldown = 0; st.health = st.maxHealth;
+  const seen = new Set();
+  const t0 = Date.now();
+  while (Date.now() - t0 < 8000) {
+    seen.add(st.state);
+    if (victim.restraint?.kind === "pin") break;
+    await new Promise((r) => setTimeout(r, 30));
+  }
+  const health = victim.health;
+  await new Promise((r) => setTimeout(r, 400));
+  return {
+    placed, states: [...seen], pinned: victim.restraint?.kind ?? null,
+    chewing: victim.health < health,
+  };
+});
+check("a Stalker skitters, pounces and pins whoever is on their own",
+  pinned.placed === false ||
+  (pinned.pinned === "pin" && pinned.states.includes("windup") &&
+   pinned.states.includes("pounce") && pinned.chewing),
+  JSON.stringify(pinned));
+
+const shoveReady = await hazPage.evaluate(() => {
+  const w = window.game.world;
+  const victim = w.players[1];
+  const helper = w.players[0];
+  if (!victim.restraint) return false;
+  // The keyboard drives player 1 in this suite, so player 1 is the one who can help.
+  helper.x = victim.x + 30; helper.y = victim.y;
+  helper.prevX = helper.x; helper.prevY = helper.y;
+  helper.downed = false; helper.health = 100; helper.restraint = null;
+  return true;
+});
+await hazPage.keyboard.down("f");
+await hazPage.waitForTimeout(1600);
+const shovedOff = await hazPage.evaluate(() => {
+  const w = window.game.world;
+  const st = w.enemies.find((e) => e.kind === "stalker");
+  return { free: w.players[1].restraint === null, state: st?.state ?? "dead" };
+});
+await hazPage.keyboard.up("f");
+check("a teammate holding USE shoves it off",
+  shoveReady === false || (shovedOff.free && shovedOff.state !== "pin"),
+  JSON.stringify({ shoveReady, ...shovedOff }));
+
+const ducts = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const st = w.enemies.find((e) => e.kind === "stalker");
+  if (!st) return { skipped: "no stalker" };
+  const grate = w.map.vents[1];
+  // Hold it in the ceiling over one grate — the frame where it is shootable.
+  const hold = setInterval(() => {
+    st.state = "vent"; st.ventTimer = 5; st.stateTimer = 0;
+    st.ventFromX = grate.x; st.ventFromY = grate.y;
+    st.ventToX = grate.x; st.ventToY = grate.y;
+    st.x = grate.x; st.y = grate.y;
+  }, 8);
+  await new Promise((r) => setTimeout(r, 250));
+  const hidden = st.visible === false;
+  const scraping = w.noise.items.some((n) => n.active && n.kind === "duct");
+  const health = st.health;
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const side = dirs.find(([dx, dy]) => !w.map.isSolidAt(grate.x - dx * 50, grate.y - dy * 50)) ?? [1, 0];
+  w.bullets.spawn(grate.x - side[0] * 50, grate.y - side[1] * 50,
+    Math.atan2(side[1], side[0]), 900, 25, "player", 0, 0.2, "#fff");
+  await new Promise((r) => setTimeout(r, 250));
+  const hurt = st.health < health;
+  clearInterval(hold);
+  return { hidden, scraping, hurt };
+});
+check("the ducts hide it, the scraping places it, and a shot through the grate reaches it",
+  ducts.skipped !== undefined || (ducts.hidden && ducts.scraping && ducts.hurt),
+  JSON.stringify(ducts));
+
+// The utility slot: taken off a cache, and spent.
+const slot = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  p.restraint = null;
+  const cache = w.map.devices.find((d) => d.kind === "supply" && !d.spent);
+  p.x = cache.x; p.y = cache.y; p.prevX = p.x; p.prevY = p.y;
+  await new Promise((r) => setTimeout(r, 400));
+  return { item: p.item, charges: p.itemCharges };
+});
+check("a supply cache fills the utility slot", slot.item !== null && slot.charges >= 1,
+  JSON.stringify(slot));
+
+// Driven through the real key, not a hook: what is under test includes the binding.
+const itemResults = {};
+await hazPage.evaluate(() => {
+  const w = window.game.world;
+  const p = w.players[0];
+  p.item = "medkit"; p.itemCharges = 1; p.itemHold = 0; p.health = 20;
+  w.players[1].x = p.x + 900; w.players[1].y = p.y;
+});
+await hazPage.keyboard.down("g");
+await hazPage.waitForTimeout(3400);
+await hazPage.keyboard.up("g");
+Object.assign(itemResults, await hazPage.evaluate(() => ({
+  healed: Math.round(window.game.world.players[0].health) - 20,
+  medkitGone: window.game.world.players[0].item === null,
+})));
+
+await hazPage.evaluate(() => {
+  const p = window.game.world.players[0];
+  p.item = "flare"; p.itemCharges = 1; p.facing = 0;
+});
+await hazPage.keyboard.down("g");
+await hazPage.waitForTimeout(120);
+await hazPage.keyboard.up("g");
+await hazPage.waitForTimeout(150);
+Object.assign(itemResults, await hazPage.evaluate(() => {
+  const w = window.game.world;
+  const f = w.thrownFlares[0];
+  return { flare: w.thrownFlares.length, flareLights: f ? w.litHere(f.x + 20, f.y) : false };
+}));
+
+await hazPage.evaluate(() => {
+  const p = window.game.world.players[0];
+  p.item = "adrenaline"; p.itemCharges = 1;
+  p.restraint = { kind: "pin", byId: -99, time: 0, shove: 0, anchorX: p.x, anchorY: p.y, pull: 0 };
+});
+await hazPage.keyboard.down("g");
+await hazPage.waitForTimeout(150);
+await hazPage.keyboard.up("g");
+Object.assign(itemResults, await hazPage.evaluate(() => ({
+  tornFree: window.game.world.players[0].restraint === null &&
+    window.game.world.players[0].adrenaline > 0,
+})));
+
+const doorAt = await hazPage.evaluate(() => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const door = w.map.bulkheads.find((d) => !d.welded);
+  p.x = door.x; p.y = door.y; p.prevX = p.x; p.prevY = p.y;
+  p.item = "welder"; p.itemCharges = 3; p.itemHold = 0;
+  w.enemies.forEach((e) => { e.x = door.x + 900; e.y = door.y; });
+  return [door.tx, door.ty];
+});
+await hazPage.keyboard.down("g");
+await hazPage.waitForTimeout(1700);
+await hazPage.keyboard.up("g");
+Object.assign(itemResults, await hazPage.evaluate(([tx, ty]) => ({
+  welded: window.game.world.map.isSolid(tx, ty),
+  charges: window.game.world.players[0].itemCharges,
+  integrity: window.game.world.welds.get(`${tx},${ty}`) ?? 0,
+}), doorAt));
+const spent = itemResults;
+
+check("every item in the slot does its job",
+  spent.healed >= 60 && spent.medkitGone && spent.flare === 1 && spent.flareLights &&
+  spent.tornFree && spent.welded && spent.charges === 2 && spent.integrity > 0,
+  JSON.stringify(spent));
+
+const chewed = await hazPage.evaluate(async ([tx, ty]) => {
+  const w = window.game.world;
+  const c = w.map.tileCenter(tx, ty);
+  const e = w.enemies[0];
+  if (!e) return { skipped: "nothing left alive" };
+  w.welds.set(`${tx},${ty}`, 20);
+  const t0 = Date.now();
+  while (Date.now() - t0 < 5000 && w.map.isSolid(tx, ty)) {
+    e.x = c.x + 42; e.y = c.y; e.prevX = e.x; e.prevY = e.y;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  return { open: !w.map.isSolid(tx, ty) };
+}, doorAt);
+check("a weld buys time and nothing more — they chew through it",
+  chewed.skipped !== undefined || chewed.open === true, JSON.stringify(chewed));
+
+// The hazards.
+const hazards = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const puddle = w.map.puddles[0];
+  const cable = puddle.cables[0];
+  const e = w.enemies.find((x) => x.kind === "walker") ?? w.enemies[0];
+  if (!e) return { skipped: "nothing left alive to electrocute" };
+  // Anything still up in the ducts is immune to the floor, correctly — so put the test
+  // subject back in the room before standing it in the water.
+  e.state = "wander";
+  e.ventTimer = 0;
+  const tile = puddle.tiles[0];
+  const cx = (tile % w.map.cols + 0.5) * 48;
+  const cy = (Math.floor(tile / w.map.cols) + 0.5) * 48;
+  e.x = cx; e.y = cy; e.prevX = e.x; e.prevY = e.y; e.health = e.maxHealth = 40;
+  p.x = cx; p.y = cy + 110; p.prevX = p.x; p.prevY = p.y; p.eyeX = p.x; p.eyeY = p.y;
+  p.blinded = 0; p.health = 100; p.restraint = null;
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const side = dirs.find(([dx, dy]) => !w.map.isSolidAt(cable.x - dx * 60, cable.y - dy * 60)) ?? [1, 0];
+  w.bullets.spawn(cable.x - side[0] * 60, cable.y - side[1] * 60,
+    Math.atan2(side[1], side[0]), 900, 12, "player", 0, 0.3, "#fff");
+  await new Promise((r) => setTimeout(r, 300));
+  const live = w.liveWater.size > 0;
+  const blinded = p.blinded > 0;
+  const coneWashedOut = p.cone.range < 150;
+  await new Promise((r) => setTimeout(r, 1400));
+  const fried = !w.enemies.some((x) => x.id === e.id);
+  // And it will not fire again straight away.
+  w.liveWater.clear();
+  w.bullets.spawn(cable.x - side[0] * 60, cable.y - side[1] * 60,
+    Math.atan2(side[1], side[0]), 900, 12, "player", 0, 0.3, "#fff");
+  await new Promise((r) => setTimeout(r, 300));
+  return { live, blinded, coneWashedOut, fried, recharging: w.liveWater.size === 0 };
+});
+check("a cable puts a current through its puddle: fries the dead, blinds the living",
+  hazards.skipped !== undefined ||
+  (hazards.live && hazards.fried && hazards.blinded && hazards.coneWashedOut &&
+   hazards.recharging),
+  JSON.stringify(hazards));
+
+const fogged = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  let best = null;
+  let thickest = 0;
+  for (let ty = 0; ty < w.map.rows; ty++) {
+    for (let tx = 0; tx < w.map.cols; tx++) {
+      if (w.map.isSolid(tx, ty)) continue;
+      const f = w.map.fogAt(tx * 48 + 24, ty * 48 + 24);
+      if (f > thickest) { thickest = f; best = { x: tx * 48 + 24, y: ty * 48 + 24 }; }
+    }
+  }
+  p.x = best.x; p.y = best.y; p.prevX = p.x; p.prevY = p.y; p.eyeX = p.x; p.eyeY = p.y;
+  // Stop them dead: leftover velocity from an earlier check drifts the eye onto a
+  // thinner tile, and the cone is computed from where the EYE is, not the body.
+  p.vx = 0; p.vy = 0; p.lean = 0; p.restraint = null;
+  p.lightOn = true; p.blinded = 0;
+  await new Promise((r) => setTimeout(r, 250));
+  return {
+    thickness: Math.round(thickest * 100) / 100,
+    fogAtEye: Math.round(w.map.fogAt(p.eyeX, p.eyeY) * 100) / 100,
+    cone: Math.round(p.cone.range),
+    halo: Math.round(p.halo.range),
+    blind: w.squadCanSee(best.x + 60, best.y) === false,
+  };
+});
+check("coolant fog takes the cone, keeps the halo, and hides what is in it",
+  fogged.thickness > 0.5 && fogged.cone < 130 && fogged.halo > 20 && fogged.blind,
+  JSON.stringify(fogged));
+
+const footfalls = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const e = w.enemies.find((x) => x.kind === "walker");
+  w.noise.clear();
+  let ripple = false;
+  if (e) {
+    e.state = "wander";
+    const t0 = Date.now();
+    while (Date.now() - t0 < 3000 && !ripple) {
+      ripple = w.noise.items.some((n) => n.active && n.byDead && n.kind === "step");
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+  // The contract that stops a horde walking toward itself.
+  w.noise.clear();
+  w.noise.emit(100, 100, 400, "step", true);
+  const deadHeard = w.noise.loudestAt(120, 100, 1) !== null;
+  w.noise.clear();
+  w.noise.emit(100, 100, 400, "step", false);
+  const livingHeard = w.noise.loudestAt(120, 100, 1) !== null;
+  return { ripple: !e || ripple, deadHeard, livingHeard };
+});
+check("the dead make footfalls you can see and they cannot hear",
+  footfalls.ripple && footfalls.deadHeard === false && footfalls.livingHeard === true,
+  JSON.stringify(footfalls));
+
+const beam = await hazPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const sawBeam = async (ms) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      if (w.noise.items.some((n) => n.active && n.kind === "beam")) return true;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return false;
+  };
+  let dark = null;
+  for (let ty = 1; ty < w.map.rows - 1 && !dark; ty++) {
+    for (let tx = 1; tx < w.map.cols - 1; tx++) {
+      if (w.map.isSolid(tx, ty)) continue;
+      const c = { x: tx * 48 + 24, y: ty * 48 + 24 };
+      if (w.map.fogAt(c.x, c.y) > 0.05) continue;
+      if (!w.litHere(c.x, c.y)) { dark = c; break; }
+    }
+  }
+  const put = (at) => {
+    p.x = at.x; p.y = at.y; p.prevX = p.x; p.prevY = p.y; p.eyeX = p.x; p.eyeY = p.y;
+    p.lightTell = 0;
+  };
+  put(dark);
+  p.lightOn = true;
+  w.noise.clear();
+  const inTheDark = await sawBeam(1800);
+
+  p.lightOn = false;
+  w.noise.clear();
+  const withItOff = await sawBeam(1600);
+  const coneOff = p.cone.range;
+
+  put(w.map.lamps[0]);
+  p.lightOn = true;
+  await new Promise((r) => setTimeout(r, 60));
+  w.noise.clear();
+  const inALitRoom = await sawBeam(1800);
+  return { inTheDark, withItOff, coneOff, inALitRoom };
+});
+check("a beam in the dark calls things; off, or in a lit room, it costs nothing",
+  beam.inTheDark && !beam.withItOff && !beam.inALitRoom && beam.coneOff < 1,
+  JSON.stringify(beam));
+
+check("the hazard deck raised no exceptions", hazErrors.length === 0, hazErrors.join(" | "));
 
 await browser.close();
 

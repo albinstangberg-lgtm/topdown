@@ -42,6 +42,11 @@ export interface InputState {
   lean: number;
   interact: boolean;
   interactPressed: boolean;
+  /** Held. The utility slot: a medkit and a welder are dwells, the other two are taps. */
+  item: boolean;
+  itemPressed: boolean;
+  /** Tapped. Flashlight on or off — see the light-and-aggro rules in `sim/player.ts`. */
+  lightPressed: boolean;
   /** Used only by the join flow (START / Enter). */
   startPressed: boolean;
   /** Back out: leave the lobby, un-ready, close a menu. Escape or B. */
@@ -59,6 +64,9 @@ export function emptyInput(): InputState {
     sprint: false, divePressed: false, reloadPressed: false, lean: 0,
     interact: false,
     interactPressed: false,
+    item: false,
+    itemPressed: false,
+    lightPressed: false,
     startPressed: false,
     cancelPressed: false,
   };

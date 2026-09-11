@@ -180,6 +180,44 @@ one is a different *rule* rather than a different set of assets:
 None of it needed a scripting system. An act is a floor spec, a tile, and one branch in
 the objective chain.
 
+### 8c. The mutants — `src/sim/mutants.ts`
+
+Two creatures that do something a walker cannot: a ranged grab that drags a player away,
+and a leap that pins one to the floor. Both are one row in `ZOMBIE_DEFS` with an ability
+block on it (`tendril`, `pounce`), so the registry rule still holds — but their *state
+machines* live in their own file rather than as more branches inside `updateEnemy`,
+because an ambusher and a pouncer have nothing in common except a body and a health bar.
+
+The seam that makes this cheap: each entry point **takes only the frames its own
+behaviour owns and hands the rest back**. A Stalker with nobody isolated, or a Strangler
+that has been forced into a melee, falls through to the shared machine and behaves like
+the unusually unpleasant zombie it still is.
+
+One trap worth knowing about, because it cost a debugging session: `updateEnemy` runs
+`stateTimer` down *before* it delegates. An ability that decrements it again halves every
+windup it owns, and the symptom is not an error — it is a pounce that lands short.
+
+Both creatures grab players through one shared type, `Restraint` (`sim/entities.ts`).
+Everything downstream — the weapon, the movement, the HUD, what a teammate can do about
+it — reads the restraint rather than asking which creature caused it. The creature
+refreshes the anchor on it every step, which is what lets the player module be dragged
+toward something without ever learning what an `Enemy` is; the same seam that keeps melee
+and revives out of the player's business.
+
+### 8d. Sound you can see — `src/sim/noise.ts`, the ripple pass in the renderer
+
+The noise field was always the game's *attention* system rather than literally sound:
+"what pulls the dead toward a point". Two things now ride it that are not sounds at all,
+and both are honest about it — a lit flashlight in a dead-dark room (`beam`) and, going
+the other way, a shambler's footfall, which is a sound that the dead deliberately
+**cannot hear**.
+
+That last one is the load-bearing flag. `byDead` marks a noise as made by something
+already dead: `loudestAt` skips those, so a crowd never walks toward its own shuffling —
+but the renderer draws every one of them as an expanding ring. That is what makes a
+coolant bank playable rather than a blindfold: your eyes are gone, and the floor is
+still telling you where things are.
+
 ---
 
 ### 9. The level format — `src/world/level.ts`, `src/levels/`
@@ -354,6 +392,13 @@ In rough order of when it starts hurting:
 | World size, room count, enemies per player | `src/world/tilemap.ts`, `src/sim/world.ts` |
 | How long a terminal, a fusion socket and the bridge door take | `src/sim/devices.ts` (top of file) |
 | Melee reach, arc and damage | `WEAPONS` in `src/sim/entities.ts` |
+| Tendril range, reel speed and how much cuts it | `tendril` on the Strangler row in `src/sim/zombies.ts` |
+| Pounce range, the skitter, the blind and the shove | `pounce` on the Stalker row in `src/sim/zombies.ts` |
+| What each utility item is worth | `src/sim/items.ts` (top of file) |
+| Current damage, discharge length, cable recharge | `ARC_DAMAGE` / `ARC_TIME` / `CABLE_RECHARGE` in `src/sim/world.ts` |
+| How much a weld takes before it comes off | `WELD_INTEGRITY` in `src/sim/items.ts`, `WELD_CHEW` in `src/sim/world.ts` |
+| How thick coolant fog is, and how far it spreads | `coolant` on the tile, `bakeFog` in `src/world/tilemap.ts` |
+| How often a lit beam in the dark calls something | `LIGHT_TELL_INTERVAL` in `src/sim/player.ts` |
 | How long a swing takes, and when in it the bar connects | `SWING_TIME` / `MELEE_CONTACT` in `src/sim/player.ts` |
 | Stride length — how far the body walks per footfall | `STRIDE` in `src/sim/player.ts`, `ZOMBIE_STRIDE` in `src/sim/enemy.ts` |
 | Body proportions, and what each weapon looks like | `drawActor` / `WEAPON_ART` in `src/render/actorArt.ts` |

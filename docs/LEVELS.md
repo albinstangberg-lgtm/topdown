@@ -37,6 +37,36 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `26` | `u` | Fusion socket (primed) | no | no | a socket with its cell in, glowing. Rarely authored |
 | `27` | `B` | Blast door | yes | yes | dead without main power; with it, hold USE beside it and survive the 90s unseal |
 | `28` | `v` | Stairs down | no | no | the same rule as `^`, drawn and announced as a descent |
+| `29` | `n` | Ceiling vent | no | no | a duct grate overhead. Stalkers travel between vents; a shot through the grate is the only thing that reaches one up there |
+| `30` | `~` | Flooded floor | no | no | standing water. Touching tiles are **one puddle**, and a puddle is what a cable electrifies |
+| `31` | `=` | Exposed cable | yes | **no** | shoot it and every flooded tile it touches goes live for a few seconds. Blinds anyone near it, including you |
+| `32` | `%` | Coolant leak | yes | **no** | a split pipe. Fills the room with fog that kills vision cones dead — in there you navigate by sound ripples |
+| `33` | `H` | Bulkhead | no | no | an open doorway. Stand in it with a welding tool and hold the item button to seal it |
+| `34` | `h` | Bulkhead (welded) | yes | yes | sealed shut, and taking hits from whatever is on the far side. Rarely authored by hand |
+| `35` | `+` | Medkit cache | no | no | walk onto it to take a medkit |
+| `36` | `j` | Adrenaline cache | no | no | walk onto it to take an adrenaline shot |
+| `37` | `k` | Flare cache | no | no | walk onto it to take a hand flare |
+| `38` | `y` | Welder cache | no | no | walk onto it to take a welding tool and its three charges |
+| `39` | `x` | Supply cache (empty) | no | no | a cache somebody already emptied |
+| `40` | `S` | Strangler | no | no | one Strangler, holding this exact spot. Put it in a dark corner with a long line down a corridor |
+| `41` | `s` | Stalker | no | no | one Stalker. It takes the ducts and comes back at whoever is on their own |
+
+### Authoring the new tiles
+
+Three of them only work in combination, so they are worth a note:
+
+- **A cable does nothing without water.** `=` electrifies the puddle it *touches*
+  orthogonally, and touching `~` tiles are gathered into one puddle. Draw the pool, then
+  put the cable on a wall beside it.
+- **Vents want at least two.** A Stalker travels between grates, so a floor with one
+  vent has nowhere to go. Put them in open floor, not embedded in a wall run — the tile
+  is ordinary floor with a grate above it, and a walled-in grate is unreachable.
+- **Bulkheads are for retreating through.** A `H` is only worth authoring where the
+  squad will want to shut a door behind them: a corridor between a fight and a place to
+  patch up.
+
+`S` and `s` are the only way either mutant reaches a floor by hand — neither is ever
+drawn at random, because both of them are about the place they are standing.
 
 `solid`, `opaque` and `blocksShots` are separate flags on purpose, because they are three
 different questions: **can a body pass, can a look pass, can a bullet pass.** Collision
