@@ -52,7 +52,7 @@ export interface TileDef {
    * the reactor, `locker` hands out the next weapon up. See `src/sim/devices.ts` — the
    * tile says what kind of thing it is, the device system says what using one does.
    */
-  device?: "terminal" | "socket" | "locker" | "supply";
+  device?: "terminal" | "socket" | "locker" | "supply" | "lever";
   /** True once a device has been used. Kept as a separate tile so a reload remembers. */
   spent?: boolean;
   /** What a device turns into once it has been used. */
@@ -95,12 +95,50 @@ export interface TileDef {
    */
   supply?: "medkit" | "adrenaline" | "flare" | "welder";
   /**
+   * A rack of something heavy. Walk onto it with empty hands and you pick one up in
+   * both of them — see `CarryKind` in `src/sim/entities.ts`. Racks are not spent: the
+   * scarcity of a fusion core is the walk back across the deck with it, not the supply.
+   */
+  dispense?: "core" | "battery";
+  /** Stand on it to put charge back into your suit. */
+  charger?: boolean;
+  /**
+   * An emergency depressurisation lever. Pull it and the room blows down through the
+   * nearest breach for a few seconds — see the breach system in `src/sim/world.ts`.
+   * Once per lever: it becomes `usedInto` afterwards, like every other spent device.
+   */
+  breachLever?: boolean;
+  /**
+   * Where the air goes. A hole in the hull: the thing a depressurisation drags
+   * everything toward, and the thing that throws a walker off the ship entirely.
+   */
+  breach?: boolean;
+  /**
+   * Floor inside an airlock chamber. Touching airlock tiles gather into one chamber
+   * the way flooded tiles gather into one puddle, and the chamber is what cycles.
+   */
+  airlock?: boolean;
+  /**
+   * An airlock door. Open as authored; the chamber makes it solid for the length of a
+   * cycle and opens it again afterwards, by swapping to `shutInto` and back.
+   */
+  airlockDoor?: boolean;
+  /** What an airlock door becomes while it is shut, and what that becomes when it opens. */
+  shutInto?: number;
+  opensInto?: number;
+  /**
+   * Something bolted down hard enough to hold on to. Standing on one anchors you
+   * against a depressurisation — which is what makes a breach a plan rather than a
+   * coin flip, because the railings are drawn on the map and you can see them.
+   */
+  railing?: boolean;
+  /**
    * Which creature an enemy spawn puts down. Keys come from `ZOMBIE_DEFS` in
    * `src/sim/zombies.ts`; left out, a spawn tile places the default walker. This is
    * how the two mutants get onto a floor at all — neither is ever drawn at random,
    * because both of them are about the place they are standing.
    */
-  enemyKind?: "walker" | "strangler" | "stalker";
+  enemyKind?: "walker" | "strangler" | "stalker" | "lurker";
   /** Editor palette colour. */
   color: string;
   /** Single character for the compact text form of a level. */
@@ -237,6 +275,53 @@ export const TILE_DEFS: readonly TileDef[] = [
     device: "supply", spent: true,
     color: "#5a5f68", glyph: "x", hint: "a cache somebody has already emptied" },
 
+  // Heavy things, and the wall socket that pays for the rest of it ----------------
+
+  { id: 42, key: "coreRack", name: "Fusion core rack", solid: false, opaque: false,
+    dispense: "core", light: 70,
+    color: "#8bff7a", glyph: "O",
+    hint: "a rack of fusion cores. Walk on with empty hands to shoulder one — both hands, so your rifle goes away" },
+  { id: 43, key: "batteryRack", name: "Battery rack", solid: false, opaque: false,
+    dispense: "battery", light: 70,
+    color: "#7ad2ff", glyph: "b",
+    hint: "spare suit cells. Carry one to a teammate and hold USE beside them to swap it in" },
+  { id: 44, key: "charger", name: "Charging point", solid: false, opaque: false,
+    charger: true, light: 110,
+    color: "#5affd2", glyph: "e",
+    hint: "a live socket. Stand on it to put charge back into your suit — slowly, and in the open" },
+
+  // Vacuum. A lever, a hole, and something to hold on to -------------------------
+
+  { id: 45, key: "breachLever", name: "Breach lever", solid: false, opaque: false,
+    device: "lever", breachLever: true, usedInto: 46, light: 80,
+    color: "#ffd257", glyph: "Y",
+    hint: "emergency depressurisation. Hold USE to blow the room down through the nearest hull breach — once" },
+  { id: 46, key: "breachLeverSpent", name: "Breach lever (pulled)", solid: false, opaque: false,
+    device: "lever", spent: true,
+    color: "#6b5a3f", glyph: "\\",
+    hint: "a lever somebody has already pulled" },
+  { id: 47, key: "breach", name: "Hull breach", solid: false, opaque: false, breach: true,
+    color: "#1a1f3a", glyph: "@",
+    hint: "a hole in the hull, plated over. A lever opens it: everything loose in the room goes that way" },
+  { id: 48, key: "railing", name: "Railing", solid: false, opaque: false, railing: true,
+    color: "#9aa3ae", glyph: "|",
+    hint: "bolted down. Stand on it and a depressurisation cannot drag you off your feet" },
+
+  // Airlocks. Two at a time, five seconds, and the rest of you waiting outside --------
+
+  { id: 49, key: "airlock", name: "Airlock chamber", solid: false, opaque: false,
+    airlock: true,
+    color: "#6f8fae", glyph: ":",
+    hint: "chamber floor. Two people fit; a third stays outside while it equalizes. Wall it with airlock doors" },
+  { id: 50, key: "airlockDoor", name: "Airlock door", solid: false, opaque: false,
+    airlockDoor: true, shutInto: 51, prop: "door",
+    color: "#8fb6d8", glyph: "]",
+    hint: "an airlock door, open. The chamber shuts both of them for the length of a cycle" },
+  { id: 51, key: "airlockShut", name: "Airlock door (shut)", solid: true, opaque: true,
+    airlockDoor: true, opensInto: 50, prop: "door",
+    color: "#41627f", glyph: "[",
+    hint: "an airlock door mid-cycle. Rarely authored — the chamber makes these" },
+
   // Placed mutants. Neither is ever drawn at random — see `weight: 0` in ZOMBIE_DEFS.
   { id: 40, key: "stranglerSpawn", name: "Strangler", solid: false, opaque: false,
     spawn: "enemy", enemyKind: "strangler",
@@ -246,6 +331,10 @@ export const TILE_DEFS: readonly TileDef[] = [
     spawn: "enemy", enemyKind: "stalker",
     color: "#5c6f7a", glyph: "s",
     hint: "one Stalker. It will take the ducts and come back at whoever is on their own" },
+  { id: 52, key: "lurkerSpawn", name: "Ceiling Lurker", solid: false, opaque: false,
+    spawn: "enemy", enemyKind: "lurker",
+    color: "#6a5c7a", glyph: "l",
+    hint: "one Ceiling Lurker. Needs vents to live in — it drops on anyone who stands still under an unlit grate" },
 ];
 
 export const TILE_FLOOR = 0;

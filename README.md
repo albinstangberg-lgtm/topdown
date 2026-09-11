@@ -40,6 +40,9 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Revive teammate | Hold `F` | Hold Y |
 | Shove a mutant off a pinned teammate | Hold `F` | Hold Y |
 | Use a device (terminal, fusion socket, blast door) | Hold `F` | Hold Y |
+| Pull an emergency breach lever | Hold `F` | Hold Y |
+| Shoulder / put down a fusion core or a power cell | Tap `F` | Tap Y |
+| Seat a carried core, or hand a cell to a teammate | Tap `F` | Tap Y |
 | Use the utility item (hold for a medkit or a welder) | `G` | R3 |
 | Flashlight on / off | `T` | LB + RB together |
 | Join the game | `ENTER` in the lobby | `START` in the lobby |
@@ -222,7 +225,7 @@ changes. `F1` draws each zombie's state and sense arc while you tune.
 
 ## The mutants
 
-Two things on the ship are not walkers, and each one exists to break a habit the squad
+Three things on the ship are not walkers, and each one exists to break a habit the squad
 has already formed by the time they meet it.
 
 ### The Strangler — the dark is not empty
@@ -264,6 +267,23 @@ different from a co-op one.)
   The shadow the renderer draws over the grate IS the hitbox — "shoot the shadow" is the
   whole rule.
 
+### The Ceiling Lurker — the floor is not the only direction
+
+It never walks the deck at all. It moves from ceiling vent to ceiling vent, out of reach
+and out of every cone in the game, and it waits.
+
+- **It drops on people who stand still.** Stop under an unlit grate for a second and a
+  half and it comes down on top of you and pins you, the same restraint a Stalker's
+  pounce makes — so the counter is the same too: a teammate shoving it off.
+- **Lit floor denies it outright.** A flare, a glowstick or a working lamp under the
+  grate and it will not commit, however long you stand there. A grate with a light under
+  it is a safe tile, which is what turns "where are the vents" into map knowledge.
+- **You cannot touch it up there.** Nothing on the floor reaches into a duct — but the
+  shadow the renderer paints over the grate it is crossing is its hitbox, and a round
+  through the grate does hit it. Shoot the shadow.
+- It is **silent** apart from the scraping, so what you get is a sound above your head
+  and about a second to not be under it.
+
 ## The utility slot
 
 One primary weapon, one utility item. That cap is the design: with two slots every
@@ -276,6 +296,52 @@ from **supply caches** you walk onto, the same way a weapon locker works.
 | **Adrenaline** | Instant. Faster, reloads in 60% of the time for 8 seconds — and it **tears you out of a grip**, which is the only way to free yourself. |
 | **Flare** | Throw it. Twenty seconds of a lit room, for everybody, with nobody holding a flashlight — which is the counter to both mutants at once. |
 | **Welding tool** | Three charges. Stand in a bulkhead and hold `G` to seal it. It buys time, not safety: whatever is on the far side chews through it. |
+
+## One battery for the whole suit
+
+Guns on this ship do not eat boxes of brass. **The flashlight, the scope, the welding
+tool and the magazine all draw off the same cell**, and that single shared number turns
+every question the deck asks into a question about power:
+
+- Walking with the beam on spends the magazine you have not fired yet — a fresh cell is
+  about four and a half minutes of pure light and nothing else.
+- **Reloading** is what actually costs: the charge goes in at the end of the reload, so a
+  nearly-flat suit hands you a short magazine and you know exactly why.
+- **Firing dips the light.** For two seconds after a shot the cone drops toward half
+  range as power diverts to the weapon — which makes "you shoot, I'll hold the light"
+  a real conversation, held in the dark, at the worst moment.
+- Flat suit? The **crowbar and the halo are free**. A dead cell is dark and dangerous,
+  never a soft lock: you still have a body, a bar of metal and enough glow to see your
+  own boots. The ammo line in the HUD goes amber and tells you the primary is stowed.
+- **Charging points** (`e`) put it back slowly while you stand on one — in the open,
+  which is the price. **Battery racks** (`b`) give you a spare cell to carry.
+
+## Heavy things are carried, not looted
+
+Fusion cores and spare power cells are **two-handed objects**, not pickups. Shoulder one
+and your primary goes away for as long as you are holding it: you have a sidearm and a
+crowbar, and somebody else is doing the shooting. Walking a core across a dark deck is a
+job for the squad, not for the person holding it.
+
+- Tap `F` on a **core rack** (`O`) or a **battery rack** (`b`) to shoulder one; tap `F`
+  again to put it down where you stand, and it stays there for whoever comes back.
+- A core seats into a **fusion socket** with one press. On a deck that has a core rack on
+  it the sockets will not take a dwell at all — you fetch, or the reactor stays dark.
+- A cell goes to **whoever needs it more**: hold one next to a teammate with less charge
+  than you and pressing `F` hands it over rather than topping up your own suit.
+
+## Vacuum, and the doors that split you up
+
+- **Hull breach levers** (`Y`). Ten seconds of open hull, and every one of them costs
+  something. Walkers go out of the hole and off the ship — that is what you paid for.
+  But the squad's **oxygen is shared** and it goes with them, the depressurisation is the
+  loudest thing on the deck, and anybody not standing on a **railing** (`|`) is being
+  dragged toward the same hole as the horde. Run out of air in there and it starts
+  hurting everybody. The lever works once.
+- **Airlocks** (`:`). A chamber holds **two people**. Step in with a teammate and the
+  doors shut behind you for a five-second equalise — so a squad of four arrives on the
+  far side as two pairs, and for those five seconds nobody can help anybody. The HUD
+  counts it down for whoever is inside. One person alone never triggers it.
 
 ## Hazards, and the light you choose to carry
 
@@ -293,6 +359,11 @@ from **supply caches** you walk onto, the same way a weapon locker works.
   Shamblers now make footfalls for exactly this reason — the horde cannot hear its own
   (or it would spend the mission walking toward itself), but you can. In a fog bank the
   ripples are the game.
+- **Shadow lines.** Visibility is per light source and it is solved with real geometry,
+  so anything standing behind cover *relative to the light that would show it* is
+  invisible, at three feet as surely as at thirty. A torch pointed straight down a room
+  full of crates leaves dead angles in it, and the counter is not a brighter torch — it
+  is a second person lighting the same room from somewhere else.
 - **Light-dependent aggro.** The flashlight is a **toggle** (`T`). In a room with its
   emergency lights still on, having it on costs you nothing. In a dead-dark one it is a
   lure on the same field a gunshot rides, every 0.9 seconds — so the dark is safer, and
@@ -333,20 +404,27 @@ stays cleared, and two zombies in a doorway is a fight rather than a formality. 
 orders say report to the security hub — and the first gun on the ship is in its armoury,
 along with a log that starts to explain what happened.
 
-**Act II — the wall.** Up through the residential deck to the bridge, where the blast
-door is dead: *no main power, manual bypass at the reactor.* Walking up to it is loud.
-The director drops whatever it was doing, opens every door on the deck at once, and from
-here the ship is hunting you rather than merely containing you.
+**Act II — the wall.** Up through the residential deck — which has a Ceiling Lurker in
+its ducts — to the bridge approach, where the blast door is dead: *no main power, manual
+bypass at the reactor.* The only way on is down, and the way down is a **two-person
+airlock**, so a full squad arrives at the approach as two pairs five seconds apart.
+Walking up to the door is loud: the director drops whatever it was doing, opens every
+door on the deck at once, and from here the ship is hunting you rather than merely
+containing you.
 
 **Act III — the descent.** Down into engineering and the reactor, the two darkest decks
-in the game. Three fusion sockets, each one seven seconds of holding a button while
-somebody else watches the door — and seating the first cell starts a siege that runs
-until the last one is in. When it is, **main power comes back**: the lights slam on
-across every deck, the alarm starts, and the director is handed everything left.
+in the game — and the two where the suit battery starts to bite, which is why both have a
+charging point on them. The reactor wants three cells, and they are on a **rack**: each
+one is carried across the deck in both hands with your primary stowed, so every trip is
+a job for the squad rather than for the person holding it. Seating the first core starts
+a siege that runs until the last one is in. When it is, **main power comes back**: the
+lights slam on across every deck, the alarm starts, and the director is handed everything
+left.
 
 **Act IV — the run back.** The same maps, walked the other way with the alarm blazing:
-cabins sealed that were open, vents broken through that were not, and a director leaning
-more than twice as hard as it did on the way down. At the top, the blast door finally
+cabins sealed that were open, vents broken through that were not, a **hull breach** in
+engineering with a lever and a line of railings for whoever is brave enough to use it,
+and a director leaning more than twice as hard as it did on the way down. At the top, the blast door finally
 answers — a ninety-second unseal you have to survive on the catwalk before the bridge is
 yours.
 
@@ -391,10 +469,21 @@ rising **screech on the windup**, because a telegraph you can only see is no use
 the thing is behind you; a whoosh on the leap; the two-tone whoop of a car alarm; and
 the ordinary business of hits, reloads, downs and revives.
 
-Sounds are placed against the **nearest** player and panned against that player's own
-view — split screen has no single pair of ears, and averaging four positions puts every
-sound in the middle of nowhere. Anything past about 23 tiles is inaudible. Voices are
-capped per frame, because a panic horde will happily ask for forty.
+Sounds are placed against the player with the best **line** to them — nearest only
+breaks the tie — and panned against that player's own view: split screen has no single
+pair of ears, and averaging four positions puts every sound in the middle of nowhere.
+Anything past about 23 tiles is inaudible. Voices are capped per frame, because a panic
+horde will happily ask for forty.
+
+**Geometry is part of the mix.** Every positional sound is occluded against the walls
+between it and whoever is listening, using the same raycast the vision cones use. One
+partition puts a low-pass on it and takes most of the level; two metal bulkheads and it
+is simply not played. That last part is the mechanic rather than the mix: behind a wall
+the audibility threshold *rises*, so a footstep next door is not quiet — it is gone,
+while a shotgun through the same wall still lands as a thump. It is the difference
+between "I can just about hear something shuffling in there", which gives every ambush
+away, and a silent room. Step round the corner and the same sound snaps to crisp, and
+that transition is worth more than the information the muffled version was leaking.
 
 The bus never throws: no audio device, a context that will not start, a headless test
 runner — all of them get a bus that counts what it was asked to play and makes no sound.
@@ -462,8 +551,10 @@ plus scenery (`10` car, `11` window, `12` reception desk, `13` cubicle, `14` fla
 `15` lift door, `16` blocked floor, `17` broken glass, `18` broken window), the
 objective devices (`21` terminal, `23` weapon locker, `25` fusion socket, `27` blast
 door, `28` stairs down), the ship's hazards (`29` ceiling vent, `30` flooded floor,
-`31` exposed cable, `32` coolant leak, `33` bulkhead) and what you find and fight in
-them (`35`–`38` supply caches, `40` Strangler, `41` Stalker):
+`31` exposed cable, `32` coolant leak, `33` bulkhead), its systems (`42` core rack,
+`43` battery rack, `44` charging point, `45` breach lever, `47` hull breach,
+`48` railing, `49`–`51` airlock chamber and doors) and what you find and fight in
+them (`35`–`38` supply caches, `40` Strangler, `41` Stalker, `52` Ceiling Lurker):
 
 ```
 [1,1,1,1,1,1,1],
@@ -493,10 +584,13 @@ Adding a new tile type is one row in `TILE_DEFS` — the collision, vision, rend
 editor palette and importer all read from that one table.
 [docs/LEVELS.md](docs/LEVELS.md) has the full reference.
 
-Three built-in maps ship with the game, cycled with `[` and `]`: **Corridors**,
-**Tile Showcase**, and **Deck Hazards** — the last of which exists to put one of
-everything added since (both mutants, all four items, water and a cable, a coolant
-bank, vents and bulkheads) within walking distance of the spawn.
+Four built-in maps ship with the game, cycled with `[` and `]`: **Corridors**,
+**Tile Showcase**, **Deck Hazards** and **Deck Systems**. The last two are showcase
+decks — one of everything, within walking distance of the spawn. Hazards has both
+ambush mutants, all four items, water and a cable, a coolant bank, vents and bulkheads;
+Systems has the power budget (a charging point, both racks, three sockets that will only
+take a carried core), an airlock, a hull breach with its lever and railings, and a
+Ceiling Lurker in the vents.
 
 ## Current state
 
@@ -506,15 +600,18 @@ adaptive shadow edges, per-viewport cameras and split-screen layout, the lightin
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
 hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director,
 a flare-and-helicopter extraction finale, top-down character art with a solved arm rig,
-distance-driven gaits and per-weapon silhouettes, two ambush mutants (a ranged grab and
-a pin) with vent travel, a one-slot utility inventory, electrified water, coolant fog,
-a toggleable flashlight that trades sight for attention, a sound-ripple visualiser,
+distance-driven gaits and per-weapon silhouettes, three ambush mutants (a ranged grab,
+a pin and a ceiling drop) with vent travel, a one-slot utility inventory, electrified
+water, coolant fog, a toggleable flashlight that trades sight for attention, one shared
+suit battery behind the guns, lights and tools, two-handed carries that stow the primary,
+hull breaches with shared oxygen and railings, two-person airlocks,
+audio occluded against the geometry, a sound-ripple visualiser,
 melee weapons, hold-to-use devices
 (terminals, weapon lockers, fusion sockets and a blast door) driving a multi-act
 objective chain, per-floor difficulty pressure, HUD per viewport,
 a debug overlay, synthesised positional sound, the level format with a tolerant
 importer, and a map editor.
 
-Not built yet: music, menus and a controller-assignment screen, per-player loadouts and
-an ammo economy, saves, and netcode. The architecture doc says where each of
+Not built yet: music, menus and a controller-assignment screen, per-player loadouts,
+saves, and netcode. The architecture doc says where each of
 those attaches.

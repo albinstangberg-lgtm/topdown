@@ -22,6 +22,8 @@ export type NoiseKind =
   | "beam"
   /** A Stalker moving through the ducts overhead. The only warning you get. */
   | "duct"
+  /** A deck going to vacuum. The loudest thing on the ship bar the helicopter. */
+  | "breach"
   /** A discharge through standing water. Loud, and it carries. */
   | "arc";
 
@@ -135,6 +137,11 @@ export const NOISE = {
   duct: 330,
   /** Current going through standing water. */
   arc: 780,
+  /**
+   * A depressurisation. Enormous — and that is the price of the lever: you cleared the
+   * room and told the rest of the deck exactly where you are standing.
+   */
+  breach: 1500,
   /**
    * A shambling footfall. Nothing hunts it — it is tagged as made by the dead — but it
    * is what you read the room by when coolant fog has taken your eyes.

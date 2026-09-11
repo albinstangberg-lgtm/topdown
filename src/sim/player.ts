@@ -5,6 +5,10 @@ import type { TileMap } from "../world/tilemap";
 import { makeLight } from "../vision/visibility";
 import { WEAPONS, type Player, type WeaponDef } from "./entities";
 import { ADRENALINE_RELOAD, ADRENALINE_SPEED, itemDef, spendCharge } from "./items";
+import {
+  activeWeapon, BATTERY_MAX, defaultSidearm, DIP_FLOOR, DIP_TIME, drawMagazine,
+  LIGHT_DRAIN,
+} from "./power";
 import type { BulletPool, ParticlePool } from "./pools";
 import { NOISE, type NoiseField } from "./noise";
 
@@ -155,6 +159,12 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     itemCharges: 0,
     itemHold: 0,
     adrenaline: 0,
+    battery: BATTERY_MAX,
+    maxBattery: BATTERY_MAX,
+    lightDip: 0,
+    carrying: null,
+    carryCharge: 0,
+    sidearm: defaultSidearm(),
     // You wake up with it on. Turning it off is the decision, not turning it on.
     lightOn: true,
     lightTell: 0,
@@ -227,6 +237,7 @@ export function updatePlayer(
   p.recoil = Math.max(0, p.recoil - dt * RECOIL_DECAY);
   p.blinded = Math.max(0, p.blinded - dt);
   p.adrenaline = Math.max(0, p.adrenaline - dt);
+  p.lightDip = Math.max(0, p.lightDip - dt);
 
   if (p.downed) {
     p.weaponUp = 0;
@@ -292,7 +303,10 @@ export function updatePlayer(
   advanceGait(p);
 
   // --- Shoot ---------------------------------------------------------------
-  const w = p.weapon;
+  // The weapon in your hands is not always the one in your loadout: both hands full,
+  // an empty magazine with a flat suit behind it, and you are swinging. One function
+  // decides that, so the HUD and the renderer cannot disagree with the trigger.
+  const w = activeWeapon(p);
   p.fireCooldown = Math.max(0, p.fireCooldown - dt);
   const wantsToFire = w.auto ? input.fire : input.firePressed;
 
@@ -302,7 +316,9 @@ export function updatePlayer(
     if (wantsToFire && p.fireCooldown <= 0 && p.weaponUp >= 1 && canFire(p)) fire(p, deps);
   } else if (p.reloadTimer > 0) {
     p.reloadTimer -= dt;
-    if (p.reloadTimer <= 0) p.ammo = w.magazine;
+    // The charge goes in at the END of the reload, so a magazine you have already
+    // loaded keeps working on a suit that has since gone flat.
+    if (p.reloadTimer <= 0) drawMagazine(p);
   } else if (p.ammo <= 0) {
     // Running dry still reloads on its own — the manual button is for topping up
     // before you need it, which is the decision worth having.
@@ -361,7 +377,13 @@ function updateLean(p: Player, input: InputState, deps: PlayerDeps, dt: number):
   p.eyeY = p.y;
 }
 
+/**
+ * Start a reload — but only if there is charge behind it. A suit with nothing left does
+ * not go through the motions and hand you an empty magazine; the gun simply stays dead
+ * and `activeWeapon` puts the crowbar in your hands instead.
+ */
 function startReload(p: Player, deps: PlayerDeps): void {
+  if ((p.weapon.draw ?? 0) > 0 && p.battery < (p.weapon.draw ?? 0)) return;
   p.reloadTimer = p.weapon.reloadTime * (p.adrenaline > 0 ? ADRENALINE_RELOAD : 1);
   deps.particles.burst(p.x, p.y, 4, 55, "#8d8677", 0.45, 2);
 }
@@ -425,6 +447,13 @@ function updateLight(p: Player, input: InputState, deps: PlayerDeps, dt: number)
     p.lightTell = 0;
   }
   if (!p.lightOn) return;
+  // The beam is the steadiest drain in the game, and the easiest one to forget about.
+  p.battery = Math.max(0, p.battery - LIGHT_DRAIN * dt);
+  if (p.battery <= 0) {
+    // Out. The switch stays where you left it; there is simply nothing behind it.
+    p.lightOn = false;
+    return;
+  }
   p.lightTell -= dt;
   if (p.lightTell > 0) return;
   p.lightTell = LIGHT_TELL_INTERVAL;
@@ -542,12 +571,14 @@ function updateStanceAndStamina(
 }
 
 function fire(p: Player, deps: PlayerDeps): void {
-  const w = p.weapon;
+  const w = activeWeapon(p);
   p.fireCooldown = 1 / w.fireRate;
   if (w.melee) { startSwing(p); return; }
   p.ammo--;
   p.muzzleFlash = 1;
   p.recoil = 1;
+  // Power diverts to the weapon, and for two seconds you can see noticeably less.
+  p.lightDip = DIP_TIME;
 
   // Shots leave from the eye, so a lean actually shoots round the corner.
   const muzzle = p.radius + 10;
@@ -577,7 +608,7 @@ function fire(p: Player, deps: PlayerDeps): void {
  * alternates so a flurry of swings is a flurry and not the same frame on a loop.
  */
 function startSwing(p: Player): void {
-  p.swingTimer = p.swingTime = Math.min(SWING_TIME, 1 / p.weapon.fireRate);
+  p.swingTimer = p.swingTime = Math.min(SWING_TIME, 1 / activeWeapon(p).fireRate);
   p.swingSide = -p.swingSide;
   p.swingHit = false;
 }
@@ -611,7 +642,7 @@ function advanceGait(p: Player): void {
  * cleared quietly stays cleared, and the first gun is a decision as much as a reward.
  */
 function resolveSwing(p: Player, deps: PlayerDeps): void {
-  const w = p.weapon;
+  const w = activeWeapon(p);
   const reach = w.reach ?? 40;
   const arc = w.arc ?? 0.9;
   const tipX = p.eyeX + Math.cos(p.facing) * (p.radius + reach * 0.6);
@@ -714,10 +745,12 @@ export function damagePlayer(p: Player, amount: number): void {
  */
 export function syncLights(p: Player, fog = 0): void {
   const flash = 1 - Math.min(1, p.blinded / ARC_BLIND_TIME);
+  // Firing diverts power: the cone drops toward DIP_FLOOR and recovers over DIP_TIME.
+  const dip = 1 - (1 - DIP_FLOOR) * Math.min(1, p.lightDip / DIP_TIME);
   // Fog eats the beam rather than blocking it: the light is still on, it just has
   // nothing to land on but the cloud in front of your face.
   const murk = 1 - Math.min(1, fog * 1.15);
-  const power = p.lightOn ? flash * murk : 0;
+  const power = p.lightOn && p.battery > 0 ? flash * murk * dip : 0;
 
   p.cone.x = p.eyeX;
   p.cone.y = p.eyeY;
@@ -730,7 +763,8 @@ export function syncLights(p: Player, fog = 0): void {
   p.halo.y = p.eyeY;
   p.halo.facing = 0;
   // The halo is what is left when everything else is gone: your own feet, and not much
-  // more. It dims in fog and in a flash, but it never goes out.
+  // more. It dims in fog and in a flash, and it is deliberately NOT on the battery —
+  // running a suit flat has to be a scene you can play out of, not a black screen.
   p.halo.range = HALO_RANGE * (0.45 + 0.55 * Math.min(flash, murk));
 }
 

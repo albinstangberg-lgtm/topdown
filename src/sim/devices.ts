@@ -1,4 +1,4 @@
-import { TILE, type TileMap } from "../world/tilemap";
+import { TILE, type DeviceTile, type TileMap } from "../world/tilemap";
 import { tileDef } from "../world/tiles";
 import type { InputState } from "../input/types";
 import type { Player } from "./entities";
@@ -9,6 +9,15 @@ import type { Player } from "./entities";
  * says what a medkit is worth. Three systems, one fact each.
  */
 export type SupplyItem = "medkit" | "adrenaline" | "flare" | "welder";
+
+/**
+ * Does this floor make the squad fetch fusion cores by hand? True when somebody
+ * authored a rack of them on it. One question, asked in one place, so "why will this
+ * socket not take my dwell" always has the same answer.
+ */
+function coresRequired(map: TileMap): boolean {
+  return map.racks.some((r) => r.gives === "core");
+}
 
 /**
  * CORE 18 — Devices, and the objective chain they make.
@@ -38,6 +47,12 @@ export type SupplyItem = "medkit" | "adrenaline" | "flare" | "welder";
 
 /** Seconds of holding USE to read a log off a terminal. */
 export const TERMINAL_TIME = 1.4;
+/**
+ * Seconds of holding USE to pull a breach lever. Deliberately long enough to be a
+ * decision and short enough to be a panic button: you will be doing this with something
+ * coming at you, and the hold is the only part of it you control.
+ */
+export const LEVER_TIME = 1.1;
 /** Seconds of holding USE to seat one fusion cell. Long enough to need cover. */
 export const SOCKET_TIME = 7;
 /** Seconds of holding USE beside the blast door before the unseal actually starts. */
@@ -61,8 +76,14 @@ export type DeviceOutcome =
   | { kind: "locker"; player: Player; x: number; y: number }
   /** A supply cache was emptied. `item` is the key of what was in it. */
   | { kind: "supply"; player: Player; item: SupplyItem; x: number; y: number }
-  /** One fusion cell is in. `primed` of `total` sockets are now live. */
-  | { kind: "socket"; player: Player; x: number; y: number; primed: number; total: number }
+  /** Somebody pulled an emergency depressurisation lever. */
+  | { kind: "lever"; player: Player; x: number; y: number }
+  /**
+   * One fusion cell is in. `primed` of `total` sockets are now live. `player` is null
+   * when a core was carried in rather than dwelled in — the reactor does not care who,
+   * and on a fetch floor the person who seated it is rarely the person who fetched it.
+   */
+  | { kind: "socket"; player: Player | null; x: number; y: number; primed: number; total: number }
   /** The first cell went in — the reactor floor is now a fight, not a search. */
   | { kind: "reactorStarted"; x: number; y: number }
   /** Every socket is primed. Main power is back. */
@@ -174,7 +195,21 @@ export class DeviceSystem {
           continue;
         }
 
-        const time = device.kind === "terminal" ? TERMINAL_TIME : SOCKET_TIME;
+        // A floor with a rack of fusion cores on it makes you FETCH one: the socket
+        // will not take a dwell, only a core carried over in both hands. A floor with
+        // no rack keeps the original behaviour, so this is additive rather than a
+        // rewrite of every reactor deck ever authored.
+        if (device.kind === "socket" && coresRequired(deps.map)) {
+          this.prompts.set(p.id, {
+            text: p.carrying === "core" ? "PRESS USE — SEAT THE CORE" : "FETCH A FUSION CORE",
+            progress: -1,
+          });
+          continue;
+        }
+
+        const time = device.kind === "terminal" ? TERMINAL_TIME
+          : device.kind === "lever" ? LEVER_TIME
+          : SOCKET_TIME;
         if (using) {
           held.add(index);
           this.progress[index] = Math.min(1, (this.progress[index] ?? 0) + dt / time);
@@ -182,26 +217,21 @@ export class DeviceSystem {
         this.prompts.set(p.id, {
           text: device.kind === "terminal"
             ? (using ? "READING…" : "HOLD USE — READ LOG")
-            : (using ? "SEATING CELL…" : "HOLD USE — SEAT FUSION CELL"),
+            : device.kind === "lever"
+              ? (using ? "VENTING…" : "HOLD USE — BLOW THE ROOM")
+              : (using ? "SEATING CELL…" : "HOLD USE — SEAT FUSION CELL"),
           progress: this.progress[index] ?? 0,
         });
 
         if ((this.progress[index] ?? 0) >= 1) {
-          const wasFirstCell = device.kind === "socket" &&
-            this.sockets(deps.map).primed === 0;
-          this.spend(deps.map, index);
           if (device.kind === "terminal") {
+            this.spend(deps.map, index);
             out.push({ kind: "log", index: this.logIndexOf(deps.map, index), x: device.x, y: device.y });
+          } else if (device.kind === "lever") {
+            this.spend(deps.map, index);
+            out.push({ kind: "lever", player: p, x: device.x, y: device.y });
           } else {
-            if (wasFirstCell) out.push({ kind: "reactorStarted", x: device.x, y: device.y });
-            const count = this.sockets(deps.map);
-            out.push({
-              kind: "socket", player: p, x: device.x, y: device.y,
-              primed: count.primed, total: count.total,
-            });
-            if (count.total > 0 && count.primed >= count.total) {
-              out.push({ kind: "power", x: device.x, y: device.y });
-            }
+            out.push(...this.primeSocket(deps.map, index, p));
           }
         }
         continue;
@@ -297,6 +327,36 @@ export class DeviceSystem {
   }
 
   /** Mark a device used, in the grid, which is what makes it survive a reload. */
+  /**
+   * Seat a fusion core carried in by hand. Same consequences as finishing the dwell —
+   * which is the point of routing both through `primeSocket`: "the reactor has another
+   * cell in it" has to mean one thing, however the cell got there.
+   */
+  seatCore(map: TileMap, device: DeviceTile): DeviceOutcome[] {
+    const index = map.devices.indexOf(device);
+    if (index < 0 || device.kind !== "socket") return [];
+    return this.primeSocket(map, index, null);
+  }
+
+  /** One socket going live, and everything that follows from it. */
+  private primeSocket(map: TileMap, index: number, player: Player | null): DeviceOutcome[] {
+    const device = map.devices[index];
+    if (!device) return [];
+    const out: DeviceOutcome[] = [];
+    const wasFirstCell = this.sockets(map).primed === 0;
+    this.spend(map, index);
+    if (wasFirstCell) out.push({ kind: "reactorStarted", x: device.x, y: device.y });
+    const count = this.sockets(map);
+    out.push({
+      kind: "socket", player, x: device.x, y: device.y,
+      primed: count.primed, total: count.total,
+    });
+    if (count.total > 0 && count.primed >= count.total) {
+      out.push({ kind: "power", x: device.x, y: device.y });
+    }
+    return out;
+  }
+
   private spend(map: TileMap, index: number): void {
     const device = map.devices[index];
     if (!device) return;

@@ -28,7 +28,7 @@ export interface CarBody {
  * reading log 2 after terminal 1 has been read. See `src/sim/devices.ts`.
  */
 export interface DeviceTile {
-  kind: "terminal" | "socket" | "locker" | "supply";
+  kind: "terminal" | "socket" | "locker" | "supply" | "lever";
   /** Tile coordinates, so using one can rewrite the grid. */
   tx: number;
   ty: number;
@@ -59,6 +59,21 @@ export interface Puddle {
 export interface EnemySpawn extends Point {
   /** Undefined means the default walker — see `DEFAULT_ZOMBIE`. */
   kind?: string;
+}
+
+/**
+ * One airlock: the chamber tiles, the doors that seal it, and where it is. Gathered the
+ * same way a car or a puddle is, because an airlock is a room rather than a tile — and
+ * the cycle has to apply to the whole of it at once.
+ */
+export interface Airlock {
+  /** Chamber tile indices. */
+  tiles: number[];
+  /** The door tiles that shut it, on every side. */
+  doors: { tx: number; ty: number }[];
+  /** Centre, in world units. */
+  x: number;
+  y: number;
 }
 
 /** A ceiling vent: a grate over ordinary floor, and one node of the duct network. */
@@ -116,6 +131,16 @@ export class TileMap {
   readonly cars: CarBody[] = [];
   /** Ceiling vents. The duct network a Stalker travels is simply all of these. */
   readonly vents: VentTile[] = [];
+  /** Racks of heavy things. Unlimited: the cost of a core is carrying it, not finding it. */
+  readonly racks: { tx: number; ty: number; x: number; y: number; gives: "core" | "battery" }[] = [];
+  /** Charging points. Stand on one to refill the suit. */
+  readonly chargers: { tx: number; ty: number; x: number; y: number }[] = [];
+  /** Hull breaches: where the air goes when somebody pulls a lever. */
+  readonly breaches: Point[] = [];
+  /** Airlock chambers, with the doors that seal each one. See `Airlock`. */
+  readonly airlocks: Airlock[] = [];
+  /** Railings. Where you can stand and not be dragged into one. */
+  readonly railings: Point[] = [];
   /** Bodies of standing water, gathered from touching flooded tiles. See `Puddle`. */
   readonly puddles: Puddle[] = [];
   /** Open bulkheads a welding tool can seal, and welded ones waiting to be chewed open. */
@@ -167,6 +192,11 @@ export class TileMap {
     this.lamps.length = 0;
     this.cars.length = 0;
     this.vents.length = 0;
+    this.racks.length = 0;
+    this.chargers.length = 0;
+    this.breaches.length = 0;
+    this.railings.length = 0;
+    this.airlocks.length = 0;
     this.puddles.length = 0;
     this.bulkheads.length = 0;
     this.walkable = [];
@@ -214,11 +244,16 @@ export class TileMap {
         }
         if (def.light) this.lamps.push({ x: c.x, y: c.y, range: def.light });
         if (def.vent) this.vents.push({ tx, ty, x: c.x, y: c.y });
+        if (def.dispense) this.racks.push({ tx, ty, x: c.x, y: c.y, gives: def.dispense });
+        if (def.charger) this.chargers.push({ tx, ty, x: c.x, y: c.y });
+        if (def.breach) this.breaches.push(c);
+        if (def.railing) this.railings.push(c);
         if (def.bulkhead) this.bulkheads.push({ tx, ty, x: c.x, y: c.y, welded: false });
       }
     }
     this.buildCars();
     this.buildPuddles();
+    this.buildAirlocks();
     this.bakeFog();
   }
 
@@ -271,6 +306,65 @@ export class TileMap {
         });
       }
     }
+  }
+
+  /**
+   * Gather touching airlock tiles into chambers, and note the doors around each one.
+   *
+   * A door is collected whether it is currently open or shut, which is what lets a
+   * chamber mid-cycle still find its own doors to open again — the alternative is a
+   * cycle that loses track of the doors it closed and seals the deck permanently.
+   */
+  private buildAirlocks(): void {
+    const seen = new Set<number>();
+    for (let ty = 0; ty < this.rows; ty++) {
+      for (let tx = 0; tx < this.cols; tx++) {
+        const i = this.idx(tx, ty);
+        if (seen.has(i) || !tileDef(this.tiles[i]).airlock) continue;
+
+        const tiles: number[] = [];
+        const doors: { tx: number; ty: number }[] = [];
+        const queue: [number, number][] = [[tx, ty]];
+        seen.add(i);
+        let sumX = 0;
+        let sumY = 0;
+        while (queue.length > 0) {
+          const [cx, cy] = queue.pop()!;
+          tiles.push(this.idx(cx, cy));
+          sumX += cx;
+          sumY += cy;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = cx + dx;
+            const ny = cy + dy;
+            if (!this.inBounds(nx, ny)) continue;
+            const ni = this.idx(nx, ny);
+            const ndef = tileDef(this.tiles[ni]);
+            if (ndef.airlockDoor) {
+              if (!doors.some((d) => d.tx === nx && d.ty === ny)) doors.push({ tx: nx, ty: ny });
+              continue;
+            }
+            if (seen.has(ni) || !ndef.airlock) continue;
+            seen.add(ni);
+            queue.push([nx, ny]);
+          }
+        }
+        this.airlocks.push({
+          tiles,
+          doors,
+          x: (sumX / tiles.length + 0.5) * TILE,
+          y: (sumY / tiles.length + 0.5) * TILE,
+        });
+      }
+    }
+  }
+
+  /** The airlock chamber this world point is inside, or null. */
+  airlockAt(x: number, y: number): Airlock | null {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    if (!this.inBounds(tx, ty)) return null;
+    const i = this.idx(tx, ty);
+    return this.airlocks.find((a) => a.tiles.includes(i)) ?? null;
   }
 
   /**
@@ -340,6 +434,27 @@ export class TileMap {
     if (!this.inBounds(tx, ty)) return null;
     const i = this.idx(tx, ty);
     return this.puddles.find((p) => p.tiles.includes(i)) ?? null;
+  }
+
+  /** The rack under this world point, if any. */
+  rackAt(x: number, y: number): { gives: "core" | "battery" } | null {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    return this.racks.find((r) => r.tx === tx && r.ty === ty) ?? null;
+  }
+
+  /** Is this world point somewhere you can hold on? */
+  isRailingAt(x: number, y: number): boolean {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    return tileDef(this.tileAt(tx, ty)).railing === true;
+  }
+
+  /** Is this world point a live charging socket? */
+  isChargerAt(x: number, y: number): boolean {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    return this.chargers.some((c) => c.tx === tx && c.ty === ty);
   }
 
   /** Is this world point an open bulkhead a welding tool could seal? */

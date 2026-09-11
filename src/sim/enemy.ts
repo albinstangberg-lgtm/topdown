@@ -9,7 +9,7 @@ import type { NoiseField } from "./noise";
 import type { FlowField } from "../world/flow";
 import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
 import { NOISE } from "./noise";
-import { updateStalker, updateStrangler } from "./mutants";
+import { updateLurker, updateStalker, updateStrangler } from "./mutants";
 
 /**
  * CORE 7 — Zombies and perception.
@@ -73,7 +73,7 @@ export function createEnemy(
     facing: randRange(0, TAU),
     health: def.health,
     maxHealth: def.health,
-    state: def.lurks ? "lurk" : hunting ? "hunt" : "wander",
+    state: def.drop ? "roost" : def.lurks ? "lurk" : hunting ? "hunt" : "wander",
     hunting,
     stateTimer: 0,
     lungeDirX: 0,
@@ -118,6 +118,12 @@ export interface EnemyDeps {
   lureFlow: FlowField;
   /** How a bite reaches a player. The world owns damage, so it can raise the event. */
   hurtPlayer: (p: Player, amount: number) => void;
+  /**
+   * Is this point lit by something that stays put — a lamp, a burning flare? Not a
+   * flashlight. The Ceiling Lurker reads it to decide whether the floor under its grate
+   * is a place it is willing to come down, which is the whole of its counterplay.
+   */
+  lit: (x: number, y: number) => boolean;
 }
 
 export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
@@ -137,6 +143,10 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
   if (def.tendril && updateStrangler(e, deps, dt)) {
     advanceGait(e);
     shambleNoise(e, deps);
+    return;
+  }
+  if (def.drop && updateLurker(e, deps, dt)) {
+    advanceGait(e);
     return;
   }
   if (def.pounce && updateStalker(e, deps, dt)) {

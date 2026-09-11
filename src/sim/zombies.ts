@@ -75,6 +75,29 @@ export interface PounceDef {
   shove: number;
 }
 
+/**
+ * The Ceiling Lurker's drop. It never touches the floor: it lives in the duct network
+ * and it is waiting for somebody to stand still underneath an unlit grate.
+ *
+ * The counterplay is the one thing the squad can do without shooting: put light on the
+ * floor. A flare under a grate, or a room with its lamps still on, and the thing above
+ * it will not come down there at all.
+ */
+export interface DropDef {
+  /** Seconds a player has to loiter under a grate before it commits. */
+  dwell: number;
+  /** How close to under the grate counts as underneath it. */
+  radius: number;
+  /** Damage the landing itself does. */
+  damage: number;
+  /** Damage per second while it is on top of somebody afterwards. */
+  chew: number;
+  /** Seconds of a teammate shoving before it comes off. */
+  shove: number;
+  /** Seconds between grate-to-grate moves while it hunts for somebody standing still. */
+  hop: number;
+}
+
 export interface ZombieDef {
   key: string;
   name: string;
@@ -101,6 +124,8 @@ export interface ZombieDef {
   tendril?: TendrilDef;
   /** A leap that pins. A kind with this is a Stalker — see `PounceDef`. */
   pounce?: PounceDef;
+  /** A drop out of the ceiling. A kind with this is a Ceiling Lurker — see `DropDef`. */
+  drop?: DropDef;
   /** Makes no footfall a player can hear. Stalkers are silent until they are not. */
   silent?: boolean;
   /** Holds a post instead of wandering. What makes a Strangler an ambush. */
@@ -192,6 +217,30 @@ export const ZOMBIE_DEFS: readonly ZombieDef[] = [
     vents: true,
     huntsStragglers: true,
     color: "#5c6f7a",
+    weight: 0,
+  },
+  {
+    key: "lurker",
+    name: "Ceiling Lurker",
+    // Squishier than a Stalker, because it gets a free hit and you get a free shot at
+    // it while it is picking itself up off you.
+    health: 55,
+    radius: 13,
+    // Never used: it does not walk. Both speeds are here because the table is one shape.
+    wanderSpeed: 40,
+    chaseSpeed: 90,
+    senseHalf: 2.2,
+    senseRange: 420,
+    hearing: 1.4,
+    vulnerable: 2.2,
+    lunge: {
+      range: 0, windup: 0.35, speed: 400, duration: 0.2,
+      recover: 1.1, damage: 10, cooldown: 3,
+    },
+    drop: { dwell: 1.6, radius: 40, damage: 20, chew: 11, shove: 0.75, hop: 1.4 },
+    silent: true,
+    vents: true,
+    color: "#6a5c7a",
     weight: 0,
   },
 ];

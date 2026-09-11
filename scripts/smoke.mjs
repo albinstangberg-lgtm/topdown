@@ -2037,21 +2037,38 @@ check("the reactor deck is dark and wants three cells",
   arc.blackout === true && arc.objective === "reactor" && arc.cells.total === 3,
   JSON.stringify(arc));
 
-await arcPage.keyboard.down("KeyF");
+// The deck has a core rack on it, so the sockets no longer take a dwell: each cell is
+// shouldered at the rack and carried over in both hands. Three trips, one press each
+// end, which is also the check that the campaign floor is completable that way.
+const tapUse = async () => {
+  await arcPage.keyboard.down("KeyF");
+  await arcPage.waitForTimeout(120);
+  await arcPage.keyboard.up("KeyF");
+  await arcPage.waitForTimeout(120);
+};
+let carried = 0;
 for (let cell = 0; cell < 3; cell++) {
-  for (let t = 0; t < 17; t++) {
-    await arcPage.evaluate(() => {
-      const w = window.game.world;
-      const socket = w.map.devices.find((d) => d.kind === "socket" && !d.spent);
-      const p = w.players[0];
-      if (socket) { p.x = socket.x; p.y = socket.y; p.prevX = p.x; p.prevY = p.y; }
-      p.health = p.maxHealth; p.downed = false; p.bleedout = 0;
-      w.enemies.length = 0;
-    });
-    await arcPage.waitForTimeout(500);
-  }
+  await arcPage.evaluate(() => {
+    const w = window.game.world;
+    const rack = w.map.racks.find((r) => r.gives === "core");
+    const p = w.players[0];
+    p.x = rack.x; p.y = rack.y; p.prevX = p.x; p.prevY = p.y;
+    p.health = p.maxHealth; p.downed = false; p.bleedout = 0;
+    w.enemies.length = 0;
+  });
+  await tapUse();
+  if (await arcPage.evaluate(() => window.game.world.players[0].carrying === "core")) carried++;
+  await arcPage.evaluate(() => {
+    const w = window.game.world;
+    const socket = w.map.devices.find((d) => d.kind === "socket" && !d.spent);
+    const p = w.players[0];
+    if (socket) { p.x = socket.x; p.y = socket.y; p.prevX = p.x; p.prevY = p.y; }
+    w.enemies.length = 0;
+  });
+  await tapUse();
 }
-await arcPage.keyboard.up("KeyF");
+check("the reactor deck's cores are carried in by hand, one trip each",
+  carried === 3, JSON.stringify({ carried }));
 arc = await arcState();
 check("every cell seated brings main power back and frees the stairs",
   arc.power === true && arc.cells.primed === 3 && arc.objective === "stairs",
@@ -2515,6 +2532,390 @@ check("a beam in the dark calls things; off, or in a lit room, it costs nothing"
   JSON.stringify(beam));
 
 check("the hazard deck raised no exceptions", hazErrors.length === 0, hazErrors.join(" | "));
+
+// --- the ship's systems: power, vacuum, airlocks and the ceiling -------------
+//
+// Driven on the "Deck Systems" map, which is to this round what the hazard deck was
+// to the last one: one of everything, within walking distance. THREE players, because
+// an airlock that holds two and a cell you hand to somebody else are both about the
+// person who did not fit.
+
+const sysPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const sysErrors = [];
+sysPage.on("pageerror", (e) => sysErrors.push(String(e)));
+await sysPage.goto(`${URL}?camera=fixed&players=3&level=systems`, { waitUntil: "load" });
+await sysPage.waitForTimeout(700);
+
+const systems = await sysPage.evaluate(() => {
+  const m = window.game.world.map;
+  return {
+    chargers: m.chargers.length,
+    racks: m.racks.map((r) => r.gives).sort(),
+    breaches: m.breaches.length,
+    railings: m.railings.length,
+    levers: m.devices.filter((d) => d.kind === "lever").length,
+    airlocks: m.airlocks.map((a) => ({ seats: a.tiles.length, doors: a.doors.length })),
+    kinds: [...new Set(window.game.world.enemies.map((e) => e.kind))].sort(),
+  };
+});
+check("the systems deck brings up chargers, racks, a breach, railings and an airlock",
+  systems.chargers >= 1 && systems.breaches === 1 && systems.railings >= 3 &&
+  systems.levers === 1 && systems.airlocks.length === 1 &&
+  systems.airlocks[0].seats === 2 && systems.airlocks[0].doors === 2 &&
+  systems.racks.join() === "battery,core" && systems.kinds.includes("lurker"),
+  JSON.stringify(systems));
+
+/*
+ * Audio occlusion. Two sources the same distance from one listener, one of them behind
+ * a bulkhead: the wall must not merely make it quieter, it has to take a footstep off
+ * the table entirely while leaving a gunshot audible. That gap is the mechanic — it is
+ * what makes stepping round a corner tell you something.
+ */
+const occluded = await sysPage.evaluate(async () => {
+  const g = window.game, w = g.world;
+  const C = (t) => t * 48 + 24;
+  const park = (pl, tx, ty) => {
+    pl.x = C(tx); pl.y = C(ty); pl.prevX = pl.x; pl.prevY = pl.y;
+    pl.eyeX = pl.x; pl.eyeY = pl.y; pl.downed = false;
+  };
+  // One ear in the corridor; the others parked out of earshot so they cannot be the
+  // better listener, which is what `at()` would otherwise pick them for.
+  w.players.forEach((p, i) => { if (i > 0) park(p, 32, 19); });
+  park(w.players[0], 12, 8);
+  await new Promise((r) => setTimeout(r, 140));
+  const clear = g.audio.placementFor(C(16), C(8));   // four tiles, open corridor
+  const wall = g.audio.placementFor(C(8), C(8));     // four tiles, one wall between
+  return {
+    clearOcc: clear.occlusion, wallOcc: wall.occlusion,
+    sameDistance: Math.abs(clear.gain - wall.gain) < 1e-6,
+    stepClear: g.audio.bus.audible(clear, 0.28),
+    stepWall: g.audio.bus.audible(wall, 0.28),
+    shotWall: g.audio.bus.audible(wall, 0.9),
+  };
+});
+check("a wall mutes a footstep and muffles a gunshot; the same step in the open is loud",
+  occluded.clearOcc === 0 && occluded.wallOcc > 0.5 && occluded.sameDistance &&
+  occluded.stepClear === true && occluded.stepWall === false && occluded.shotWall === true,
+  JSON.stringify(occluded));
+
+/*
+ * Shadow lines. Cover between a light and a body hides the body however close it is,
+ * which is what makes "dead angles" a thing you have to cross-light rather than a thing
+ * a brighter torch solves. Driven with a thrown flare rather than a flashlight cone: a
+ * flare is a light at a FIXED point, so the geometry is the only variable in the test.
+ */
+const shadow = await sysPage.evaluate(async () => {
+  const w = window.game.world;
+  const C = (t) => t * 48 + 24;
+  const e = w.enemies.find((z) => z.kind === "walker");
+  if (!e) return { noEnemy: true };
+  const p = w.players[0];
+  // Everybody's lights off and out of the way: the flare is the only thing that can
+  // reveal anything, so nothing else can decide the answer.
+  w.players.forEach((q, i) => {
+    q.x = C(30 + i); q.y = C(19); q.prevX = q.x; q.prevY = q.y; q.eyeX = q.x; q.eyeY = q.y;
+    q.lightOn = false;
+  });
+  const ex = C(12), ey = C(9);
+  const hold = setInterval(() => {
+    e.x = ex; e.y = ey; e.vx = 0; e.vy = 0; e.state = "idle"; e.stateTimer = 99;
+  }, 8);
+  p.item = "flare"; p.itemCharges = 1; p.itemHold = 0;
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyG" }));
+  await new Promise((r) => setTimeout(r, 900));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyG" }));
+  const flare = w.thrownFlares[0];
+  if (!flare) { clearInterval(hold); return { noFlare: true }; }
+
+  const lightFrom = async (tx, ty) => {
+    flare.x = C(tx); flare.y = C(ty); flare.life = 60;
+    await new Promise((r) => setTimeout(r, 260));
+    let drawn = 0;
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 30));
+      if (e.visible) drawn++;
+    }
+    return {
+      seen: w.squadCanSee(ex, ey), drawn,
+      dist: Math.round(Math.hypot(ex - flare.x, ey - flare.y)),
+    };
+  };
+  // Two tiles away with the airlock's wall stub in between, then two tiles away with
+  // nothing in between. Same light, same distance, opposite answers.
+  const behindCover = await lightFrom(14, 11);
+  const inTheOpen = await lightFrom(14, 9);
+  clearInterval(hold);
+  return { behindCover, inTheOpen };
+});
+check("a shadow line hides it at three feet, and a second angle finds it",
+  shadow.behindCover.seen === false && shadow.behindCover.drawn === 0 &&
+  shadow.behindCover.dist < 160 && shadow.inTheOpen.seen === true &&
+  shadow.inTheOpen.drawn > 4,
+  JSON.stringify(shadow));
+
+/*
+ * The suit battery. Shooting dips the cone, reloading is what actually spends the cell,
+ * a flat suit falls back to the crowbar rather than leaving you with nothing, and a
+ * charging point buys it back.
+ */
+const power = await sysPage.evaluate(async () => {
+  const w = window.game.world, p = w.players[0];
+  const C = (t) => t * 48 + 24;
+  const park = (pl, x, y) => { pl.x = x; pl.y = y; pl.prevX = x; pl.prevY = y; pl.eyeX = x; pl.eyeY = y; };
+  w.players.forEach((q, i) => { if (i > 0) { park(q, C(32), C(19)); q.lightOn = false; } });
+  park(p, C(16), C(3));
+  p.battery = 100; p.lightOn = true; p.ammo = p.weapon.magazine; p.lightDip = 0;
+  w.enemies.length = 0;
+  const shoot = async (ms) => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }));
+    await new Promise((r) => setTimeout(r, ms));
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space" }));
+    await new Promise((r) => setTimeout(r, 80));
+  };
+  await new Promise((r) => setTimeout(r, 140));
+  const steady = p.cone.range;
+  await shoot(150);
+  const dipped = p.cone.range;
+  // An empty magazine reloads itself, and the charge goes in at the end of it.
+  p.ammo = 0;
+  await shoot(400);
+  await new Promise((r) => setTimeout(r, 1400));
+  const afterReload = p.battery;
+
+  // Flat suit, empty magazine: the crowbar, and it still swings.
+  p.battery = 0; p.ammo = 0; p.reloadTimer = 0; p.swingTimer = 0; p.fireCooldown = 0;
+  await new Promise((r) => setTimeout(r, 140));
+  await shoot(200);
+  const swung = p.swingTimer > 0 || p.swingHit === true;
+
+  const charger = w.map.chargers[0];
+  park(p, charger.x, charger.y);
+  p.lightOn = false;
+  await new Promise((r) => setTimeout(r, 900));
+  return {
+    steady: Math.round(steady), dipped: Math.round(dipped),
+    afterReload: Math.round(afterReload), swung, dryAmmo: p.ammo === 0,
+    charged: Math.round(p.battery),
+  };
+});
+check("firing dips the cone, reloading spends the cell, and a flat suit still swings",
+  power.dipped < power.steady * 0.8 && power.afterReload < 100 && power.swung === true &&
+  power.dryAmmo === true && power.charged > 5,
+  JSON.stringify(power));
+
+/*
+ * Heavy things are carried, not looted. Both hands on a fusion core means the rifle is
+ * away and somebody else is doing the shooting — and a spare cell in your arms goes to
+ * whichever teammate is closer to flat than you are.
+ */
+const inHand = await sysPage.evaluate(async () => {
+  const w = window.game.world, p = w.players[0], q = w.players[1];
+  const park = (pl, x, y) => { pl.x = x; pl.y = y; pl.prevX = x; pl.prevY = y; pl.eyeX = x; pl.eyeY = y; };
+  const tapUse = async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF" }));
+    await new Promise((r) => setTimeout(r, 120));
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyF" }));
+    await new Promise((r) => setTimeout(r, 120));
+  };
+  const shoot = async (ms) => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }));
+    await new Promise((r) => setTimeout(r, ms));
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space" }));
+    await new Promise((r) => setTimeout(r, 80));
+  };
+  w.enemies.length = 0;
+  w.dropped.length = 0;
+  const coreRack = w.map.racks.find((r) => r.gives === "core");
+  const cellRack = w.map.racks.find((r) => r.gives === "battery");
+
+  park(p, coreRack.x, coreRack.y);
+  p.battery = 100; p.ammo = p.weapon.magazine; p.fireCooldown = 0; p.swingTimer = 0;
+  await tapUse();
+  const shouldered = p.carrying;
+  const ammoBefore = p.ammo;
+  await shoot(220);
+  const fired = p.ammo < ammoBefore;
+  const swungInstead = p.swingTimer > 0 || p.swingHit === true;
+
+  // Put it on the deck, and pick it back up off the deck.
+  park(p, coreRack.x + 200, coreRack.y);
+  await tapUse();
+  const onTheDeck = w.dropped.length;
+  await tapUse();
+  const backUp = p.carrying;
+
+  p.carrying = null; p.carryCharge = 0;
+  park(p, cellRack.x, cellRack.y);
+  await tapUse();
+  const cell = p.carrying;
+  park(q, cellRack.x + 40, cellRack.y);
+  q.battery = 5; p.battery = 90;
+  await tapUse();
+  return {
+    shouldered, fired, swungInstead, onTheDeck, backUp, cell,
+    teammate: Math.round(q.battery), handsFree: p.carrying === null,
+  };
+});
+check("a core takes both hands, goes down where you leave it, and a cell goes to whoever needs it",
+  inHand.shouldered === "core" && inHand.fired === false && inHand.swungInstead === true &&
+  inHand.onTheDeck === 1 && inHand.backUp === "core" && inHand.cell === "battery" &&
+  inHand.teammate > 50 && inHand.handsFree === true,
+  JSON.stringify(inHand));
+
+/*
+ * The hull breach. Ten seconds that cost the squad its air, take the horde out of the
+ * room, and drag anybody not holding a railing toward the same hole.
+ */
+// Both of the next two want the deck as authored — the tests above emptied it of
+// zombies, and a hull breach with nothing to blow out of it proves nothing.
+await sysPage.evaluate(() => window.game.world.restart());
+await sysPage.waitForTimeout(400);
+
+const vacuum = await sysPage.evaluate(async () => {
+  const w = window.game.world;
+  const [p, q, r] = w.players;
+  const park = (pl, x, y) => {
+    pl.x = x; pl.y = y; pl.prevX = x; pl.prevY = y; pl.eyeX = x; pl.eyeY = y;
+    pl.downed = false; pl.health = pl.maxHealth;
+  };
+  const lever = w.map.devices.find((d) => d.kind === "lever");
+  const hole = w.map.breaches[0];
+  const rail = w.map.railings[0];
+  const walker = w.enemies.find((z) => z.kind === "walker");
+  park(q, rail.x, rail.y);                 // holding on
+  park(r, hole.x - 100, hole.y);           // not holding on
+  const railStart = { x: q.x, y: q.y };
+  const driftStart = Math.hypot(r.x - hole.x, r.y - hole.y);
+
+  park(p, lever.x, lever.y);
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF" }));
+  const t0 = Date.now();
+  while (Date.now() - t0 < 2500 && !w.breach.active) await new Promise((s) => setTimeout(s, 40));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyF" }));
+  const opened = w.breach.active;
+  // The walker goes by the hole only now: alive and hunting, it would have wandered off
+  // during the pull, and what is under test is the wind rather than its pathing.
+  if (walker) { walker.x = hole.x + 20; walker.y = hole.y; walker.prevX = walker.x; walker.prevY = walker.y; }
+  await new Promise((s) => setTimeout(s, 1200));
+  const blownOut = walker ? !w.enemies.includes(walker) : null;
+  const heldOn = Math.hypot(q.x - railStart.x, q.y - railStart.y) < 6;
+  const dragged = Math.hypot(r.x - hole.x, r.y - hole.y) < driftStart - 20;
+
+  const t1 = Date.now();
+  while (Date.now() - t1 < 14000 && w.breach.active) await new Promise((s) => setTimeout(s, 100));
+  const sealed = !w.breach.active;
+  const spent = w.oxygen.level;
+  await new Promise((s) => setTimeout(s, 900));
+  return {
+    opened, blownOut, heldOn, dragged, sealed,
+    spent: +spent.toFixed(2), coming_back: w.oxygen.level > spent,
+    leverSpent: w.map.devices.find((d) => d.x === lever.x && d.y === lever.y)?.spent ?? null,
+  };
+});
+check("a lever empties the deck: the horde goes out of the hole, the squad's air with it",
+  vacuum.opened === true && vacuum.blownOut === true && vacuum.heldOn === true &&
+  vacuum.dragged === true && vacuum.sealed === true && vacuum.spent < 0.5 &&
+  vacuum.coming_back === true && vacuum.leverSpent === true,
+  JSON.stringify(vacuum));
+
+/*
+ * The airlock. Two people, five seconds, doors shut behind them — which is the whole
+ * mechanic: for those five seconds a squad of three is a pair and somebody on their own.
+ */
+const airlock = await sysPage.evaluate(async () => {
+  const w = window.game.world;
+  const [p, q, r] = w.players;
+  const chamber = w.map.airlocks[0];
+  const park = (pl, x, y) => {
+    pl.x = x; pl.y = y; pl.prevX = x; pl.prevY = y; pl.eyeX = x; pl.eyeY = y;
+    pl.downed = false; pl.health = pl.maxHealth;
+  };
+  const seats = chamber.tiles.map((i) => ({
+    x: (i % w.map.cols) * 48 + 24, y: Math.floor(i / w.map.cols) * 48 + 24,
+  }));
+  const doors = chamber.doors.map((d) => ({ ...d }));
+  park(r, 32 * 48 + 24, 19 * 48 + 24);
+  park(p, seats[0].x, seats[0].y);
+  park(q, seats[1].x, seats[1].y);
+  await new Promise((s) => setTimeout(s, 220));
+  const cycling = w.airlockCycleFor(p);
+  const shut = doors.every((d) => w.map.isSolid(d.tx, d.ty));
+  const running = w.cycling.size;
+  const t0 = Date.now();
+  while (Date.now() - t0 < 9000 && w.airlockCycleFor(p) > 0) await new Promise((s) => setTimeout(s, 100));
+  await new Promise((s) => setTimeout(s, 220));
+  const openAgain = doors.every((d) => !w.map.isSolid(d.tx, d.ty));
+  return { seats: seats.length, doors: doors.length, cycling: +cycling.toFixed(1), shut, running, openAgain };
+});
+check("two in the chamber shuts the doors for five seconds, then opens them again",
+  airlock.seats === 2 && airlock.doors === 2 && airlock.cycling > 3 &&
+  airlock.shut === true && airlock.running === 1 && airlock.openAgain === true,
+  JSON.stringify(airlock));
+
+/*
+ * The Ceiling Lurker. It never walks the floor, it drops on whoever stands still under
+ * an unlit grate, and a flare on that tile takes the option away from it.
+ */
+await sysPage.evaluate(() => window.game.world.restart());
+await sysPage.waitForTimeout(400);
+
+const lurker = await sysPage.evaluate(async () => {
+  const w = window.game.world;
+  const [p, q, r] = w.players;
+  const park = (pl, x, y) => {
+    pl.x = x; pl.y = y; pl.prevX = x; pl.prevY = y; pl.eyeX = x; pl.eyeY = y;
+    pl.downed = false; pl.health = pl.maxHealth; pl.restraint = null;
+  };
+  const l = w.enemies.find((z) => z.kind === "lurker");
+  if (!l) return { noLurker: true };
+  for (const z of [...w.enemies]) if (z !== l) w.enemies.splice(w.enemies.indexOf(z), 1);
+  park(q, 32 * 48 + 24, 19 * 48 + 24);
+  park(r, 32 * 48 + 24, 18 * 48 + 24);
+  w.players.forEach((pl) => { pl.lightOn = false; });
+
+  const vent = w.map.vents.find((v) => !w.litHere(v.x, v.y)) ?? w.map.vents[0];
+  park(p, vent.x, vent.y);
+  // Held in the grate above the player: left to itself it hops between vents looking
+  // for somebody, and this test is about what happens when it has found them.
+  const roost = () => {
+    l.x = vent.x; l.y = vent.y; l.prevX = l.x; l.prevY = l.y; l.vx = 0; l.vy = 0;
+    if (l.state !== "pin" && l.state !== "recover") { l.state = "roost"; l.stateTimer = 1.4; }
+  };
+  roost();
+  await new Promise((s) => setTimeout(s, 120));
+  const ceiling = { drawn: l.visible, state: l.state };
+
+  const hold = setInterval(roost, 30);
+  const t0 = Date.now();
+  while (Date.now() - t0 < 6000 && p.restraint === null) await new Promise((s) => setTimeout(s, 40));
+  const drop = { restraint: p.restraint?.kind ?? null, state: l.state, hurt: p.health < p.maxHealth };
+
+  // Light that floor and it will not commit at all.
+  p.restraint = null;
+  p.health = p.maxHealth;
+  l.state = "roost"; l.stateTimer = 1.4; l.tendrilOut = 0;
+  p.item = "flare"; p.itemCharges = 1; p.itemHold = 0;
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyG" }));
+  await new Promise((s) => setTimeout(s, 900));
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyG" }));
+  const litFloor = w.litHere(vent.x, vent.y);
+  l.tendrilOut = 0;
+  const t1 = Date.now();
+  while (Date.now() - t1 < 3500 && p.restraint === null) await new Promise((s) => setTimeout(s, 40));
+  const underTheFlare = { restraint: p.restraint?.kind ?? null, winding: +l.tendrilOut.toFixed(2) };
+  clearInterval(hold);
+  return { ceiling, drop, flares: w.thrownFlares.length, litFloor, underTheFlare };
+});
+check("it lives in the ceiling, drops on anybody standing still under a dark grate",
+  lurker.ceiling.drawn === false && lurker.ceiling.state === "roost" &&
+  lurker.drop.restraint === "pin" && lurker.drop.hurt === true,
+  JSON.stringify(lurker));
+check("a flare under the grate denies the drop outright",
+  lurker.flares === 1 && lurker.litFloor === true &&
+  lurker.underTheFlare.restraint === null && lurker.underTheFlare.winding === 0,
+  JSON.stringify(lurker.underTheFlare));
+
+check("the systems deck raised no exceptions", sysErrors.length === 0, sysErrors.join(" | "));
 
 await browser.close();
 

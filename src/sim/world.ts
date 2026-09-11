@@ -6,7 +6,7 @@ import { buildTileMap, type LevelData } from "../world/level";
 import { FlowField } from "../world/flow";
 import { generateLevel } from "../world/generator";
 import { makeLight } from "../vision/visibility";
-import { circleOverlap, pointInWall } from "../world/collision";
+import { circleOverlap, moveCircle, pointInWall } from "../world/collision";
 import { computeVisibility, inCone, type VisionLight } from "../vision/visibility";
 import { hasLineOfSight } from "../world/raycast";
 import {
@@ -20,8 +20,12 @@ import {
   ADRENALINE_TIME, giveItem, HANDFLARE_BURN, HANDFLARE_LIGHT, HANDFLARE_THROW,
   MEDKIT_HEAL, MEDKIT_REACH, WELD_INTEGRITY,
 } from "./items";
-import { inDuct, TENDRIL_SEVER_RADIUS } from "./mutants";
-import { randomZombieKind } from "./zombies";
+import { overhead, TENDRIL_SEVER_RADIUS } from "./mutants";
+import {
+  CELL_CHARGE, CHARGER_RATE, charge, HANDOVER_RANGE, spendPower, WELD_DRAW,
+} from "./power";
+import type { CarryKind } from "./entities";
+import { randomZombieKind, zombieDef } from "./zombies";
 import { NOISE, NoiseField } from "./noise";
 import { Director, STORY_TUNING, SURVIVAL_TUNING, type DirectorDeps } from "./director";
 import { BulletPool, ParticlePool } from "./pools";
@@ -74,6 +78,29 @@ const CHOPPER_RUN_IN = 1600;
 const FLARE_LIGHT = 340;
 /** How close a teammate stands to shove a Stalker off somebody. */
 const SHOVE_RANGE = 66;
+/** How close you have to be to pick something up off the deck. */
+const PICKUP_RANGE = 44;
+/** Seconds a depressurisation lasts before the emergency plating shuts it again. */
+const BREACH_TIME = 10;
+/**
+ * How far the wind reaches, and how hard it pulls. The force is deliberately just under
+ * a walking pace: out at the edge of the room you can walk away from it and it feels
+ * like wading, close to the hole you lose ground, and a sprint always beats it. Set it
+ * above WALK_SPEED and the mechanic stops being a struggle and becomes a death sentence
+ * for anybody who was standing in the wrong place when somebody else pulled the lever.
+ */
+const BREACH_RADIUS = 340;
+const SUCTION_FORCE = 195;
+/** Damage per second to anything actually in the hole. You are half outside the ship. */
+const BREACH_DAMAGE = 26;
+/** How many fit in an airlock, and how long it takes to equalize. */
+const AIRLOCK_CAPACITY = 2;
+const AIRLOCK_CYCLE = 5;
+/** Squad air per second while the hull is open, and how slowly it comes back. */
+const OXYGEN_DRAIN = 0.085;
+const OXYGEN_REGEN = 0.035;
+/** Damage per second once the air is gone and the hull is still open. */
+const VACUUM_DAMAGE = 14;
 /** Damage per second to anything standing in live water. */
 const ARC_DAMAGE = 55;
 /** How long a discharge lasts, and how long that cable needs before it will do it again. */
@@ -139,6 +166,7 @@ export interface GameEvent {
   kind: "kill" | "playerDown" | "revive" | "wipe" | "join" | "level" | "horde" | "alarm"
     // The utility slot, the hazards, and being got hold of.
     | "heal" | "item" | "weld" | "weldBroken" | "arc" | "grabbed" | "pinned" | "freed"
+    | "carry" | "breach" | "airlock"
       | "floorCleared" | "missionComplete" | "missionFailed"
       | "flareLit" | "holdout" | "chopperInbound" | "chopperDown"
       // The ship arc: a crew log, a locker, the reactor and the bridge door.
@@ -151,6 +179,16 @@ export interface GameEvent {
   count?: number;
   /** `log` only: which of the floor's logs to show. The mission owns the text. */
   index?: number;
+}
+
+/**
+ * A stable name for an airlock chamber: the lowest tile index in it. Survives the grid
+ * rebuild that shutting its doors triggers, which an array position does not.
+ */
+function airlockKey(lock: { tiles: number[] }): number {
+  let min = Infinity;
+  for (const t of lock.tiles) min = Math.min(min, t);
+  return min;
 }
 
 /** Distance from a point to a line segment, against a radius. Used to shoot a rope. */
@@ -206,6 +244,36 @@ export class GameWorld {
    * is a tool, with a recharge, so it is not a farm.
    */
   readonly liveWater = new Map<number, number>();
+  /**
+   * Heavy things lying on the deck. A carried object is not an inventory entry — it is
+   * an object, and putting it down leaves it where you put it, which is what makes
+   * "somebody watch this while I deal with that" a thing you can actually do.
+   */
+  readonly dropped: { kind: CarryKind; x: number; y: number; charge: number }[] = [];
+  /**
+   * A depressurisation in progress. There is only ever one — a second lever moves it
+   * rather than stacking, the same rule the car alarm uses — and while it runs the room
+   * is pulling everything loose toward `x, y`.
+   */
+  readonly breach = { active: false, x: 0, y: 0, timeLeft: 0, pulse: 0 };
+  /**
+   * The squad's air, 0..1. Shared, because the ship is: the whole point of a breach is
+   * that the person who pulled the lever is not the only one paying for it. It comes
+   * back slowly once the hull is shut again.
+   */
+  readonly oxygen = { level: 1 };
+  /**
+   * Airlock cycles in progress, by index into `map.airlocks`: seconds left, and who was
+   * inside when the doors shut. A chamber holds two — the third person waits, and the
+   * squad is a pair and a pair for the next five seconds whether they like it or not.
+   */
+  readonly cycling = new Map<number, { timeLeft: number; inside: number[] }>();
+  /**
+   * Chambers that have finished a cycle and not yet emptied. Without this a pair who
+   * stand around in an airlock after it opens are sealed straight back in, forever —
+   * the doors have to stay open until somebody actually walks out of it.
+   */
+  private equalized = new Set<number>();
   /** Seconds until each cable can be fired again, by "tx,ty". */
   private cableCooldown = new Map<string, number>();
   /** Player ids that were held last step, so a grab is announced exactly once. */
@@ -354,7 +422,14 @@ export class GameWorld {
     this.liveWater.clear();
     this.cableCooldown.clear();
     this.thrownFlares.length = 0;
+    this.dropped.length = 0;
     this.heldLast.clear();
+    this.breach.active = false;
+    this.breach.timeLeft = 0;
+    this.cycling.clear();
+    this.equalized.clear();
+    // Air is per floor: a new deck is a sealed one, whatever the last one cost you.
+    this.oxygen.level = 1;
     this.exitTimer = 0;
     this.objective.kind = "none";
     this.objective.onExit = 0;
@@ -552,12 +627,16 @@ export class GameWorld {
       squadFlow: this.squadFlow,
       lureFlow: this.lureFlow,
       hurtPlayer: this.hurtPlayer,
+      lit: this.litHere,
     };
     for (const e of this.enemies) updateEnemy(e, enemyDeps, dt);
 
     this.updateBullets(dt);
     this.updateGrabs();
     this.updateShoves(dt, inputOf);
+    this.updateCarry(dt, inputOf);
+    this.updateBreach(dt);
+    this.updateAirlocks(dt);
     this.updateFlares(dt);
     this.updateCurrent(dt);
     this.updateWelds(dt);
@@ -589,7 +668,7 @@ export class GameWorld {
    */
   private updateEnemyVisibility(): void {
     // Something up in the ceiling is not in the room, however bright the room is.
-    for (const e of this.enemies) e.visible = !inDuct(e) && this.squadCanSee(e.x, e.y);
+    for (const e of this.enemies) e.visible = !overhead(e) && this.squadCanSee(e.x, e.y);
   }
 
   /**
@@ -748,6 +827,8 @@ export class GameWorld {
     for (const e of this.enemies) {
       if (Math.hypot(e.x - p.x, e.y - p.y) < TILE * 0.8) return false;
     }
+    // A weld is most of a magazine's worth of charge out of the same cell.
+    if (!spendPower(p, WELD_DRAW)) return false;
     this.map.setTile(tx, ty, def.weldsInto);
     this.map.refresh();
     this.director.rebuild(this.map);
@@ -820,6 +901,355 @@ export class GameWorld {
     }
   }
 
+  // === Heavy things ==========================================================
+
+  /**
+   * Picking up, putting down, and what a charging point does. Everything heavy is an
+   * object in the world rather than a slot on a player, which is the whole point: a
+   * fusion core going to the reactor is a thing somebody is visibly holding, with both
+   * hands, and cannot shoot while holding.
+   */
+  private updateCarry(dt: number, inputOf: (p: Player) => InputState): void {
+    for (const p of this.players) {
+      if (p.downed) {
+        // You drop what you were holding where you fall. Somebody has to come for both.
+        if (p.carrying !== null) this.putDown(p);
+        continue;
+      }
+
+      // A charging point works by standing on it. No button, because the cost is the
+      // seconds you spend in the open, and a hold would just be a second cost.
+      if (this.map.isChargerAt(p.x, p.y)) {
+        const taken = charge(p, CHARGER_RATE * dt);
+        if (taken > 0 && Math.random() < dt * 8) {
+          this.particles.burst(p.x, p.y, 2, 60, "#5affd2", 0.3, 2);
+        }
+      }
+
+      const pressed = inputOf(p).interactPressed;
+
+      if (p.carrying !== null) {
+        if (pressed) this.deliverCarried(p);
+        continue;
+      }
+
+      // Empty hands, standing on a rack: shoulder one.
+      const rack = this.map.rackAt(p.x, p.y);
+      if (rack && pressed) {
+        p.carrying = rack.gives;
+        p.carryCharge = rack.gives === "battery" ? 1 : 1;
+        this.events.push({
+          kind: "carry", x: p.x, y: p.y,
+          text: `P${p.id + 1} has a ${rack.gives === "core" ? "fusion core" : "power cell"}`,
+        });
+        continue;
+      }
+
+      // Or something somebody left on the deck.
+      if (!pressed) continue;
+      for (let i = 0; i < this.dropped.length; i++) {
+        const d = this.dropped[i];
+        if (Math.hypot(d.x - p.x, d.y - p.y) > PICKUP_RANGE) continue;
+        p.carrying = d.kind;
+        p.carryCharge = d.charge;
+        this.dropped.splice(i, 1);
+        this.events.push({ kind: "carry", x: p.x, y: p.y, text: `P${p.id + 1} picked it up` });
+        break;
+      }
+    }
+  }
+
+  /**
+   * What pressing USE does with something in your hands. In order: seat a fusion core
+   * in the socket you are standing on, hand a cell to the teammate who needs it more,
+   * slot it into your own suit, or simply put the thing down.
+   *
+   * The teammate case is the one worth having. "Hot-swap" only means anything if it is
+   * easier to give a cell away than to keep it, so a squadmate in arm's reach with less
+   * charge than you takes priority over your own suit.
+   */
+  private deliverCarried(p: Player): void {
+    if (p.carrying === "core") {
+      const device = this.map.deviceAt(p.x, p.y);
+      if (device?.kind === "socket") {
+        // The core is the thing the socket wanted; seating it is the easy part.
+        for (const o of this.devices.seatCore(this.map, device)) this.applyDevice(o);
+        p.carrying = null;
+        p.carryCharge = 0;
+        this.events.push({ kind: "carry", x: p.x, y: p.y, text: "core seated" });
+        return;
+      }
+      this.putDown(p);
+      return;
+    }
+
+    // A power cell.
+    let best: Player | null = null;
+    for (const other of this.players) {
+      if (other === p || other.downed) continue;
+      if (Math.hypot(other.x - p.x, other.y - p.y) > HANDOVER_RANGE) continue;
+      if (other.battery >= p.battery) continue;
+      if (best === null || other.battery < best.battery) best = other;
+    }
+    const into = best ?? p;
+    const taken = charge(into, CELL_CHARGE * p.carryCharge);
+    if (taken <= 0) {
+      this.putDown(p);
+      return;
+    }
+    p.carrying = null;
+    p.carryCharge = 0;
+    this.particles.burst(into.x, into.y, 12, 110, "#7ad2ff", 0.4, 2);
+    this.events.push({
+      kind: "carry", x: into.x, y: into.y,
+      text: into === p ? `P${p.id + 1} swapped a cell` : `P${p.id + 1} → P${into.id + 1} cell`,
+    });
+  }
+
+  /** Put the carried object on the deck where the player is standing. */
+  private putDown(p: Player): void {
+    if (p.carrying === null) return;
+    this.dropped.push({ kind: p.carrying, x: p.x, y: p.y, charge: p.carryCharge });
+    p.carrying = null;
+    p.carryCharge = 0;
+  }
+
+  // === Airlocks ==============================================================
+
+  /**
+   * A deck transition that costs the squad its shape.
+   *
+   * The chamber takes two. When the second person steps in, the doors shut and it takes
+   * five seconds to equalize — which leaves the other half of the squad outside, in the
+   * corridor they just cleared, listening. That is the whole mechanic: not the delay,
+   * the split. Everything here exists to make sure the pair who went through and the
+   * pair who did not are both somewhere they have to think about.
+   *
+   * Nobody is teleported and nothing is blocked from walking in or out once the doors
+   * open again — the chamber is ordinary floor with two doors, and the cycle is the only
+   * state. That keeps a half-cycled airlock from ever becoming a soft lock.
+   */
+  private updateAirlocks(dt: number): void {
+    for (const lock of this.map.airlocks) {
+      // Keyed by the chamber's lowest tile index, NOT by its position in the list.
+      // Shutting a door calls `refresh`, which rebuilds that list — an index taken
+      // before the doors closed can point at a different chamber, or at nothing, and
+      // a cycle that loses its own entry never opens the doors again.
+      const key = airlockKey(lock);
+      const running = this.cycling.get(key);
+
+      if (running) {
+        running.timeLeft -= dt;
+        if (running.timeLeft > 0) continue;
+        this.cycling.delete(key);
+        this.equalized.add(key);
+        this.setAirlockDoors(lock, false);
+        // No text: the doors sliding open is the message, and the HUD has been counting
+        // the cycle down in front of whoever is inside. The event still fires so the
+        // audio layer can put the clunk where the chamber is.
+        this.events.push({ kind: "airlock", x: lock.x, y: lock.y });
+        continue;
+      }
+
+      // Who is standing in it right now?
+      const inside = this.players.filter(
+        (p) => !p.downed && this.map.airlockAt(p.x, p.y) === lock,
+      );
+      // Empty again: the chamber is ready for the next pair.
+      if (inside.length === 0) {
+        this.equalized.delete(key);
+        continue;
+      }
+      if (this.equalized.has(key)) continue;   // already cycled; walk out of it
+      if (inside.length < AIRLOCK_CAPACITY) continue;
+      // Full. The doors shut behind whoever got there first.
+      this.cycling.set(key, {
+        timeLeft: AIRLOCK_CYCLE,
+        inside: inside.slice(0, AIRLOCK_CAPACITY).map((p) => p.id),
+      });
+      this.setAirlockDoors(lock, true);
+      this.noise.emit(lock.x, lock.y, 420, "impact");
+      this.events.push({
+        kind: "airlock", x: lock.x, y: lock.y,
+        text: this.players.length > AIRLOCK_CAPACITY ? "AIRLOCK CYCLING — HOLD THE DOOR" : "AIRLOCK CYCLING",
+      });
+    }
+  }
+
+  /** Shut or open every door around a chamber, by swapping the tiles. */
+  private setAirlockDoors(lock: { doors: { tx: number; ty: number }[] }, shut: boolean): void {
+    let changed = false;
+    for (const d of lock.doors) {
+      const def = tileDef(this.map.tileAt(d.tx, d.ty));
+      const next = shut ? def.shutInto : def.opensInto;
+      if (next === undefined) continue;
+      this.map.setTile(d.tx, d.ty, next);
+      changed = true;
+    }
+    if (!changed) return;
+    this.map.refresh();
+    // A door is geometry: the routes the horde walks and the doors a wave can use both
+    // change when one shuts, so everything derived from the grid has to be told.
+    this.director.rebuild(this.map);
+    this.refreshLure();
+  }
+
+  /** Seconds left on the cycle this player is inside, or 0. For the HUD. */
+  airlockCycleFor(p: Player): number {
+    const lock = this.map.airlockAt(p.x, p.y);
+    if (!lock) return 0;
+    return this.cycling.get(airlockKey(lock))?.timeLeft ?? 0;
+  }
+
+  // === Vacuum ================================================================
+
+  /**
+   * Pull a lever and the room goes to vacuum through the nearest hull breach.
+   *
+   * Ten seconds, and every one of them costs something. Low-tier bodies go out of the
+   * hole and off the ship — that is what you paid for. But the squad's air goes with
+   * them, the noise brings whatever is next door, and anybody not holding on to
+   * something bolted down is being dragged toward the same hole as the horde.
+   */
+  private openBreach(x: number, y: number): void {
+    const hole = this.nearestBreach(x, y);
+    if (!hole) {
+      // A lever with no hull breach on the floor is a lever that does nothing, and it
+      // should say so rather than quietly eating the pull.
+      this.events.push({ kind: "breach", x, y, text: "NO BREACH ON THIS DECK" });
+      return;
+    }
+    this.breach.active = true;
+    this.breach.x = hole.x;
+    this.breach.y = hole.y;
+    this.breach.timeLeft = BREACH_TIME;
+    this.breach.pulse = 0;
+    // Deafening. A depressurisation is the loudest thing on the deck bar the rotor,
+    // and everything that can hear it comes to look at what is left afterwards.
+    this.noise.emit(hole.x, hole.y, NOISE.breach, "breach");
+    this.events.push({ kind: "breach", x: hole.x, y: hole.y, text: "HULL BREACH — HOLD ON" });
+  }
+
+  private nearestBreach(x: number, y: number): { x: number; y: number } | null {
+    let best: { x: number; y: number } | null = null;
+    let bestD = Infinity;
+    for (const b of this.map.breaches) {
+      const d = Math.hypot(b.x - x, b.y - y);
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    return best;
+  }
+
+  private updateBreach(dt: number): void {
+    if (!this.breach.active) {
+      // Air comes back once the hull is shut, slowly enough that a second breach
+      // inside a minute is a genuinely bad idea.
+      if (this.oxygen.level < 1) {
+        this.oxygen.level = Math.min(1, this.oxygen.level + OXYGEN_REGEN * dt);
+      }
+      return;
+    }
+
+    this.breach.pulse += dt;
+    this.breach.timeLeft -= dt;
+    if (this.breach.timeLeft <= 0) {
+      this.breach.active = false;
+      this.events.push({ kind: "breach", x: this.breach.x, y: this.breach.y, text: "HULL SEALED" });
+      return;
+    }
+
+    // The air. Shared, and it does not care who pulled the lever.
+    this.oxygen.level = Math.max(0, this.oxygen.level - OXYGEN_DRAIN * dt);
+
+    /*
+     * The pull. Applied as DISPLACEMENT rather than as velocity, which matters: both
+     * the player step and the zombie step damp their own velocity toward what they are
+     * trying to do, so a force added here would be quietly erased before anything moved.
+     * Moving bodies through `moveCircle` also means the wind cannot push anything into
+     * a wall, which a velocity nudge would happily do.
+     *
+     * Standing on something bolted down opts out of all of it — which is why the
+     * railings are drawn on the floor where you can plan around them.
+     */
+    for (const p of this.players) {
+      const pull = this.suctionAt(p.x, p.y);
+      if (pull <= 0) continue;
+      // Suffocating is not instant, but standing in a vacuum is not free either.
+      if (this.oxygen.level <= 0 && !p.downed) this.hurtPlayer(p, VACUUM_DAMAGE * dt);
+      if (this.map.isRailingAt(p.x, p.y)) continue;
+      this.dragToward(p, SUCTION_FORCE * pull * dt);
+      // Dragged all the way in: you are hanging half out of the hull, and it hurts
+      // rather than kills — this has to be survivable by a teammate grabbing you.
+      if (Math.hypot(this.breach.x - p.x, this.breach.y - p.y) < TILE * 0.7 && !p.downed) {
+        this.hurtPlayer(p, BREACH_DAMAGE * dt);
+      }
+    }
+
+    // And the horde. Anything light enough goes out of the hole and off the ship.
+    for (const e of [...this.enemies]) {
+      if (overhead(e)) continue;                    // in the ceiling, out of the wind
+      const pull = this.suctionAt(e.x, e.y);
+      if (pull <= 0) continue;
+      const def = zombieDef(e.kind);
+      // Heavy things brace. A Strangler has a post and a grip; a walker does not.
+      const grip = def.tendril || def.pounce ? 0.3 : 1;
+      this.dragToward(e, SUCTION_FORCE * pull * grip * dt);
+      // Close enough to the hole and it simply leaves.
+      const d = Math.hypot(this.breach.x - e.x, this.breach.y - e.y);
+      if (d < TILE * 0.8 && grip === 1) {
+        this.particles.burst(e.x, e.y, 14, 320, "#dfe6f2", 0.4, 3);
+        this.killEnemy(e, -1);
+      }
+    }
+
+    // Dropped objects go the same way, which is a reason not to leave a fusion core
+    // lying on the floor of a room somebody is about to blow down.
+    for (let i = this.dropped.length - 1; i >= 0; i--) {
+      const d = this.dropped[i];
+      const pull = this.suctionAt(d.x, d.y);
+      if (pull <= 0) continue;
+      const dx = this.breach.x - d.x;
+      const dy = this.breach.y - d.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      d.x += (dx / dist) * SUCTION_FORCE * pull * dt * 0.5;
+      d.y += (dy / dist) * SUCTION_FORCE * pull * dt * 0.5;
+      if (dist < TILE * 0.7) this.dropped.splice(i, 1);
+    }
+
+    if (Math.random() < dt * 40) {
+      const a = Math.random() * Math.PI * 2;
+      const r = TILE * (1 + Math.random() * 5);
+      this.particles.burst(
+        this.breach.x + Math.cos(a) * r, this.breach.y + Math.sin(a) * r,
+        2, 40, "#cfe0f0", 0.35, 2,
+      );
+    }
+  }
+
+  /** Slide a body toward the hole, through geometry rather than into it. */
+  private dragToward(body: { x: number; y: number; radius: number }, amount: number): void {
+    const dx = this.breach.x - body.x;
+    const dy = this.breach.y - body.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const moved = moveCircle(
+      this.map, body.x, body.y, body.radius, (dx / d) * amount, (dy / d) * amount,
+    );
+    body.x = moved.x;
+    body.y = moved.y;
+  }
+
+  /**
+   * How hard the air is pulling at a point, 0..1. Zero outside the radius, and zero
+   * through a wall — a depressurisation empties the room it is in, not the deck.
+   */
+  suctionAt(x: number, y: number): number {
+    if (!this.breach.active) return 0;
+    const d = Math.hypot(this.breach.x - x, this.breach.y - y);
+    if (d > BREACH_RADIUS) return 0;
+    if (!hasLineOfSight(this.map, this.breach.x, this.breach.y, x, y)) return 0;
+    return 1 - (d / BREACH_RADIUS) * 0.65;
+  }
+
   // === Current, water and welds ==============================================
 
   /**
@@ -846,7 +1276,7 @@ export class GameWorld {
       if (!puddle) continue;
 
       for (const e of [...this.enemies]) {
-        if (inDuct(e)) continue;
+        if (overhead(e)) continue;
         if (!this.inPuddle(puddle, e.x, e.y)) continue;
         e.hurtFlash = 1;
         if (damageEnemy(e, ARC_DAMAGE * dt)) this.killEnemy(e, -1);
@@ -917,7 +1347,7 @@ export class GameWorld {
       const center = this.map.tileCenter(tx, ty);
       let attackers = 0;
       for (const e of this.enemies) {
-        if (inDuct(e)) continue;
+        if (overhead(e)) continue;
         if (Math.hypot(e.x - center.x, e.y - center.y) > TILE * 1.1 + e.radius) continue;
         attackers++;
       }
@@ -1004,7 +1434,7 @@ export class GameWorld {
             break;
           }
           for (const e of this.enemies) {
-            if (e.health <= 0 || inDuct(e)) continue;
+            if (e.health <= 0 || overhead(e)) continue;
             if (!circleOverlap(b.x, b.y, 2, e.x, e.y, e.radius)) continue;
             b.active = false;
             e.lastSeenX = b.x - b.vx * 0.3;
@@ -1115,7 +1545,7 @@ export class GameWorld {
     const vent = this.map.ventAt(x, y);
     if (!vent) return false;
     for (const e of this.enemies) {
-      if (!inDuct(e)) continue;
+      if (!overhead(e)) continue;
       // The same radius the renderer draws the shadow at, so the rule is exactly what
       // you can see: if something is crossing that grate, you can shoot it.
       if (Math.hypot(e.x - vent.x, e.y - vent.y) > VENT_SHADOW) continue;
@@ -1248,6 +1678,10 @@ export class GameWorld {
   }
 
   private applyDevice(o: DeviceOutcome): void {
+    if (o.kind === "lever") {
+      this.openBreach(o.x, o.y);
+      return;
+    }
     if (o.kind === "supply") {
       giveItem(o.player, o.item);
       this.events.push({

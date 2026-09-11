@@ -1,15 +1,16 @@
 import { lerp, TAU } from "../core/math";
 import { TILE } from "../world/tilemap";
 import { tileDef } from "../world/tiles";
-import { raycast } from "../world/raycast";
+import { raycast, wallsBetween } from "../world/raycast";
 import { PLAYER_TUNING } from "../sim/player";
+import { activeWeapon } from "../sim/power";
 import { UNSEAL_TIME } from "../sim/devices";
 import { WELD_INTEGRITY } from "../sim/items";
 import type { Enemy, Player } from "../sim/entities";
 import { zombieDef } from "../sim/zombies";
 import { VENT_SHADOW, type GameWorld } from "../sim/world";
 import type { VisionLight } from "../vision/visibility";
-import { drawActor, muzzleOffset, type HandsPose } from "./actorArt";
+import { drawActor, muzzleOffset, rrect, type HandsPose } from "./actorArt";
 import type { Camera } from "./camera";
 import type { Viewport } from "./viewport";
 
@@ -168,8 +169,11 @@ export class Renderer {
     // A live puddle glows through the dark for the same reason a tracer does: it is a
     // thing that will kill you, and being unable to see it would not be tension.
     this.drawLiveWater(ctx, world, bounds);
+    // The wind. Over the darkness, because a depressurisation you cannot see coming is
+    // just an unexplained death — the streaks ARE the warning.
+    this.drawSuction(ctx, world);
     // And the ripples go over the fog, because they are the thing you navigate it with.
-    this.drawNoiseRipples(ctx, world);
+    this.drawNoiseRipples(ctx, world, vp);
     this.drawWalls(ctx, bounds, world);
     // The helicopter is drawn over the darkness for the same reason a tracer is: it
     // is a hundred decibels of landing lights, and hiding it in the dark would be a
@@ -321,7 +325,7 @@ export class Renderer {
     // per tile, so a 2x2 wreck is one body with one outline.
     const props: Record<string, number[]> = {
       crate: [], glass: [], reception: [], cubicle: [], door: [], blast: [],
-      cable: [], coolant: [], welded: [],
+      cable: [], coolant: [], welded: [], airlockDoor: [],
     };
 
     ctx.fillStyle = COLOR_WALL;
@@ -340,6 +344,7 @@ export class Renderer {
           : def.cable ? "cable"
           : def.coolant ? "coolant"
           : def.welded ? "welded"
+          : def.airlockDoor ? "airlockDoor"
           : def.prop ?? (def.key === "crate" ? "crate" : def.key === "glass" ? "glass" : null);
         if (bucket && props[bucket]) { props[bucket].push(tx, ty); continue; }
         ctx.rect(tx * TILE, ty * TILE, TILE + 0.5, TILE + 0.5);
@@ -435,6 +440,26 @@ export class Renderer {
         ctx.lineTo(x + TILE - 5, y + TILE / 2);
         ctx.stroke();
       }
+    }
+
+    // An airlock door mid-cycle: shut, striped, and obviously temporary.
+    for (let i = 0; i < props.airlockDoor.length; i += 2) {
+      const x = props.airlockDoor[i] * TILE;
+      const y = props.airlockDoor[i + 1] * TILE;
+      ctx.fillStyle = "#1b2430";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = "#41627f";
+      ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+      ctx.strokeStyle = "rgba(180,215,240,0.6)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 2, y + 2, TILE - 4, TILE - 4);
+      // The seam down the middle where the two leaves meet.
+      ctx.strokeStyle = "rgba(20,28,38,0.9)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x + TILE / 2, y + 3);
+      ctx.lineTo(x + TILE / 2, y + TILE - 3);
+      ctx.stroke();
     }
 
     this.drawCars(ctx, world, b);
@@ -821,6 +846,22 @@ export class Renderer {
           drawBulkheadFrame(ctx, x, y);
           continue;
         }
+        if (def.breach) {
+          drawBreachPlate(ctx, world, x, y);
+          continue;
+        }
+        if (def.railing) {
+          drawRailing(ctx, x, y);
+          continue;
+        }
+        if (def.airlock) {
+          drawAirlockFloor(ctx, x, y);
+          continue;
+        }
+        if (def.dispense || def.charger) {
+          drawStation(ctx, def, x, y);
+          continue;
+        }
 
         if (key === "brokenGlass" || key === "brokenWindow") {
           // A shattered pane: the frame is gone, so all that is left is glitter on the
@@ -970,6 +1011,8 @@ export class Renderer {
     }
 
     for (const f of world.thrownFlares) drawBurningFlare(ctx, f.x, f.y);
+    // Heavy things somebody put down, so "it is over there" is a thing you can see.
+    for (const d of world.dropped) drawHeavyThing(ctx, d.kind, d.x, d.y, 1);
   }
 
   /** One player. Its own method because the helicopter has to redraw whoever is under it. */
@@ -1039,6 +1082,14 @@ export class Renderer {
         ctx.arc(x, y, p.radius + 10, -Math.PI / 2, -Math.PI / 2 + TAU * Math.min(1, r.shove / 0.9));
         ctx.stroke();
       }
+    }
+
+    // Something in both hands, drawn out in front of the body where it blocks the view
+    // of exactly the thing you would rather be shooting.
+    if (p.carrying !== null && !p.downed) {
+      const hx = x + Math.cos(p.facing) * (p.radius + 12);
+      const hy = y + Math.sin(p.facing) * (p.radius + 12);
+      drawHeavyThing(ctx, p.carrying, hx, hy, 1);
     }
 
     // Beam off: a small closed eye over the body, so the squad can see at a glance who
@@ -1156,13 +1207,13 @@ export class Renderer {
     for (const p of world.players) {
       // No laser on a crowbar: the laser exists to say exactly where a bullet would
       // stop, and a melee weapon has nothing to say about that.
-      if (p.weaponUp <= 0.02 || p.downed || p.weapon.melee) continue;
+      if (p.weaponUp <= 0.02 || p.downed || activeWeapon(p).melee) continue;
 
       const cos = Math.cos(p.facing);
       const sin = Math.sin(p.facing);
       const mx = p.eyeX + cos * (p.radius + 10);
       const my = p.eyeY + sin * (p.radius + 10);
-      const dist = raycast(world.map, mx, my, cos, sin, p.weapon.range, "shot");
+      const dist = raycast(world.map, mx, my, cos, sin, activeWeapon(p).range, "shot");
       const ex = mx + cos * dist;
       const ey = my + sin * dist;
 
@@ -1259,16 +1310,62 @@ export class Renderer {
   }
 
   /**
+   * A room going to vacuum: streaks of everything loose heading for the hole, and a
+   * ring round the hole itself. Drawn from the breach outward so the direction to run
+   * is unambiguous at a glance.
+   */
+  private drawSuction(ctx: CanvasRenderingContext2D, world: GameWorld): void {
+    if (!world.breach.active) return;
+    const bx = world.breach.x;
+    const by = world.breach.y;
+    const t = world.breach.pulse;
+
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = "rgba(200,225,255,0.35)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < 26; i++) {
+      // Deterministic per streak, so they stream steadily rather than flickering.
+      const a = (i / 26) * TAU + Math.sin(i * 3.1) * 0.2;
+      const phase = (t * 1.6 + i * 0.37) % 1;
+      const far = 340 * (1 - phase * 0.85);
+      const near = far - 40;
+      ctx.moveTo(bx + Math.cos(a) * far, by + Math.sin(a) * far);
+      ctx.lineTo(bx + Math.cos(a) * near, by + Math.sin(a) * near);
+    }
+    ctx.stroke();
+
+    const pulse = 0.6 + 0.4 * Math.sin(t * 9);
+    ctx.strokeStyle = `rgba(255,190,130,${0.4 * pulse})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(bx, by, 26 + 6 * pulse, 0, TAU);
+    ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /**
    * Sound, drawn. Every live noise is a ring expanding from where it happened, coloured
    * by what made it — and it is drawn on top of the darkness, which is the entire
    * feature: in a blackout or a fog bank the ripples are all you have, and a shambler
    * crossing a room you cannot see is still a thing you can point at.
    */
-  private drawNoiseRipples(ctx: CanvasRenderingContext2D, world: GameWorld): void {
+  private drawNoiseRipples(
+    ctx: CanvasRenderingContext2D, world: GameWorld, vp: Viewport,
+  ): void {
+    // Ripples are drawn per viewport against THAT player's ears, and they are occluded
+    // by geometry exactly as the audio is. A ring you can read through a bulkhead is
+    // the same information leak as a footstep you can hear through one — and this is
+    // the half of it that would have quietly undone the other.
+    const ears = world.players[vp.playerIndex] ?? world.players[0];
     ctx.globalCompositeOperation = "lighter";
     ctx.lineWidth = 2;
     for (const n of world.noise.items) {
       if (!n.active) continue;
+      const muffle = ears
+        ? 1 - Math.min(1, wallsBetween(world.map, ears.eyeX, ears.eyeY, n.x, n.y, 2) / 2)
+        : 1;
+      if (muffle <= 0.01) continue;
       // A noise lives half a second; the ring is where its leading edge has got to.
       const t = 1 - n.life / NOISE_RING_LIFE;
       if (t < 0 || t > 1) continue;
@@ -1282,12 +1379,12 @@ export class Renderer {
       // Quiet things get a quiet ring. A gunshot should wash the screen; a footstep
       // should be something you have to be looking for.
       const weight = Math.min(1, n.radius / 700);
-      ctx.strokeStyle = `rgba(${tone},${fade * (0.12 + 0.5 * weight)})`;
+      ctx.strokeStyle = `rgba(${tone},${fade * muffle * (0.12 + 0.5 * weight)})`;
       ctx.beginPath();
       ctx.arc(n.x, n.y, Math.max(2, radius), 0, TAU);
       ctx.stroke();
       if (weight > 0.5) {
-        ctx.strokeStyle = `rgba(${tone},${fade * 0.25})`;
+        ctx.strokeStyle = `rgba(${tone},${fade * muffle * 0.25})`;
         ctx.beginPath();
         ctx.arc(n.x, n.y, Math.max(2, radius * 0.62), 0, TAU);
         ctx.stroke();
@@ -1390,17 +1487,220 @@ function drawVent(
   const cy = y + TILE / 2;
   let occupied = false;
   for (const e of world.enemies) {
-    if (e.state !== "vent") continue;
+    if (e.state !== "vent" && e.state !== "roost") continue;
     if (Math.hypot(e.x - cx, e.y - cy) > VENT_SHADOW) continue;
     occupied = true;
     break;
   }
+  // Something sitting in this grate, loading up a drop. `tendrilOut` is reused by the
+  // Ceiling Lurker as "how ready am I" — and this ring is the only warning there is,
+  // which is why it is drawn on the floor where the victim is looking.
+  let loading = 0;
+  for (const e of world.enemies) {
+    if (e.state !== "roost") continue;
+    if (Math.hypot(e.x - cx, e.y - cy) > VENT_SHADOW) continue;
+    loading = Math.max(loading, e.tendrilOut);
+  }
+  if (loading > 0.02) {
+    ctx.strokeStyle = `rgba(170,120,200,${0.3 + 0.6 * loading})`;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, TILE * 0.45 * (1.2 - 0.4 * loading), 0, TAU * loading, false);
+    ctx.stroke();
+  }
+
   if (!occupied) return;
   const shift = Math.sin(performance.now() * 0.012) * 6;
   ctx.fillStyle = "rgba(0,0,0,0.55)";
   ctx.beginPath();
   ctx.ellipse(cx + shift, cy, TILE * 0.3, TILE * 0.22, 0, 0, TAU);
   ctx.fill();
+}
+
+/**
+ * A hull breach. Plated over and unremarkable until somebody pulls a lever — then it is
+ * a hole with the room going through it, and the plating is visibly gone.
+ */
+function drawBreachPlate(
+  ctx: CanvasRenderingContext2D, world: GameWorld, x: number, y: number,
+): void {
+  const open = world.breach.active &&
+    Math.hypot(world.breach.x - (x + TILE / 2), world.breach.y - (y + TILE / 2)) < TILE;
+
+  if (!open) {
+    // Shut: a bolted plate, with just enough of a seam to be findable before you need it.
+    ctx.fillStyle = "#2b303c";
+    ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+    ctx.strokeStyle = "rgba(150,165,190,0.4)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 5, y + 5, TILE - 10, TILE - 10);
+    ctx.fillStyle = "rgba(190,205,225,0.5)";
+    for (const [ox, oy] of [[9, 9], [TILE - 9, 9], [9, TILE - 9], [TILE - 9, TILE - 9]]) {
+      ctx.beginPath();
+      ctx.arc(x + ox, y + oy, 2, 0, TAU);
+      ctx.fill();
+    }
+    return;
+  }
+
+  // Open: a hole into the dark, with the rim still glowing where the plating tore.
+  ctx.fillStyle = "#05060b";
+  ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.02);
+  ctx.strokeStyle = `rgba(255,180,120,${0.3 + 0.4 * pulse})`;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(x + TILE / 2, y + TILE / 2, TILE * 0.42, 0, TAU);
+  ctx.stroke();
+  // A few stars, because the other side of that is outside.
+  ctx.fillStyle = "rgba(220,235,255,0.8)";
+  for (let i = 0; i < 4; i++) {
+    const h = Math.abs(Math.sin(x * 3.1 + y * 7.7 + i * 2.3) * 43758.5) % 1;
+    ctx.beginPath();
+    ctx.arc(x + 10 + h * (TILE - 20), y + 12 + ((h * 7.3) % 1) * (TILE - 24), 1.2, 0, TAU);
+    ctx.fill();
+  }
+}
+
+/**
+ * A fusion core or a power cell, on the deck or in somebody's hands. Big enough to read
+ * as an object rather than a pickup icon: the point of these is that they are physical.
+ */
+function drawHeavyThing(
+  ctx: CanvasRenderingContext2D, kind: "core" | "battery", x: number, y: number,
+  alpha: number,
+): void {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.beginPath();
+  ctx.ellipse(x + 3, y + 4, 13, 11, 0, 0, TAU);
+  ctx.fill();
+
+  if (kind === "core") {
+    // A canister with something live in it.
+    ctx.fillStyle = "#1d2a22";
+    ctx.strokeStyle = "#0c120e";
+    ctx.lineWidth = 2.5;
+    rrect(ctx, x - 9, y - 12, 18, 24, 5);
+    ctx.fill();
+    ctx.stroke();
+    const glow = 0.55 + 0.45 * Math.sin(performance.now() * 0.006);
+    ctx.fillStyle = `rgba(139,255,122,${0.5 + 0.4 * glow})`;
+    rrect(ctx, x - 5, y - 8, 10, 16, 3);
+    ctx.fill();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = `rgba(139,255,122,${0.16 * glow})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 22, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  // A suit cell: flatter, with a charge strip down the side.
+  ctx.fillStyle = "#22303a";
+  ctx.strokeStyle = "#0b1116";
+  ctx.lineWidth = 2.5;
+  rrect(ctx, x - 12, y - 8, 24, 16, 4);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "rgba(122,210,255,0.9)";
+  rrect(ctx, x - 8, y - 4, 12, 8, 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(200,235,255,0.9)";
+  ctx.fillRect(x + 8, y - 3, 4, 6);
+  ctx.restore();
+}
+
+/** A railing: the thing you stand on when the room is trying to leave. */
+function drawRailing(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  ctx.fillStyle = "rgba(154,163,174,0.12)";
+  ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+  ctx.strokeStyle = "rgba(200,212,226,0.75)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x + 4, y + TILE * 0.32);
+  ctx.lineTo(x + TILE - 4, y + TILE * 0.32);
+  ctx.moveTo(x + 4, y + TILE * 0.68);
+  ctx.lineTo(x + TILE - 4, y + TILE * 0.68);
+  ctx.stroke();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(170,182,196,0.9)";
+  ctx.beginPath();
+  ctx.moveTo(x + 8, y + TILE * 0.28);
+  ctx.lineTo(x + 8, y + TILE * 0.72);
+  ctx.moveTo(x + TILE - 8, y + TILE * 0.28);
+  ctx.lineTo(x + TILE - 8, y + TILE * 0.72);
+  ctx.stroke();
+}
+
+/** Airlock chamber floor: hazard stripes, so you know what you are standing in. */
+function drawAirlockFloor(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  ctx.fillStyle = "#48586a";
+  ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, TILE, TILE);
+  ctx.clip();
+  ctx.strokeStyle = "rgba(255,206,110,0.3)";
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  for (let o = -TILE; o < TILE * 2; o += 18) {
+    ctx.moveTo(x + o, y);
+    ctx.lineTo(x + o - TILE, y + TILE);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * A rack or a charging point. Both are the same shape of thing — walk onto it and it
+ * gives you something — so they read as one family with a different symbol inside.
+ */
+function drawStation(
+  ctx: CanvasRenderingContext2D, def: { dispense?: string; charger?: boolean },
+  x: number, y: number,
+): void {
+  const tone = def.charger ? "90,255,210" : def.dispense === "core" ? "139,255,122" : "122,210,255";
+  ctx.fillStyle = `rgba(${tone},0.12)`;
+  ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+  ctx.strokeStyle = `rgba(${tone},0.7)`;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x + 6, y + 6, TILE - 12, TILE - 12);
+
+  const cx = x + TILE / 2;
+  const cy = y + TILE / 2;
+  ctx.strokeStyle = `rgba(${tone},0.95)`;
+  ctx.lineWidth = 2.5;
+  if (def.charger) {
+    // A lightning bolt.
+    ctx.beginPath();
+    ctx.moveTo(cx + 4, cy - 9);
+    ctx.lineTo(cx - 4, cy - 1);
+    ctx.lineTo(cx + 1, cy - 1);
+    ctx.lineTo(cx - 4, cy + 9);
+    ctx.lineTo(cx + 5, cy + 1);
+    ctx.lineTo(cx, cy + 1);
+    ctx.closePath();
+    ctx.stroke();
+    return;
+  }
+  if (def.dispense === "core") {
+    // A canister on its end.
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 5, 9, 0, 0, TAU);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx - 5, cy);
+    ctx.lineTo(cx + 5, cy);
+    ctx.stroke();
+    return;
+  }
+  // A cell: a battery outline.
+  ctx.strokeRect(cx - 7, cy - 5, 14, 10);
+  ctx.fillStyle = `rgba(${tone},0.95)`;
+  ctx.fillRect(cx + 7, cy - 2, 3, 4);
 }
 
 /** The frame of an open bulkhead: a doorway you can shut, if you are carrying the tool. */
@@ -1655,14 +1955,17 @@ function drawZombie(ctx: CanvasRenderingContext2D, e: Enemy, alpha: number): voi
  * the same player in the same frame cannot disagree.
  */
 function handsOf(p: Player): HandsPose | null {
-  if (p.downed) return null; // crawling: both hands on the floor
+  if (p.downed) return null;    // crawling: both hands on the floor
+  if (p.carrying !== null) return null;  // both hands on the thing you are lugging
+  // Whatever is actually in the hands — which is the fallback melee on a flat suit.
+  const w = activeWeapon(p);
   return {
-    art: p.weapon.art,
+    art: w.art,
     up: p.weaponUp,
     recoil: p.recoil,
     swing: p.swingTimer > 0 ? 1 - p.swingTimer / p.swingTime : 0,
     swingSide: p.swingSide,
-    reload: p.reloadTimer > 0 ? 1 - p.reloadTimer / p.weapon.reloadTime : 0,
+    reload: p.reloadTimer > 0 ? 1 - p.reloadTimer / w.reloadTime : 0,
   };
 }
 

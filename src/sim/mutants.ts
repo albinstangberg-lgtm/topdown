@@ -436,6 +436,22 @@ function leaping(e: Enemy, deps: EnemyDeps, dt: number): boolean {
   return true;
 }
 
+/**
+ * What it costs to be sat on, whichever thing is doing it. A Stalker's numbers come off
+ * its `pounce`, a Ceiling Lurker's off its `drop` — and the pin code below reads this
+ * rather than either, so a third thing that lands on people needs no changes here.
+ */
+function gripOf(e: Enemy): { damage: number; shove: number; recover: number } {
+  const def = zombieDef(e.kind);
+  if (def.pounce) {
+    return { damage: def.pounce.damage, shove: def.pounce.shove, recover: def.pounce.duration };
+  }
+  if (def.drop) {
+    return { damage: def.drop.chew, shove: def.drop.shove, recover: def.lunge.recover };
+  }
+  return { damage: 10, shove: 1, recover: def.lunge.recover };
+}
+
 function pin(e: Enemy, target: Player, deps: EnemyDeps): void {
   e.state = "pin";
   e.pinTargetId = target.id;
@@ -453,7 +469,7 @@ function pin(e: Enemy, target: Player, deps: EnemyDeps): void {
 /** Sitting on somebody. Ends when it is shoved off, shot off, or they stop moving. */
 function pinning(e: Enemy, deps: EnemyDeps, dt: number): boolean {
   const def = zombieDef(e.kind);
-  const pounce = def.pounce!;
+  const grip = gripOf(e);
   const target = deps.players.find((p) => p.id === e.pinTargetId);
   const held =
     target !== undefined && !target.downed &&
@@ -465,7 +481,7 @@ function pinning(e: Enemy, deps: EnemyDeps, dt: number): boolean {
     e.state = "recover";
     e.stateTimer = def.lunge.recover;
     e.pinTargetId = -1;
-    e.attackCooldown = pounce.duration + 1.5;
+    e.attackCooldown = grip.recover + 1.5;
     return true;
   }
 
@@ -476,14 +492,14 @@ function pinning(e: Enemy, deps: EnemyDeps, dt: number): boolean {
   e.facing = rotateToward(e.facing, Math.atan2(target.y - e.y, target.x - e.x), 8 * dt);
   r.anchorX = e.x;
   r.anchorY = e.y;
-  deps.hurtPlayer(target, pounce.damage * dt);
+  deps.hurtPlayer(target, grip.damage * dt);
 
-  if (r.shove >= pounce.shove) {
+  if (r.shove >= grip.shove) {
     target.restraint = null;
     e.state = "recover";
     e.stateTimer = def.lunge.recover * 1.6;
     e.pinTargetId = -1;
-    e.attackCooldown = pounce.duration + 2;
+    e.attackCooldown = grip.recover + 2;
     deps.particles.burst(e.x, e.y, 12, 220, "#dfe6f2", 0.4, 3);
   }
   return true;
@@ -572,7 +588,134 @@ function ductTravel(e: Enemy, deps: EnemyDeps, dt: number): boolean {
   return true;
 }
 
-/** True while this enemy is up in the ceiling, where the floor cannot reach it. */
+/** True while this enemy is travelling the ducts between two grates. */
 export function inDuct(e: Enemy): boolean {
   return e.state === "vent";
 }
+
+/**
+ * True while this enemy is above the room rather than in it — travelling the ducts, or
+ * sitting in a grate waiting. Nothing on the floor can touch it either way, and the
+ * only shot at it is one put through the grate it is under.
+ */
+export function overhead(e: Enemy): boolean {
+  return e.state === "vent" || e.state === "roost";
+}
+
+// =============================================================================
+// The Ceiling Lurker
+// =============================================================================
+
+/**
+ * The one thing on the ship that never touches the floor.
+ *
+ * It sits in a grate. It waits. If somebody stands still underneath an unlit grate for
+ * long enough, it drops on them; otherwise it moves along the duct network looking for
+ * a better one. There is no chase and no telegraph you can dodge, because the thing you
+ * are supposed to learn is not a dodge — it is **do not stand under an unlit vent**, and
+ * the answer when you must is a flare on the floor.
+ *
+ * Light is the whole counterplay, and deliberately not the flashlight: `lit` means a
+ * lamp or a burning flare, something that stays put. A beam you are holding is exactly
+ * the thing you cannot keep pointed at your own feet while a deck is happening to you.
+ */
+export function updateLurker(e: Enemy, deps: EnemyDeps, dt: number): boolean {
+  const def = zombieDef(e.kind);
+  const drop = def.drop;
+  if (!drop) return false;
+
+  // Sitting on somebody, or picking itself up: the shared states own those frames.
+  if (e.state === "pin") return pinning(e, deps, dt);
+  if (e.state === "recover") return false;
+
+  // A Lurker that has been knocked down climbs straight back into the ceiling rather
+  // than shambling about being an ordinary zombie — it has no business on the floor.
+  if (e.state !== "vent" && e.state !== "roost") {
+    if (enterVent(e, deps)) return true;
+    return false;
+  }
+
+  // Travelling between grates.
+  if (e.state === "vent") {
+    const travelling = ductTravel(e, deps, dt);
+    // `ductTravel` drops whatever used it into "stalk" on arrival. A Lurker does not
+    // stalk — arriving means taking up position in the grate it just reached.
+    if (!inDuct(e)) {
+      e.state = "roost";
+      e.stateTimer = 0;
+      e.vx = 0;
+      e.vy = 0;
+    }
+    return travelling;
+  }
+
+  // In position, watching the floor below.
+  e.vx = 0;
+  e.vy = 0;
+  const vent = deps.map.ventAt(e.x, e.y);
+  const mark = vent ? loiterer(deps, drop, vent) : null;
+
+  if (!mark) {
+    // Nobody worth waiting for. Try somewhere else after a moment.
+    e.stateTimer -= dt;
+    if (e.stateTimer <= 0) {
+      e.stateTimer = drop.hop;
+      if (!enterVent(e, deps)) e.stateTimer = drop.hop;
+    }
+    e.tendrilOut = 0;          // reused as the "how ready am I" tell for the renderer
+    return true;
+  }
+
+  // Somebody is standing still under an unlit grate. Count it out — and hold the hop
+  // timer while it does, or `updateEnemy` running that clock down in the background
+  // would have it wander off in the middle of a drop it had nearly committed to.
+  e.stateTimer = drop.hop;
+  e.tendrilOut = Math.min(1, e.tendrilOut + dt / drop.dwell);
+  e.facing = Math.atan2(mark.y - e.y, mark.x - e.x);
+  if (e.tendrilOut < 1) return true;
+
+  // Down it comes.
+  e.tendrilOut = 0;
+  e.x = mark.x;
+  e.y = mark.y;
+  e.prevX = e.x;
+  e.prevY = e.y;
+  deps.hurtPlayer(mark, drop.damage);
+  deps.particles.burst(mark.x, mark.y, 18, 240, "#8a6ea0", 0.5, 4);
+  deps.noise.emit(mark.x, mark.y, 460, "impact");
+  if (mark.downed || mark.adrenaline > 0) {
+    // It lands on somebody who was already going down, or one who tears free on the
+    // way: either way it is on the floor now and vulnerable.
+    if (mark.adrenaline > 0) mark.adrenaline = 0;
+    e.state = "recover";
+    e.stateTimer = def.lunge.recover;
+    return true;
+  }
+  pin(e, mark, deps);
+  return true;
+}
+
+/**
+ * The player this grate is waiting for: standing still, underneath it, in the dark.
+ *
+ * "Standing still" is measured off how far they moved last step rather than off a timer
+ * they carry, which means it costs the player nothing to track — and it is why walking
+ * through a vent room is safe and searching one is not.
+ */
+function loiterer(
+  deps: EnemyDeps, drop: { radius: number }, vent: { x: number; y: number },
+): Player | null {
+  for (const p of deps.players) {
+    if (p.downed || p.restraint !== null) continue;
+    if (Math.hypot(p.x - vent.x, p.y - vent.y) > drop.radius) continue;
+    // Moving, even slowly, and it will not commit.
+    if (Math.hypot(p.x - p.prevX, p.y - p.prevY) > LOITER_SPEED) continue;
+    // Lit floor denies the drop outright. A flare under a grate is a safe tile.
+    if (deps.lit(vent.x, vent.y)) continue;
+    return p;
+  }
+  return null;
+}
+
+/** World units per step under which a player counts as standing still. */
+const LOITER_SPEED = 0.35;

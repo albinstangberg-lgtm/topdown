@@ -50,10 +50,21 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `39` | `x` | Supply cache (empty) | no | no | a cache somebody already emptied |
 | `40` | `S` | Strangler | no | no | one Strangler, holding this exact spot. Put it in a dark corner with a long line down a corridor |
 | `41` | `s` | Stalker | no | no | one Stalker. It takes the ducts and comes back at whoever is on their own |
+| `42` | `O` | Fusion core rack | no | no | tap USE with empty hands to shoulder a core. **Both hands** — the primary goes away while you carry it |
+| `43` | `b` | Battery rack | no | no | spare suit cells. Carry one to a teammate and tap USE beside them to swap it in |
+| `44` | `e` | Charging point | no | no | stand on it to put charge back into your suit, slowly, in the open |
+| `45` | `Y` | Breach lever | no | no | hold USE to depressurise the deck through the nearest hull breach. **Once** |
+| `46` | `\` | Breach lever (pulled) | no | no | a lever somebody already pulled. Rarely authored |
+| `47` | `@` | Hull breach | no | no | a plated-over hole. A lever opens it for ten seconds and everything loose goes that way |
+| `48` | `\|` | Railing | no | no | bolted down. Stand on it and a depressurisation cannot drag you off your feet |
+| `49` | `:` | Airlock chamber | no | no | chamber floor. Two people fit; the doors shut for a five-second cycle |
+| `50` | `]` | Airlock door | no | no | an open airlock door. The chamber shuts both of them for the length of a cycle |
+| `51` | `[` | Airlock door (shut) | yes | yes | a door mid-cycle. Rarely authored — the chamber makes these |
+| `52` | `l` | Ceiling Lurker | no | no | one Ceiling Lurker. Needs vents to live in — it drops on anyone standing still under an unlit grate |
 
 ### Authoring the new tiles
 
-Three of them only work in combination, so they are worth a note:
+Some only work in combination, so they are worth a note:
 
 - **A cable does nothing without water.** `=` electrifies the puddle it *touches*
   orthogonally, and touching `~` tiles are gathered into one puddle. Draw the pool, then
@@ -65,8 +76,30 @@ Three of them only work in combination, so they are worth a note:
   squad will want to shut a door behind them: a corridor between a fight and a place to
   patch up.
 
-`S` and `s` are the only way either mutant reaches a floor by hand — neither is ever
-drawn at random, because both of them are about the place they are standing.
+`S`, `s` and `l` are the only way any of the three mutants reaches a floor by hand — none
+of them is ever drawn at random, because each is about the place it is standing. A `l`
+with no `n` on the floor has nowhere to live: give it vents or leave it out.
+
+The ship's systems are the other set that only work in combination:
+
+- **A breach needs a lever, and the lever needs railings.** `@` is the hole, `Y` is what
+  opens it, and the lever finds the *nearest* breach on the floor — a `Y` on a deck with
+  no `@` says so and does nothing. Draw `|` railings where you expect the squad to be
+  standing when it goes: the pull is just under walk speed, so a railing is the
+  difference between holding a firing line and going out of the hull with the horde.
+- **An airlock is a throat, not a room.** Wall a short run of `:` in so the only way
+  through it is a `]` at each end. If the chamber is open to the floor on another side
+  the doors gate nothing, which is the one way to author a broken one — it will still
+  cycle, and people will simply walk round it. Two tiles of chamber is the natural size:
+  two people fit, and a third has to wait.
+- **A core rack changes every socket on the floor.** Put an `O` down and the deck's `U`
+  sockets stop accepting a dwell: from then on the only way to prime one is to carry a
+  core over by hand, with the primary stowed. That is a deliberate switch, so put the
+  rack where the walk is the interesting part. A floor with no `O` keeps the old
+  hold-USE behaviour, which is why existing reactor decks were not touched by it.
+- **Charging points and battery racks are pacing, not decoration.** `e` is slow and out
+  in the open; `b` hands out something you have to carry with both hands. Put them where
+  you want the squad to stop, not where they are convenient.
 
 `solid`, `opaque` and `blocksShots` are separate flags on purpose, because they are three
 different questions: **can a body pass, can a look pass, can a bullet pass.** Collision
@@ -165,7 +198,7 @@ You do not need a border of walls: out of bounds already counts as solid and opa
 
 | How | What to do |
 | --- | --- |
-| Built-in | `?level=corridors`, `?level=showcase`, `?level=procedural` |
+| Built-in | `?level=corridors`, `?level=showcase`, `?level=hazards`, `?level=systems`, `?level=procedural` |
 | From the editor | Press **▶ Play this map** — it stores the level and opens `?level=draft` |
 | From a file | Drag a `.json` / `.txt` onto the game window |
 | From the clipboard | Focus the game and press `Ctrl+V` |
@@ -276,6 +309,18 @@ Solid and opaque, and the only piece of geometry an objective can delete.
 
 A floor with a blast door and no stairs makes the door the objective even unpowered,
 which is the escape hatch for a map that has nothing else to point at.
+
+### Breach levers (`Y`)
+
+The one device whose outcome is not an objective: hold USE and the deck depressurises
+through the nearest hull breach for ten seconds. It is a **device** rather than a switch
+so it shares the dwell, the prompt and the spend-the-tile rule with everything else — the
+pulled lever is a different tile (`46`), which is what makes "once" survive a reload.
+
+What it costs is the design: the squad's oxygen is shared and drains for the whole ten
+seconds, the noise pulls whatever is next door, and anybody not standing on a railing is
+dragged toward the hole along with the horde. Author it where all three of those are
+true at the same time, and never as the only way past something.
 
 ## Floors that know more than their grid
 
