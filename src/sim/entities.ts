@@ -18,8 +18,17 @@ export type Team = "player" | "enemy";
  */
 export type Stance = "stand" | "dive" | "prone" | "standUp";
 
+/**
+ * Which silhouette the renderer puts in the actor's hands. One of these per row in
+ * `WEAPON_ART` (`src/render/actorArt.ts`) — the *only* thing presentation reads off a
+ * weapon, so the stats below stay free of art and a reskin never touches a number.
+ */
+export type WeaponArt = "pistol" | "smg" | "shotgun" | "crowbar" | "pipe";
+
 export interface WeaponDef {
   name: string;
+  /** What it looks like in the hands. See `WEAPON_ART`. */
+  art: WeaponArt;
   /** Shots per second. */
   fireRate: number;
   bulletSpeed: number;
@@ -53,27 +62,27 @@ export const WEAPONS: Record<string, WeaponDef> = {
    * reload path, the HUD and the locker all read it rather than checking `melee`.
    */
   crowbar: {
-    name: "Crowbar", fireRate: 1.8, bulletSpeed: 0, damage: 48, spread: 0,
+    name: "Crowbar", art: "crowbar", fireRate: 1.8, bulletSpeed: 0, damage: 48, spread: 0,
     pellets: 0, magazine: 0, reloadTime: 0, recoil: 0, auto: false, range: 0,
     noise: 130, melee: true, reach: 46, arc: 0.85,
   },
   pipe: {
-    name: "Pipe", fireRate: 2.3, bulletSpeed: 0, damage: 34, spread: 0,
+    name: "Pipe", art: "pipe", fireRate: 2.3, bulletSpeed: 0, damage: 34, spread: 0,
     pellets: 0, magazine: 0, reloadTime: 0, recoil: 0, auto: false, range: 0,
     noise: 110, melee: true, reach: 40, arc: 0.95,
   },
   smg: {
-    name: "SMG", fireRate: 9, bulletSpeed: 900, damage: 12, spread: 0.055,
+    name: "SMG", art: "smg", fireRate: 9, bulletSpeed: 900, damage: 12, spread: 0.055,
     pellets: 1, magazine: 30, reloadTime: 1.3, recoil: 0.02, auto: true, range: 900,
     noise: 650,
   },
   shotgun: {
-    name: "Shotgun", fireRate: 1.6, bulletSpeed: 780, damage: 9, spread: 0.16,
+    name: "Shotgun", art: "shotgun", fireRate: 1.6, bulletSpeed: 780, damage: 9, spread: 0.16,
     pellets: 7, magazine: 6, reloadTime: 1.9, recoil: 0.09, auto: false, range: 500,
     noise: 850,
   },
   pistol: {
-    name: "Pistol", fireRate: 5, bulletSpeed: 820, damage: 10, spread: 0.03,
+    name: "Pistol", art: "pistol", fireRate: 5, bulletSpeed: 820, damage: 10, spread: 0.03,
     pellets: 1, magazine: 14, reloadTime: 1.0, recoil: 0.03, auto: false, range: 800,
     noise: 600,
   },
@@ -153,6 +162,25 @@ export interface Player {
   weaponUp: number;
   /** Keeps the weapon up through brief lulls, so small aim corrections do not bob it. */
   weaponHold: number;
+  /**
+   * Gait cycle, in radians. Advanced by *distance travelled* rather than by time, which
+   * is what keeps the feet from skating: walking, sprinting and crawling all step at
+   * the pace they actually move at. Presentation reads it; nothing else does.
+   */
+  walkPhase: number;
+  /**
+   * The melee swing, in seconds remaining out of `swingTime`. The animation and the
+   * hit are the same event — the sim resolves the damage partway through this timer
+   * (`MELEE_CONTACT`), so the bar connects when you can see it connect.
+   */
+  swingTimer: number;
+  swingTime: number;
+  /** Which shoulder the current swing comes over: +1 or -1, alternating. */
+  swingSide: number;
+  /** Whether this swing has already resolved its damage. */
+  swingHit: boolean;
+  /** 0..1, spikes on every shot and decays: the kick, and the shotgun's pump cycle. */
+  recoil: number;
   cone: VisionLight;
   halo: VisionLight;
 }
@@ -203,6 +231,8 @@ export interface Enemy {
   /** Seconds before it may wind up another leap. */
   attackCooldown: number;
   wanderAngle: number;
+  /** Gait cycle, in radians, advanced by distance travelled. Presentation only. */
+  walkPhase: number;
   hurtFlash: number;
   /** Recomputed each step: is this enemy inside any player's vision right now? */
   visible: boolean;

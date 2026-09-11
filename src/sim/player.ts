@@ -75,6 +75,22 @@ const WEAPON_HOLD = 0.45;
 const CONE_HALF_ANGLE = 0.46; // ~53 degree cone, matching the reference art
 const CONE_RANGE = 430;
 const HALO_RANGE = 96;       // small always-on glow so you can see your own feet
+/**
+ * The melee swing, as an animation with a hit in the middle of it rather than a hit
+ * with an animation bolted on afterwards. The bar is already cocked whenever the weapon
+ * is raised, so `MELEE_CONTACT` is early: a third of the way through the sweep, which
+ * is the frame the renderer has the bar out in front of the body (see `meleeFrame` in
+ * `src/render/actorArt.ts`). Damage resolves there, so what you watch connect connects.
+ */
+const SWING_TIME = 0.38;
+const MELEE_CONTACT = 0.3;
+/**
+ * How far the body travels per half-stride, in world units. The gait cycle is advanced
+ * by distance rather than by time, so the feet never skate at any speed.
+ */
+const STRIDE = 30;
+/** How fast the shot kick decays. Drives the arms, the muzzle rise and the pump. */
+const RECOIL_DECAY = 4.5;
 const BLEEDOUT = 30;
 const REVIVE_TIME = 2.2;
 const REVIVE_RANGE = 62;
@@ -116,6 +132,12 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     kills: 0,
     weaponUp: 0,
     weaponHold: 0,
+    walkPhase: 0,
+    swingTimer: 0,
+    swingTime: SWING_TIME,
+    swingSide: 1,
+    swingHit: true,
+    recoil: 0,
     cone: makeLight("#ffe9b0", CONE_HALF_ANGLE, CONE_RANGE, 1),
     halo: makeLight("#9fb4d0", Math.PI, HALO_RANGE, 0.34),
   };
@@ -163,10 +185,14 @@ export function updatePlayer(
   p.prevFacing = p.facing;
   p.muzzleFlash = Math.max(0, p.muzzleFlash - dt * 8);
   p.hurtFlash = Math.max(0, p.hurtFlash - dt * 3);
+  p.recoil = Math.max(0, p.recoil - dt * RECOIL_DECAY);
 
   if (p.downed) {
     p.weaponUp = 0;
     p.weaponHold = 0;
+    // Going down cancels a swing in flight: the bar never lands, so it never hits.
+    p.swingTimer = 0;
+    p.swingHit = true;
     p.stance = "stand";
     p.stanceTimer = 0;
     p.lean = 0;
@@ -211,6 +237,9 @@ export function updatePlayer(
     p.vx = 0;
     p.vy = 0;
   }
+
+  advanceSwing(p, deps, dt);
+  advanceGait(p);
 
   // --- Shoot ---------------------------------------------------------------
   const w = p.weapon;
@@ -368,9 +397,10 @@ function updateStanceAndStamina(
 function fire(p: Player, deps: PlayerDeps): void {
   const w = p.weapon;
   p.fireCooldown = 1 / w.fireRate;
-  if (w.melee) { swing(p, deps); return; }
+  if (w.melee) { startSwing(p); return; }
   p.ammo--;
   p.muzzleFlash = 1;
+  p.recoil = 1;
 
   // Shots leave from the eye, so a lean actually shoots round the corner.
   const muzzle = p.radius + 10;
@@ -389,20 +419,51 @@ function fire(p: Player, deps: PlayerDeps): void {
   // The loudest thing you can do. A shotgun carries further than an SMG.
   deps.noise.emit(mx, my, w.noise, "shot");
   p.facing += (Math.random() * 2 - 1) * w.recoil;
-  // Recoil pushes you back a little — free weight without an animation system.
+  // Recoil pushes you back a little. `p.recoil` above is the same kick as the arms and
+  // the pump see; this is the half of it that moves the body rather than the weapon.
   p.vx -= Math.cos(p.facing) * 26;
   p.vy -= Math.sin(p.facing) * 26;
 }
 
 /**
- * A melee swing. Everything in the arc in front of you takes the hit at once, which is
- * what makes a crowbar the answer to two zombies in a doorway and the wrong answer to
- * five in a corridor.
+ * Start a swing. Nothing is hurt yet — the bar has to get there first. The side
+ * alternates so a flurry of swings is a flurry and not the same frame on a loop.
+ */
+function startSwing(p: Player): void {
+  p.swingTimer = p.swingTime = Math.min(SWING_TIME, 1 / p.weapon.fireRate);
+  p.swingSide = -p.swingSide;
+  p.swingHit = false;
+}
+
+/**
+ * Run the swing clock and resolve the hit the moment the bar is out in front. Split
+ * from `startSwing` because a swing outlives the button press: the animation, the
+ * damage and the noise all hang off this timer rather than off the input.
+ */
+function advanceSwing(p: Player, deps: PlayerDeps, dt: number): void {
+  if (p.swingTimer <= 0) return;
+  p.swingTimer = Math.max(0, p.swingTimer - dt);
+  if (p.swingHit) return;
+  if (1 - p.swingTimer / p.swingTime < MELEE_CONTACT) return;
+  p.swingHit = true;
+  resolveSwing(p, deps);
+}
+
+/** Gait cycle, advanced by ground covered this step. Not by time — feet would skate. */
+function advanceGait(p: Player): void {
+  const dist = Math.hypot(p.x - p.prevX, p.y - p.prevY);
+  p.walkPhase = (p.walkPhase + (dist / STRIDE) * Math.PI) % (Math.PI * 2);
+}
+
+/**
+ * A melee swing connecting. Everything in the arc in front of you takes the hit at
+ * once, which is what makes a crowbar the answer to two zombies in a doorway and the
+ * wrong answer to five in a corridor.
  *
  * It makes a noise, but a small one. That difference is the whole first act: a floor
  * cleared quietly stays cleared, and the first gun is a decision as much as a reward.
  */
-function swing(p: Player, deps: PlayerDeps): void {
+function resolveSwing(p: Player, deps: PlayerDeps): void {
   const w = p.weapon;
   const reach = w.reach ?? 40;
   const arc = w.arc ?? 0.9;
@@ -415,7 +476,8 @@ function swing(p: Player, deps: PlayerDeps): void {
   deps.particles.burst(tipX, tipY, hits > 0 ? 8 : 3, hits > 0 ? 150 : 70,
     hits > 0 ? "#c8443a" : "#9a9482", 0.3, 3);
   deps.noise.emit(p.x, p.y, hits > 0 ? w.noise : w.noise * 0.5, "impact");
-  // A swing shoves you a little in the direction of it — weight, without an animation.
+  // A swing shoves you a little in the direction of it, at the moment it lands: the
+  // sweep is drawn, but the body still has to look like it went with the bar.
   p.vx += Math.cos(p.facing) * 30;
   p.vy += Math.sin(p.facing) * 30;
 }
@@ -429,6 +491,12 @@ export function giveWeapon(p: Player, weapon: WeaponDef): void {
   p.ammo = weapon.magazine;
   p.reloadTimer = 0;
   p.fireCooldown = Math.max(p.fireCooldown, 0.25);
+  // Cancel a swing still in flight. Now that the hit lands partway through the sweep
+  // rather than on the button press, a swing left running across a weapon change would
+  // resolve with the new weapon's numbers — a pistol dealing crowbar damage at arm's
+  // length. Picking something up puts the old one away.
+  p.swingTimer = 0;
+  p.swingHit = true;
 }
 
 function updateDowned(p: Player, input: InputState, deps: PlayerDeps, dt: number): void {
@@ -439,6 +507,7 @@ function updateDowned(p: Player, input: InputState, deps: PlayerDeps, dt: number
   const moved = moveCircle(deps.map, p.x, p.y, p.radius, p.vx * dt, p.vy * dt);
   p.x = moved.x;
   p.y = moved.y;
+  advanceGait(p);
   syncLights(p);
 }
 
@@ -502,4 +571,5 @@ export function syncLights(p: Player): void {
 export const PLAYER_TUNING = {
   WALK_SPEED, SPRINT_SPEED, STAMINA_MAX, SPRINT_DRAIN,
   DIVE_TIME, PRONE_TIME, STAND_TIME, LEAN_OFFSET, BLEEDOUT, REVIVE_TIME, REVIVE_RANGE,
+  SWING_TIME, MELEE_CONTACT, STRIDE,
 };
