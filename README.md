@@ -128,6 +128,37 @@ the weapon permanently shouldered, since absolute aiming has no deflection to re
 **Fixed** is the classic twin-stick camera: north stays north, aiming is absolute — the
 cursor or stick names a world direction and you snap to it.
 
+## Characters, and what they are holding
+
+Everyone on screen is drawn as a **body seen from directly above** — shoulders, head, two
+arms, two legs, and a weapon held in the hands — rather than as a box with a stub on the
+front. It is all vector drawing, no sprite sheets, and the poses come straight off the
+simulation:
+
+- **The gait** is driven by *distance travelled*, not by time, so feet never skate: a walk
+  steps, a sprint strides, a crawl drags. Legs trail behind the body, because from a
+  helicopter that is what a walking person looks like.
+- **The weapon** is held where it should be. It swings across the body when lowered, comes
+  up onto the centreline and pushes out when you shoulder it, kicks back on every shot,
+  and dips while the off hand goes to the magazine during a reload.
+- **Five silhouettes.** A pistol is a slide and both hands together. An SMG has a stock, a
+  vented handguard and a stubby magazine. A shotgun is the longest thing anyone carries
+  and the only one with a moving part — the pump rides back on the kick and returns as the
+  recoil decays, so it visibly cycles between shots. A crowbar is a hex shaft with a
+  goose-neck claw, held one-handed with the off arm up as a guard, and a pipe is the same
+  bar with a coupling ring and a blunt open end instead.
+- **The crowbar swing is a real swing**: cocked back over one shoulder, a fast sweep across
+  the front, then a slow return to guard, alternating shoulders so a flurry is a flurry
+  and not one frame on a loop. The **damage lands a third of the way through the sweep**,
+  when the bar is actually out in front of you — not on the button press.
+- **Zombies use the same rig** with a different posture: arms out in front, one leg
+  dragging, the head lolled over, and a face the colour of something that has stopped
+  circulating. Arms go fully out the moment one commits to a leap, which makes the
+  telegraph readable off the body as well as off the ring.
+
+Adding a weapon is one row in `WEAPONS` (stats) and one row in `WEAPON_ART` (silhouette),
+joined by a single `art` field. Nothing else in the renderer learns its name.
+
 ## Local co-op
 
 The game boots into a lobby with nobody playing:
@@ -383,7 +414,8 @@ driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
 hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director,
-a flare-and-helicopter extraction finale, melee weapons, hold-to-use devices
+a flare-and-helicopter extraction finale, top-down character art with a solved arm rig,
+distance-driven gaits and per-weapon silhouettes, melee weapons, hold-to-use devices
 (terminals, weapon lockers, fusion sockets and a blast door) driving a multi-act
 objective chain, per-floor difficulty pressure, HUD per viewport,
 a debug overlay, synthesised positional sound, the level format with a tolerant

@@ -43,6 +43,8 @@ import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
  */
 
 const SEPARATION = 34;
+/** World units per half-stride. Longer than a player's: they lurch. */
+const ZOMBIE_STRIDE = 34;
 /** How close is close enough when walking to a noise. */
 const ARRIVED = 26;
 /** Seconds of alertness a fresh sighting or a noise is worth. Decays in `investigate`. */
@@ -72,6 +74,8 @@ export function createEnemy(
     alertness: 0,
     attackCooldown: randRange(0, 0.6),
     wanderAngle: randRange(0, TAU),
+    // Offset so a crowd of them does not step in lockstep.
+    walkPhase: randRange(0, TAU),
     hurtFlash: 0,
     visible: false,
   };
@@ -102,6 +106,7 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
   // The leap is a commitment: nothing it perceives mid-flight changes where it lands.
   if (e.state === "windup" || e.state === "lunge" || e.state === "recover") {
     updateAttack(e, deps, dt);
+    advanceGait(e);
     return;
   }
 
@@ -213,6 +218,17 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
   e.y = moved.y;
 
   e.facing = rotateToward(e.facing, lookAngle, 6 * dt);
+  advanceGait(e);
+}
+
+/**
+ * The shamble, advanced by ground covered rather than by time — same rule as the
+ * player's gait, for the same reason: feet that move at the pace the body does.
+ * Presentation reads it and nothing else does.
+ */
+function advanceGait(e: Enemy): void {
+  const dist = Math.hypot(e.x - e.prevX, e.y - e.prevY);
+  e.walkPhase = (e.walkPhase + (dist / ZOMBIE_STRIDE) * Math.PI) % TAU;
 }
 
 /** The three committed states. Nothing here looks at what the zombie can perceive. */

@@ -133,6 +133,39 @@ Draw order is the whole trick:
 you light rooms for each other. That single decision is most of what makes co-op darkness
 social rather than four people playing alone next to each other.
 
+### 8a. Actor art — `src/render/actorArt.ts`
+
+Actors used to be rotated rectangles with a stub on the nose, which conveys a facing and
+nothing else. They are now drawn as bodies seen from the one camera angle this game has:
+straight down. Shoulders, a head, two arms, two legs, and the weapon in the hands.
+
+Three decisions are the whole module, and they are the ones worth keeping if the art is
+ever replaced with sprites:
+
+- **The pose goes in, never out.** `drawActor` takes an `ActorPose` and draws it. It owns
+  no clocks and no state, so the same player drawn into four viewports in one frame
+  cannot disagree with itself, and replaying a simulation redraws it exactly.
+- **Animation state lives in the simulation.** `walkPhase`, `swingTimer`, `recoil` are
+  fields on the actor like any other. The renderer reads them; nothing in the sim reads
+  them back. That is what keeps a purely cosmetic gait out of the way of netcode later.
+- **Limbs are solved, not keyframed.** Hands are placed by the weapon and the elbow falls
+  out of two-bone IK, so one rig holds a pistol, an SMG, a shotgun, a crowbar and a
+  zombie's outstretched reach without a frame of authored animation.
+
+The gait is advanced by **distance travelled**, not by time — `walkPhase += dist / STRIDE
+* PI` — which is why feet never skate whether you are walking, sprinting or crawling.
+
+A weapon's silhouette is one row in `WEAPON_ART` plus one `art` field on its `WeaponDef`.
+That field is the *only* thing presentation reads off a weapon, so a new gun is a row of
+stats and a row of art, and neither table has to know about the other.
+
+The melee swing is the one place where art and simulation are deliberately coupled: the
+bar is already cocked whenever the weapon is raised, the sweep crosses the front of the
+body a third of the way through it, and `MELEE_CONTACT` in `src/sim/player.ts` resolves
+the damage at exactly that point. The alternative — hit on the button press, animate
+afterwards — is what makes melee in a lot of games feel like it is describing something
+that already happened.
+
 ### 8b. The story arc — `src/campaign/campaign.ts`, `src/sim/devices.ts`
 
 The nine-deck ship mission is the thing the objective chain was built to carry, and it is
@@ -321,6 +354,9 @@ In rough order of when it starts hurting:
 | World size, room count, enemies per player | `src/world/tilemap.ts`, `src/sim/world.ts` |
 | How long a terminal, a fusion socket and the bridge door take | `src/sim/devices.ts` (top of file) |
 | Melee reach, arc and damage | `WEAPONS` in `src/sim/entities.ts` |
+| How long a swing takes, and when in it the bar connects | `SWING_TIME` / `MELEE_CONTACT` in `src/sim/player.ts` |
+| Stride length — how far the body walks per footfall | `STRIDE` in `src/sim/player.ts`, `ZOMBIE_STRIDE` in `src/sim/enemy.ts` |
+| Body proportions, and what each weapon looks like | `drawActor` / `WEAPON_ART` in `src/render/actorArt.ts` |
 | How hard a floor leans | `pressure` on the mission's floor spec |
 | How dark a blackout deck is, and how lit a powered ship is | `BLACKOUT_DARKNESS` / `POWERED_DARKNESS` in `src/render/renderer.ts` |
 | Zoom / world height per viewport | `VIEW_HEIGHT` in `src/render/camera.ts` |

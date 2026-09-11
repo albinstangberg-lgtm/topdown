@@ -8,6 +8,7 @@ import type { Enemy, Player } from "../sim/entities";
 import { zombieDef } from "../sim/zombies";
 import type { GameWorld } from "../sim/world";
 import type { VisionLight } from "../vision/visibility";
+import { drawActor, muzzleOffset, type HandsPose } from "./actorArt";
 import type { Camera } from "./camera";
 import type { Viewport } from "./viewport";
 
@@ -22,7 +23,9 @@ import type { Viewport } from "./viewport";
  *   5. wall silhouettes — drawn last so blocks read as solid black everywhere
  *   6. HUD              — screen space, no camera transform
  *
- * All blocks, no art. Swap the draw* functions for sprites later; nothing else changes.
+ * The world is still drawn as blocks; the actors are not — a player or a zombie is a
+ * body seen from directly above, rigged in `./actorArt.ts`. Swap the draw* functions for
+ * sprites later; nothing else changes.
  */
 
 const COLOR_FLOOR = "#cfc9b4";
@@ -830,19 +833,33 @@ export class Renderer {
     // way, so a peek reads as a peek without detaching the sprite from its hitbox.
     const x = lerp(p.prevX, p.x, alpha) + (p.eyeX - p.x) * 0.55;
     const y = lerp(p.prevY, p.y, alpha) + (p.eyeY - p.y) * 0.55;
-    const body = p.downed ? "#6b6b6b" : (p.hurtFlash > 0.15 ? "#ffffff" : p.color);
-    // The barrel extends as the weapon comes up and the body flattens as you go to
-    // the floor — both stances are readable off the world, without UI. A melee weapon
-    // gets a short stub of one rather than a rifle's worth: you can tell at a glance
-    // across the room who has found a gun and who is still carrying a crowbar.
-    const barrel = p.weapon.melee ? 0.3 + p.weaponUp * 0.25 : 0.45 + p.weaponUp * 0.55;
-    drawBlockActor(
-      ctx, x, y, p.facing, p.radius, body, "#ffffff", true, barrel, proneAmount(p),
-    );
+    // Downed keeps the identity colour, dragged most of the way to grey: you still need
+    // to know WHO is on the floor across a room, and a flat grey body does not say.
+    const body = p.downed
+      ? mixHex(p.color, "#8a8a94", 0.45)
+      : (p.hurtFlash > 0.15 ? "#ffffff" : p.color);
+    const hands = handsOf(p);
+    drawActor(ctx, {
+      x, y, facing: p.facing, radius: p.radius,
+      body, outline: "#0c0d12",
+      // Crawling is most of the way to flat: a downed player is on the floor, and the
+      // stance machine is not what says so — `downed` is its own thing.
+      prone: p.downed ? 0.7 : proneAmount(p),
+      walkPhase: p.walkPhase,
+      // Gait depth off the actual speed: a walk steps, a sprint strides, a crawl drags.
+      walkAmount: Math.min(1.15, Math.hypot(p.vx, p.vy) / PLAYER_TUNING.WALK_SPEED),
+      hands,
+      shamble: 0,
+    });
 
     if (p.muzzleFlash > 0) {
-      const mx = x + Math.cos(p.facing) * (p.radius + 14);
-      const my = y + Math.sin(p.facing) * (p.radius + 14);
+      // The flash comes off the muzzle of the gun the hands are actually holding, so a
+      // lowered weapon flashes low and a shotgun flashes further out than a pistol.
+      const off = hands === null
+        ? { x: Math.cos(p.facing) * (p.radius + 14), y: Math.sin(p.facing) * (p.radius + 14) }
+        : rotate(muzzleOffset(hands, p.radius), p.facing);
+      const mx = x + off.x;
+      const my = y + off.y;
       ctx.globalCompositeOperation = "lighter";
       ctx.fillStyle = `rgba(255,232,160,${0.55 * p.muzzleFlash})`;
       ctx.beginPath();
@@ -1098,7 +1115,6 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-/** A blocky actor: body square, barrel stub, outline. Placeholder art, on purpose. */
 /** 0 upright, 1 flat on the floor. Ramps through the dive and the scramble back up. */
 function proneAmount(p: Player): number {
   const t = PLAYER_TUNING;
@@ -1133,7 +1149,17 @@ function drawZombie(ctx: CanvasRenderingContext2D, e: Enemy, alpha: number): voi
   }
 
   const body = e.hurtFlash > 0.1 ? "#ffffff" : down ? "#5a6b5c" : def.color;
-  drawBlockActor(ctx, x, y, e.facing, e.radius, body, "#22301f", false, 0, down ? 1 : 0);
+  drawActor(ctx, {
+    x, y, facing: e.facing, radius: e.radius,
+    body, outline: "#101a11",
+    prone: down ? 1 : 0,
+    walkPhase: e.walkPhase,
+    walkAmount: Math.min(1.2, Math.hypot(e.vx, e.vy) / def.wanderSpeed),
+    // Carries nothing, so the arms are free to be the tell: out in front while it is
+    // coming for you, and further out the moment it commits to the leap.
+    hands: null,
+    shamble: e.state === "lunge" || e.state === "windup" ? 1 : 0.72,
+  });
 
   if (e.state === "windup") {
     // The telegraph: a ring that closes on it as the leap gets closer.
@@ -1155,30 +1181,39 @@ function drawZombie(ctx: CanvasRenderingContext2D, e: Enemy, alpha: number): voi
   }
 }
 
-function drawBlockActor(
-  ctx: CanvasRenderingContext2D, x: number, y: number, facing: number,
-  radius: number, body: string, outline: string, thickOutline = false, barrel = 1,
-  prone = 0,
-): void {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(facing);
+/**
+ * What the renderer puts in a player's hands: the weapon's silhouette plus wherever it
+ * is in its swing, its kick and its reload. Every term is read straight off the
+ * simulation — there is no animation state in the renderer, so two viewports drawing
+ * the same player in the same frame cannot disagree.
+ */
+function handsOf(p: Player): HandsPose | null {
+  if (p.downed) return null; // crawling: both hands on the floor
+  return {
+    art: p.weapon.art,
+    up: p.weaponUp,
+    recoil: p.recoil,
+    swing: p.swingTimer > 0 ? 1 - p.swingTimer / p.swingTime : 0,
+    swingSide: p.swingSide,
+    reload: p.reloadTimer > 0 ? 1 - p.reloadTimer / p.weapon.reloadTime : 0,
+  };
+}
 
-  // A body on the floor reads from above as longer along its facing and narrower across.
-  const halfLen = radius * (1 + 0.55 * prone);
-  const halfWid = radius * (1 - 0.42 * prone);
+/** Blend two hex colours. `t` is how far from `a` toward `b`. */
+function mixHex(a: string, b: string, t: number): string {
+  const na = parseInt(a.slice(1), 16);
+  const nb = parseInt(b.slice(1), 16);
+  const ch = (shift: number) => {
+    const va = (na >> shift) & 255;
+    const vb = (nb >> shift) & 255;
+    return Math.round(va + (vb - va) * t).toString(16).padStart(2, "0");
+  };
+  return `#${ch(16)}${ch(8)}${ch(0)}`;
+}
 
-  ctx.fillStyle = "rgba(0,0,0,0.35)";
-  ctx.fillRect(-halfLen + 3, -halfWid + 4, halfLen * 2, halfWid * 2);
-
-  ctx.fillStyle = body;
-  ctx.fillRect(-halfLen, -halfWid, halfLen * 2, halfWid * 2);
-  ctx.strokeStyle = outline;
-  ctx.lineWidth = thickOutline ? 2.5 : 1.5;
-  ctx.strokeRect(-halfLen, -halfWid, halfLen * 2, halfWid * 2);
-
-  // Barrel, always pointing along `facing` — the only readable direction cue on a block.
-  ctx.fillStyle = outline;
-  ctx.fillRect(halfLen - 2, -3, 16 * barrel, 6);
-  ctx.restore();
+/** Body-space offset into world space. Used to hang effects off a limb or a muzzle. */
+function rotate(v: { x: number; y: number }, angle: number): { x: number; y: number } {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos };
 }
