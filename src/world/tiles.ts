@@ -52,7 +52,7 @@ export interface TileDef {
    * the reactor, `locker` hands out the next weapon up. See `src/sim/devices.ts` — the
    * tile says what kind of thing it is, the device system says what using one does.
    */
-  device?: "terminal" | "socket" | "locker";
+  device?: "terminal" | "socket" | "locker" | "supply" | "lever";
   /** True once a device has been used. Kept as a separate tile so a reload remembers. */
   spent?: boolean;
   /** What a device turns into once it has been used. */
@@ -64,6 +64,81 @@ export interface TileDef {
   blastDoor?: boolean;
   /** Stairs that go DOWN rather than up. Purely how it is drawn and announced. */
   descends?: boolean;
+  /**
+   * A ceiling vent. The duct network is every vent on the floor, and a Stalker in it
+   * is overhead rather than in the room — you hear it travelling, and a shot into the
+   * grate is the only thing that can touch it up there. The tile itself is ordinary
+   * floor: the vent is above you, not underfoot.
+   */
+  vent?: boolean;
+  /**
+   * Standing water. Touching flooded tiles gather into one puddle (the same way car
+   * tiles gather into one car), and a puddle is what a cable electrifies.
+   */
+  flooded?: boolean;
+  /** A live cable. Put a bullet in it and the puddle it touches goes live. */
+  cable?: boolean;
+  /** Leaks coolant: thick fog out to this radius in world units, through open floor. */
+  coolant?: number;
+  /** An open bulkhead. The welding tool turns it into `weldsInto`. */
+  bulkhead?: boolean;
+  /** What a welded bulkhead becomes. Solid, and the squad is behind it. */
+  weldsInto?: number;
+  /** A welded bulkhead: solid, and taking hits from whatever is on the other side. */
+  welded?: boolean;
+  /** What a welded bulkhead falls back to once it has been chewed open. */
+  weldFailsInto?: number;
+  /**
+   * A supply cache. Walk onto it to take this utility item — the same walk-on device
+   * a weapon locker is. Keys come from `ITEMS` in `src/sim/items.ts`; the union is
+   * repeated here for the same reason `device` is, so this table imports nothing.
+   */
+  supply?: "medkit" | "adrenaline" | "flare" | "welder";
+  /**
+   * A rack of something heavy. Walk onto it with empty hands and you pick one up in
+   * both of them — see `CarryKind` in `src/sim/entities.ts`. Racks are not spent: the
+   * scarcity of a fusion core is the walk back across the deck with it, not the supply.
+   */
+  dispense?: "core" | "battery";
+  /** Stand on it to put charge back into your suit. */
+  charger?: boolean;
+  /**
+   * An emergency depressurisation lever. Pull it and the room blows down through the
+   * nearest breach for a few seconds — see the breach system in `src/sim/world.ts`.
+   * Once per lever: it becomes `usedInto` afterwards, like every other spent device.
+   */
+  breachLever?: boolean;
+  /**
+   * Where the air goes. A hole in the hull: the thing a depressurisation drags
+   * everything toward, and the thing that throws a walker off the ship entirely.
+   */
+  breach?: boolean;
+  /**
+   * Floor inside an airlock chamber. Touching airlock tiles gather into one chamber
+   * the way flooded tiles gather into one puddle, and the chamber is what cycles.
+   */
+  airlock?: boolean;
+  /**
+   * An airlock door. Open as authored; the chamber makes it solid for the length of a
+   * cycle and opens it again afterwards, by swapping to `shutInto` and back.
+   */
+  airlockDoor?: boolean;
+  /** What an airlock door becomes while it is shut, and what that becomes when it opens. */
+  shutInto?: number;
+  opensInto?: number;
+  /**
+   * Something bolted down hard enough to hold on to. Standing on one anchors you
+   * against a depressurisation — which is what makes a breach a plan rather than a
+   * coin flip, because the railings are drawn on the map and you can see them.
+   */
+  railing?: boolean;
+  /**
+   * Which creature an enemy spawn puts down. Keys come from `ZOMBIE_DEFS` in
+   * `src/sim/zombies.ts`; left out, a spawn tile places the default walker. This is
+   * how the two mutants get onto a floor at all — neither is ever drawn at random,
+   * because both of them are about the place they are standing.
+   */
+  enemyKind?: "walker" | "strangler" | "stalker" | "lurker";
   /** Editor palette colour. */
   color: string;
   /** Single character for the compact text form of a level. */
@@ -152,6 +227,114 @@ export const TILE_DEFS: readonly TileDef[] = [
     stairs: true, descends: true,
     color: "#2f8fb8", glyph: "v",
     hint: "the way DOWN. Same rule as ^ — the whole squad on it moves to the next floor" },
+
+  // --- The ship's own hazards, and the things that live in them ---------------
+
+  { id: 29, key: "vent", name: "Ceiling vent", solid: false, opaque: false, vent: true,
+    color: "#6f7c8c", glyph: "n",
+    hint: "a duct grate overhead. Stalkers travel between vents; you hear one coming and can shoot it through the grate" },
+  { id: 30, key: "water", name: "Flooded floor", solid: false, opaque: false, flooded: true,
+    color: "#3d6b7a", glyph: "~",
+    hint: "ankle-deep water. Touching tiles are one puddle — and a puddle is what a cable electrifies" },
+  { id: 31, key: "cable", name: "Exposed cable", solid: true, opaque: false, blocksShots: true,
+    cable: true,
+    color: "#d8c24a", glyph: "=",
+    hint: "a torn conduit. Shoot it and every flooded tile it touches goes live: cooks the horde, blinds anyone near it" },
+  { id: 32, key: "coolant", name: "Coolant leak", solid: true, opaque: false, blocksShots: true,
+    coolant: 190,
+    color: "#9fe8d8", glyph: "%",
+    hint: "a split coolant line. Fills the room with fog that kills vision cones dead — in there you navigate by sound" },
+  { id: 33, key: "bulkhead", name: "Bulkhead door", solid: false, opaque: false, bulkhead: true,
+    weldsInto: 34, prop: "door",
+    color: "#8a8f9a", glyph: "H",
+    hint: "an open bulkhead. Stand in it with a welding tool and hold USE to seal it behind you" },
+  { id: 34, key: "bulkheadWelded", name: "Bulkhead (welded)", solid: true, opaque: true,
+    welded: true, weldFailsInto: 33, prop: "door",
+    color: "#c9a23a", glyph: "h",
+    hint: "a bulkhead welded shut. Solid — but whatever is on the other side will chew through it eventually" },
+
+  // --- Supply caches. One row per item; they all empty into the same box --------
+
+  { id: 35, key: "medkitCache", name: "Medkit cache", solid: false, opaque: false,
+    device: "supply", supply: "medkit", usedInto: 39, light: 60,
+    color: "#ff7a9a", glyph: "+",
+    hint: "a first-aid box. Walk onto it to take a medkit into your utility slot" },
+  { id: 36, key: "adrenalineCache", name: "Adrenaline cache", solid: false, opaque: false,
+    device: "supply", supply: "adrenaline", usedInto: 39, light: 60,
+    color: "#ffe66b", glyph: "j",
+    hint: "a stim locker. Walk onto it to take an adrenaline shot" },
+  { id: 37, key: "flareCache", name: "Flare cache", solid: false, opaque: false,
+    device: "supply", supply: "flare", usedInto: 39, light: 60,
+    color: "#ff9a4a", glyph: "k",
+    hint: "a box of hand flares. Walk onto it to take one you can throw" },
+  { id: 38, key: "welderCache", name: "Welder cache", solid: false, opaque: false,
+    device: "supply", supply: "welder", usedInto: 39, light: 60,
+    color: "#7ad2ff", glyph: "y",
+    hint: "a maintenance kit. Walk onto it to take a welding tool and its three charges" },
+  { id: 39, key: "cacheEmpty", name: "Supply cache (empty)", solid: false, opaque: false,
+    device: "supply", spent: true,
+    color: "#5a5f68", glyph: "x", hint: "a cache somebody has already emptied" },
+
+  // Heavy things, and the wall socket that pays for the rest of it ----------------
+
+  { id: 42, key: "coreRack", name: "Fusion core rack", solid: false, opaque: false,
+    dispense: "core", light: 70,
+    color: "#8bff7a", glyph: "O",
+    hint: "a rack of fusion cores. Walk on with empty hands to shoulder one — both hands, so your rifle goes away" },
+  { id: 43, key: "batteryRack", name: "Battery rack", solid: false, opaque: false,
+    dispense: "battery", light: 70,
+    color: "#7ad2ff", glyph: "b",
+    hint: "spare suit cells. Carry one to a teammate and hold USE beside them to swap it in" },
+  { id: 44, key: "charger", name: "Charging point", solid: false, opaque: false,
+    charger: true, light: 110,
+    color: "#5affd2", glyph: "e",
+    hint: "a live socket. Stand on it to put charge back into your suit — slowly, and in the open" },
+
+  // Vacuum. A lever, a hole, and something to hold on to -------------------------
+
+  { id: 45, key: "breachLever", name: "Breach lever", solid: false, opaque: false,
+    device: "lever", breachLever: true, usedInto: 46, light: 80,
+    color: "#ffd257", glyph: "Y",
+    hint: "emergency depressurisation. Hold USE to blow the room down through the nearest hull breach — once" },
+  { id: 46, key: "breachLeverSpent", name: "Breach lever (pulled)", solid: false, opaque: false,
+    device: "lever", spent: true,
+    color: "#6b5a3f", glyph: "\\",
+    hint: "a lever somebody has already pulled" },
+  { id: 47, key: "breach", name: "Hull breach", solid: false, opaque: false, breach: true,
+    color: "#1a1f3a", glyph: "@",
+    hint: "a hole in the hull, plated over. A lever opens it: everything loose in the room goes that way" },
+  { id: 48, key: "railing", name: "Railing", solid: false, opaque: false, railing: true,
+    color: "#9aa3ae", glyph: "|",
+    hint: "bolted down. Stand on it and a depressurisation cannot drag you off your feet" },
+
+  // Airlocks. Two at a time, five seconds, and the rest of you waiting outside --------
+
+  { id: 49, key: "airlock", name: "Airlock chamber", solid: false, opaque: false,
+    airlock: true,
+    color: "#6f8fae", glyph: ":",
+    hint: "chamber floor. Two people fit; a third stays outside while it equalizes. Wall it with airlock doors" },
+  { id: 50, key: "airlockDoor", name: "Airlock door", solid: false, opaque: false,
+    airlockDoor: true, shutInto: 51, prop: "door",
+    color: "#8fb6d8", glyph: "]",
+    hint: "an airlock door, open. The chamber shuts both of them for the length of a cycle" },
+  { id: 51, key: "airlockShut", name: "Airlock door (shut)", solid: true, opaque: true,
+    airlockDoor: true, opensInto: 50, prop: "door",
+    color: "#41627f", glyph: "[",
+    hint: "an airlock door mid-cycle. Rarely authored — the chamber makes these" },
+
+  // Placed mutants. Neither is ever drawn at random — see `weight: 0` in ZOMBIE_DEFS.
+  { id: 40, key: "stranglerSpawn", name: "Strangler", solid: false, opaque: false,
+    spawn: "enemy", enemyKind: "strangler",
+    color: "#8f6f9a", glyph: "S",
+    hint: "one Strangler, holding this exact spot. Put it in a dark corner with a long line down a corridor" },
+  { id: 41, key: "stalkerSpawn", name: "Stalker", solid: false, opaque: false,
+    spawn: "enemy", enemyKind: "stalker",
+    color: "#5c6f7a", glyph: "s",
+    hint: "one Stalker. It will take the ducts and come back at whoever is on their own" },
+  { id: 52, key: "lurkerSpawn", name: "Ceiling Lurker", solid: false, opaque: false,
+    spawn: "enemy", enemyKind: "lurker",
+    color: "#6a5c7a", glyph: "l",
+    hint: "one Ceiling Lurker. Needs vents to live in — it drops on anyone who stands still under an unlit grate" },
 ];
 
 export const TILE_FLOOR = 0;

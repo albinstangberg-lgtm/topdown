@@ -29,10 +29,42 @@ export interface Placement {
   gain: number;
   /** -1 to 1, left to right. */
   pan: number;
+  /**
+   * How much geometry is between the sound and whoever is listening: 0 clear, 1 behind
+   * a bulkhead. Quiet things vanish behind a wall and loud ones become a rumble — the
+   * filter and the gain cut are both driven from this one number, so a sound that opens
+   * up as somebody steps round a corner snaps to crisp on its own.
+   */
+  occlusion?: number;
 }
 
+/**
+ * How hard a wall works on a sound. `GAIN` is what is left of one behind geometry and
+ * `CUTOFF` is where the low-pass sits: 300Hz keeps the thump of a shotgun and takes the
+ * entire top off a footstep.
+ *
+ * `FLOOR` is the part that makes the mechanic rather than the mix. Behind a wall the
+ * audibility threshold rises, so a sound that was quiet to begin with does not merely
+ * get quieter — it is **not played at all**. That is the difference between "I can just
+ * about hear something shuffling in the next room" (which gives the ambush away) and
+ * "the room next door is silent" (which is the game).
+ */
+const OCCLUDED_GAIN = 0.16;
+const OCCLUDED_CUTOFF = 300;
+const OCCLUDED_FLOOR = 0.075;
+
 /** A sound heard from nowhere in particular — UI, banners, mission events. */
-export const CENTRE: Placement = { gain: 1, pan: 0 };
+export const CENTRE: Placement = { gain: 1, pan: 0, occlusion: 0 };
+
+/**
+ * The audibility test, in one place so the gate and the public rule cannot drift.
+ * `level` is the voice's own loudness before placement — which is what lets a quiet
+ * sound and a loud one behave differently through the same wall.
+ */
+function audibleAt(gain: number, occlusion: number, level: number): boolean {
+  const floor = 0.01 + OCCLUDED_FLOOR * occlusion;
+  return gain * level > floor;
+}
 
 export class AudioBus {
   private ctx: AudioContext | null = null;
@@ -98,6 +130,18 @@ export class AudioBus {
   }
 
   /**
+   * Would a voice of this loudness survive being placed here? Public because the
+   * occlusion rule is a mechanic — "you cannot hear footsteps through a bulkhead but
+   * you can hear a shotgun" is a design promise, and it should be assertable rather
+   * than something you have to put your ear to the screen to check.
+   */
+  audible(at: Placement, level = 1): boolean {
+    const occlusion = Math.max(0, Math.min(1, at.occlusion ?? 0));
+    const gain = at.gain * (1 - (1 - OCCLUDED_GAIN) * occlusion);
+    return audibleAt(gain, occlusion, level);
+  }
+
+  /**
    * Where a sound at (x, y) sits for the squad: loudest by the NEAREST listener, panned
    * against that listener's own view. Split screen has no single pair of ears, and
    * averaging four positions puts every sound in the middle of nowhere — the nearest
@@ -126,7 +170,7 @@ export class AudioBus {
     const across = rotates
       ? dx * Math.cos(-best.facing + Math.PI / 2) - dy * Math.sin(-best.facing + Math.PI / 2)
       : dx;
-    return { gain, pan: Math.max(-1, Math.min(1, across / 420)) };
+    return { gain, pan: Math.max(-1, Math.min(1, across / 420)), occlusion: 0 };
   }
 
   /**
@@ -137,7 +181,7 @@ export class AudioBus {
     freq: number; q?: number; type?: BiquadFilterType;
     attack?: number; decay: number; level?: number; sweepTo?: number;
   }): void {
-    const gate = this.begin(name, at);
+    const gate = this.begin(name, at, opts);
     if (!gate) return;
     const { ctx, out, when } = gate;
     const src = ctx.createBufferSource();
@@ -152,7 +196,7 @@ export class AudioBus {
     filter.Q.value = opts.q ?? 1;
     const env = ctx.createGain();
     const attack = opts.attack ?? 0.004;
-    const peak = (opts.level ?? 1) * at.gain;
+    const peak = (opts.level ?? 1) * gate.gain;
     env.gain.setValueAtTime(0.0001, when);
     env.gain.linearRampToValueAtTime(peak, when + attack);
     env.gain.exponentialRampToValueAtTime(0.0001, when + attack + opts.decay);
@@ -166,7 +210,7 @@ export class AudioBus {
     freq: number; to?: number; type?: OscillatorType;
     attack?: number; decay: number; level?: number; detune?: number;
   }): void {
-    const gate = this.begin(name, at);
+    const gate = this.begin(name, at, opts);
     if (!gate) return;
     const { ctx, out, when } = gate;
     const osc = ctx.createOscillator();
@@ -178,7 +222,7 @@ export class AudioBus {
     if (opts.detune) osc.detune.value = opts.detune;
     const env = ctx.createGain();
     const attack = opts.attack ?? 0.01;
-    const peak = (opts.level ?? 0.5) * at.gain;
+    const peak = (opts.level ?? 0.5) * gate.gain;
     env.gain.setValueAtTime(0.0001, when);
     env.gain.linearRampToValueAtTime(peak, when + attack);
     env.gain.exponentialRampToValueAtTime(0.0001, when + attack + opts.decay);
@@ -192,9 +236,12 @@ export class AudioBus {
    * and hand back a panned destination. Null means "make no sound" — every caller
    * treats that as ordinary, because a silent bus is a supported state.
    */
-  private begin(name: string, at: Placement): { ctx: AudioContext; out: AudioNode; when: number } | null {
+  private begin(name: string, at: Placement, opts: { level?: number }):
+    { ctx: AudioContext; out: AudioNode; when: number; gain: number } | null {
     this.played[name] = (this.played[name] ?? 0) + 1;
-    if (at.gain <= 0.01) return null;
+    const occlusion = Math.max(0, Math.min(1, at.occlusion ?? 0));
+    const gain = at.gain * (1 - (1 - OCCLUDED_GAIN) * occlusion);
+    if (!audibleAt(gain, occlusion, opts.level ?? 1)) return null;
     if (this.voicesThisFrame >= MAX_VOICES_PER_FRAME) return null;
     if (!this.ctx || !this.master || this.ctx.state !== "running") return null;
     this.voicesThisFrame++;
@@ -202,7 +249,20 @@ export class AudioBus {
     const panner = this.ctx.createStereoPanner();
     panner.pan.value = at.pan;
     panner.connect(this.master);
-    return { ctx: this.ctx, out: panner, when: this.ctx.currentTime };
+
+    if (occlusion <= 0.01) {
+      return { ctx: this.ctx, out: panner, when: this.ctx.currentTime, gain };
+    }
+    // A wall is a low-pass filter. One node, in front of the panner, and every voice
+    // in the game inherits the behaviour without knowing about it.
+    const muffle = this.ctx.createBiquadFilter();
+    muffle.type = "lowpass";
+    // Sweeps from "some of the top left" to "nothing but the rumble" as the geometry
+    // between the two thickens.
+    muffle.frequency.value = OCCLUDED_CUTOFF + (1 - occlusion) * 4200;
+    muffle.Q.value = 0.4;
+    muffle.connect(panner);
+    return { ctx: this.ctx, out: muffle, when: this.ctx.currentTime, gain };
   }
 
   private buildNoise(): void {

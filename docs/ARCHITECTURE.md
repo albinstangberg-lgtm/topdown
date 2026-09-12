@@ -180,6 +180,127 @@ one is a different *rule* rather than a different set of assets:
 None of it needed a scripting system. An act is a floor spec, a tile, and one branch in
 the objective chain.
 
+### 8c. The mutants — `src/sim/mutants.ts`
+
+Three creatures that do something a walker cannot: a ranged grab that drags a player
+away, a leap that pins one to the floor, and one that never touches the floor at all.
+Each is one row in `ZOMBIE_DEFS` with an ability block on it (`tendril`, `pounce`,
+`drop`), so the registry rule still holds — but their *state machines* live in their own
+file rather than as more branches inside `updateEnemy`, because an ambusher, a pouncer
+and a thing in the ceiling have nothing in common except a body and a health bar.
+
+The seam that makes this cheap: each entry point **takes only the frames its own
+behaviour owns and hands the rest back**. A Stalker with nobody isolated, or a Strangler
+that has been forced into a melee, falls through to the shared machine and behaves like
+the unusually unpleasant zombie it still is.
+
+One trap worth knowing about, because it cost a debugging session: `updateEnemy` runs
+`stateTimer` down *before* it delegates. An ability that decrements it again halves every
+windup it owns, and the symptom is not an error — it is a pounce that lands short.
+
+The Ceiling Lurker is the one that needed a new axis rather than a new ability. It is
+never in the room: `overhead(e)` is true for its `roost` and `vent` states, and that one
+predicate is what the visibility pass, the suction and the melee reach all read, so
+"in the ceiling" is decided in one place instead of being re-derived by everything that
+could otherwise hit it. Two things fell out of writing it that are worth keeping in mind
+for the next creature:
+
+- It needed its **own** roosting state. The obvious move was to reuse `lurk`, which the
+  Strangler already had — but the Strangler lurks *on the floor*, and folding the two
+  together would have made it untouchable.
+- A dwell that is nearly finished must **hold its own clock**. `updateEnemy` runs the
+  hop timer down in the background, so the drop code re-arms `stateTimer` every frame it
+  has a mark; without that it wanders off a fraction before committing, which reads as
+  the creature being broken rather than as a timer being shared.
+
+All three creatures grab players through one shared type, `Restraint` (`sim/entities.ts`).
+Everything downstream — the weapon, the movement, the HUD, what a teammate can do about
+it — reads the restraint rather than asking which creature caused it. `gripOf(e)` is the
+matching seam on the other side: the pin code wants damage, chew rate and shove
+resistance, and it reads whichever ability block the creature happens to carry rather
+than assuming a pounce. The creature
+refreshes the anchor on it every step, which is what lets the player module be dragged
+toward something without ever learning what an `Enemy` is; the same seam that keeps melee
+and revives out of the player's business.
+
+### 8d. Sound you can see — `src/sim/noise.ts`, the ripple pass in the renderer
+
+The noise field was always the game's *attention* system rather than literally sound:
+"what pulls the dead toward a point". Two things now ride it that are not sounds at all,
+and both are honest about it — a lit flashlight in a dead-dark room (`beam`) and, going
+the other way, a shambler's footfall, which is a sound that the dead deliberately
+**cannot hear**.
+
+That last one is the load-bearing flag. `byDead` marks a noise as made by something
+already dead: `loudestAt` skips those, so a crowd never walks toward its own shuffling —
+but the renderer draws every one of them as an expanding ring. That is what makes a
+coolant bank playable rather than a blindfold: your eyes are gone, and the floor is
+still telling you where things are.
+
+---
+
+### 8e. One battery for the whole suit — `src/sim/power.ts`
+
+CORE 20 is a single number on the player and a handful of rules about who may spend it.
+The flashlight, the magazine and the welding tool all draw off `p.battery`, which is what
+makes the light a resource decision rather than a toggle you set once on load.
+
+The module exists so that **one function decides what is in somebody's hands**.
+`activeWeapon(p)` answers it — both hands full, an empty magazine with a flat suit behind
+it, or a melee loadout all resolve to the sidearm — and the trigger, the HUD, the melee
+code and the renderer all call it rather than each working it out from `p.weapon`. The
+bug this prevents is not subtle: a HUD that says "Pistol" while the swing code swings a
+crowbar is a game that lies about the only thing the player is looking at.
+
+The design rule written at the top of the file is load-bearing and worth restating here:
+**the crowbar and the halo are free.** A flat cell is dark and dangerous, never a soft
+lock. Everything in the module is arranged to protect that — which is also why a partial
+magazine is a first-class outcome (`drawMagazine` returns what actually went in) instead
+of a refusal.
+
+### 8f. Sound that geometry can stop — `src/world/raycast.ts`, `src/audio/`
+
+Vision asks a yes/no question and a raycast answers it. Sound is not yes/no, so
+`wallsBetween` walks the same DDA and returns **how many** opaque tiles a line crosses,
+capped. That one number drives everything: the listener is chosen by the best line
+(distance only breaks the tie), what is left of the line sets a gain cut and a low-pass,
+and — the part that is a mechanic rather than a mix — it **raises the audibility floor**.
+Behind a wall a quiet sound is not attenuated, it is never played.
+
+That threshold is the whole point. With plain 2D distance you hear a shambler through a
+bulkhead as clearly as one in the room, which silently deletes every ambush the game has,
+because the player always knows. The audibility rule lives in one module-level function
+(`audibleAt`) used by both the public `audible()` test and the private gate inside
+`begin()`, so the promise the design makes — "a footstep next door is gone, a shotgun
+next door is a thump" — cannot drift away from what the bus actually does. It is also
+why the rule is *assertable*: the smoke suite checks it rather than somebody putting an
+ear to the screen.
+
+### 8g. Vacuum, airlocks and the flood-fill that makes them cheap
+
+Both of the deck hazards this round are the same trick the cars and the puddles use:
+**touching tiles flood-fill into one body**, so an author draws a shape and the sim gets
+an object. An airlock chamber is a group of `airlock` tiles plus the doors that touch it;
+shutting it swaps every door tile for its solid twin, which is why "the doors are shut"
+needs no per-door state at all.
+
+Two things in here were learned the hard way and are cheap to get wrong again:
+
+- **Never key live state by array index.** The airlock cycle was originally keyed by the
+  index into `map.airlocks`, and shutting the doors calls `refresh()`, which rebuilds
+  that list — so a running cycle lost its own entry and the doors never opened again.
+  Cycles are keyed by `airlockKey(lock)` (the lowest tile index in the chamber), which
+  survives the rebuild.
+- **Wind has to move bodies positionally.** Both the player step and the enemy step damp
+  their own velocity toward what they are trying to do, so a force added by the breach
+  was erased before anything moved. `dragToward` displaces through `moveCircle` instead,
+  which also means the wind can never push somebody into a wall.
+
+The suction is deliberately tuned to just under walk speed: a depressurisation you cannot
+walk out of is a cutscene, and one that does not hurt at the hole is a free horde delete.
+Everything else about it is honest cost — shared oxygen, a lever that works once, and
+railings drawn on the floor where the squad can plan around them.
+
 ---
 
 ### 9. The level format — `src/world/level.ts`, `src/levels/`
@@ -354,6 +475,21 @@ In rough order of when it starts hurting:
 | World size, room count, enemies per player | `src/world/tilemap.ts`, `src/sim/world.ts` |
 | How long a terminal, a fusion socket and the bridge door take | `src/sim/devices.ts` (top of file) |
 | Melee reach, arc and damage | `WEAPONS` in `src/sim/entities.ts` |
+| Tendril range, reel speed and how much cuts it | `tendril` on the Strangler row in `src/sim/zombies.ts` |
+| Pounce range, the skitter, the blind and the shove | `pounce` on the Stalker row in `src/sim/zombies.ts` |
+| What each utility item is worth | `src/sim/items.ts` (top of file) |
+| Current damage, discharge length, cable recharge | `ARC_DAMAGE` / `ARC_TIME` / `CABLE_RECHARGE` in `src/sim/world.ts` |
+| How much a weld takes before it comes off | `WELD_INTEGRITY` in `src/sim/items.ts`, `WELD_CHEW` in `src/sim/world.ts` |
+| How thick coolant fog is, and how far it spreads | `coolant` on the tile, `bakeFog` in `src/world/tilemap.ts` |
+| How often a lit beam in the dark calls something | `LIGHT_TELL_INTERVAL` in `src/sim/player.ts` |
+| What light, a weld and a magazine cost the suit | `LIGHT_DRAIN` / `WELD_DRAW` / `draw` on the weapon, in `src/sim/power.ts` |
+| How far the cone dips after a shot, and for how long | `DIP_FLOOR` / `DIP_TIME` in `src/sim/power.ts` |
+| Charging rate, cell size and handover reach | `CHARGER_RATE` / `CELL_CHARGE` / `HANDOVER_RANGE` in `src/sim/power.ts` |
+| How long a breach runs, how hard it pulls, what the air costs | `BREACH_TIME` / `SUCTION_FORCE` / `OXYGEN_DRAIN` in `src/sim/world.ts` |
+| How many fit in an airlock and how long a cycle takes | `AIRLOCK_CAPACITY` / `AIRLOCK_CYCLE` in `src/sim/world.ts` |
+| How much a wall takes off a sound, and what it silences | `OCCLUDED_GAIN` / `OCCLUDED_CUTOFF` / `OCCLUDED_FLOOR` in `src/audio/bus.ts` |
+| How many walls count as "behind a bulkhead" | `GameAudio.OCCLUSION_CAP` in `src/audio/gameAudio.ts` |
+| The Lurker's dwell, reach and how often it moves grate | `drop` on the Lurker row in `src/sim/zombies.ts` |
 | How long a swing takes, and when in it the bar connects | `SWING_TIME` / `MELEE_CONTACT` in `src/sim/player.ts` |
 | Stride length — how far the body walks per footfall | `STRIDE` in `src/sim/player.ts`, `ZOMBIE_STRIDE` in `src/sim/enemy.ts` |
 | Body proportions, and what each weapon looks like | `drawActor` / `WEAPON_ART` in `src/render/actorArt.ts` |

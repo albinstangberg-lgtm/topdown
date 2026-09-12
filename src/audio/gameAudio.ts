@@ -1,4 +1,6 @@
 import { AudioBus, CENTRE, EARSHOT, type Placement } from "./bus";
+import { wallsBetween } from "../world/raycast";
+import type { TileMap } from "../world/tilemap";
 import type { GameEvent, GameWorld } from "../sim/world";
 import type { Noise } from "../sim/noise";
 
@@ -20,6 +22,14 @@ import type { Noise } from "../sim/noise";
  *   shake already reads.
  * - **The zombies themselves**, scanned for state changes. A windup gets its own
  *   screech, because a telegraph you can only see is no use when it is behind you.
+ *
+ * Everything positional is **occluded against the geometry**. With plain 2D distance
+ * you hear a shambler through a metal bulkhead as clearly as one in the room with you,
+ * which quietly deletes every ambush the game has: the player always knows. So each
+ * sound is placed against the listener who has the best LINE to it rather than simply
+ * the nearest one, and what is left of the line decides both the level and a low-pass.
+ * Step round the corner and the same sound snaps to crisp — which is the tell, and it
+ * is worth more than the information the muffled version was giving away.
  */
 
 /** Seconds between ambient growls when a single zombie is nearby. Crowds are busier. */
@@ -37,6 +47,8 @@ export class GameAudio {
   private health = new Map<number, number>();
   private reloading = new Map<number, boolean>();
   private listeners: { x: number; y: number; facing: number }[] = [];
+  /** The geometry to occlude against. Held for the frame; the sim owns it. */
+  private map: TileMap | null = null;
 
   /** Attach to a world's noise field. Called again whenever the world is replaced. */
   listenTo(world: GameWorld): void {
@@ -56,6 +68,7 @@ export class GameAudio {
   update(world: GameWorld, dt: number): void {
     this.bus.beginFrame();
 
+    this.map = world.map;
     this.listeners.length = 0;
     for (const p of world.players) {
       if (!p.downed) this.listeners.push({ x: p.eyeX, y: p.eyeY, facing: p.facing });
@@ -116,6 +129,57 @@ export class GameAudio {
           // still on it.
           this.bus.tone("logChirp", CENTRE, { freq: 880, to: 1240, type: "square", decay: 0.09, level: 0.22 });
           this.bus.tone("logHum", CENTRE, { freq: 220, to: 210, type: "triangle", attack: 0.05, decay: 0.6, level: 0.12 });
+          break;
+        case "heal":
+          // A canister hissing, and somebody breathing again.
+          this.bus.noise("medHiss", CENTRE, { freq: 3000, q: 0.9, decay: 0.5, level: 0.3 });
+          this.bus.tone("medTone", CENTRE, { freq: 420, to: 660, type: "triangle", decay: 0.45, level: 0.3 });
+          break;
+        case "item":
+          this.bus.tone("itemTake", CENTRE, { freq: 520, to: 760, type: "square", decay: 0.12, level: 0.24 });
+          break;
+        case "weld":
+          // The tool, and then the bead cooling.
+          this.bus.noise("weldArc", at, { freq: 1800, q: 0.6, decay: 0.55, level: 0.45, sweepTo: 900 });
+          this.bus.tone("weldSet", at, { freq: 240, to: 180, type: "square", decay: 0.4, level: 0.22 });
+          break;
+        case "weldBroken":
+          this.bus.noise("weldFail", at, { freq: 500, q: 0.5, decay: 0.6, level: 0.8, sweepTo: 130 });
+          break;
+        case "arc":
+          // Handled by the noise field as well; this is the bit that is not positional.
+          this.bus.tone("arcWarn", CENTRE, { freq: 900, to: 300, type: "square", decay: 0.25, level: 0.2 });
+          break;
+        case "grabbed":
+          // Wet, and it comes from where it happened so the squad can turn toward it.
+          this.bus.noise("grab", at, { freq: 420, q: 0.6, decay: 0.4, level: 0.7, sweepTo: 120 });
+          this.bus.tone("grabPull", CENTRE, { freq: 200, to: 90, type: "sawtooth", decay: 0.6, level: 0.35 });
+          break;
+        case "pinned":
+          this.bus.noise("pinHit", at, { freq: 260, q: 0.5, decay: 0.45, level: 0.85 });
+          this.bus.tone("pinAlarm", CENTRE, { freq: 320, to: 140, type: "triangle", decay: 0.8, level: 0.45 });
+          break;
+        case "freed":
+          this.bus.tone("cut", CENTRE, { freq: 700, to: 980, type: "triangle", decay: 0.25, level: 0.32 });
+          break;
+        case "carry":
+          // Something heavy changing hands. Placed, because hearing WHERE the core went
+          // is half of escorting the person holding it.
+          this.bus.noise("carryHeft", at, { freq: 220, q: 1.4, decay: 0.22, level: 0.4 });
+          this.bus.tone("carryClamp", at, { freq: 180, to: 120, type: "square", decay: 0.18, level: 0.24 });
+          break;
+        case "airlock":
+          // Bolts going home, and the pumps starting. It comes from the chamber, so the
+          // two players left outside can hear which door just shut on them.
+          this.bus.noise("lockBolts", at, { freq: 340, q: 1.6, decay: 0.2, level: 0.6 });
+          this.bus.tone("lockPump", at, { freq: 90, to: 160, type: "sawtooth", attack: 0.15, decay: 1.2, level: 0.3 });
+          break;
+        case "breach":
+          // The hull. A long fall in pitch as the deck empties, plus the klaxon over it
+          // — the depressurisation itself also goes through the noise field, so the
+          // horde hears exactly what the squad does.
+          this.bus.tone("breachFall", CENTRE, { freq: 240, to: 50, type: "sawtooth", attack: 0.05, decay: 1.6, level: 0.45 });
+          this.bus.noise("breachKlaxon", at, { freq: 1200, q: 0.9, decay: 0.9, level: 0.5, sweepTo: 300 });
           break;
         case "pickup":
           // Metal on metal: a locker door, and a weapon coming out of it.
@@ -196,7 +260,33 @@ export class GameAudio {
         this.bus.noise("glassTail", at, { freq: 3200, q: 0.8, decay: 0.42, level: 0.3, sweepTo: 6500 });
         break;
       case "step":
-        this.bus.noise("step", at, { freq: 210, q: 1.2, decay: 0.07, level: 0.28 });
+        // A shambler's footfall is wetter and softer than a boot on deck plate, which
+        // is most of how you tell "a teammate is running" from "something is in here".
+        this.bus.noise("step", at, n.byDead
+          ? { freq: 150, q: 0.9, decay: 0.11, level: 0.16 }
+          : { freq: 210, q: 1.2, decay: 0.07, level: 0.28 });
+        break;
+      case "duct":
+        // Something dragging itself along sheet metal, above your head. Deliberately
+        // the most unpleasant sound in the game: it is the only warning you get.
+        this.bus.noise("duct", at, { freq: 1100, q: 2.4, decay: 0.3, level: 0.4, sweepTo: 700 });
+        this.bus.tone("ductBody", at, { freq: 90, to: 70, type: "sawtooth", decay: 0.35, level: 0.18 });
+        break;
+      case "arc":
+        // A hard crack and then the buzz of a puddle with a current in it.
+        this.bus.noise("arcCrack", at, { freq: 2600, q: 1.1, decay: 0.12, level: 0.7, sweepTo: 600 });
+        this.bus.tone("arcHum", at, { freq: 120, to: 118, type: "square", decay: 1.4, level: 0.2 });
+        break;
+      case "beam":
+        // Nothing. A flashlight makes no sound; it rides this field because it pulls
+        // the dead the same way a sound does. See `NoiseKind` in `sim/noise.ts`.
+        break;
+      case "breach":
+        // Air leaving a deck through a hole the size of a man. The loudest thing in the
+        // game, and the one sound that is worth hearing through two bulkheads — which
+        // is why it is placed like everything else and simply given the radius to win.
+        this.bus.noise("breachRoar", at, { freq: 700, q: 0.35, decay: 1.9, level: 0.95, sweepTo: 140 });
+        this.bus.tone("breachBody", at, { freq: 60, to: 34, type: "sawtooth", attack: 0.08, decay: 2.1, level: 0.5 });
         break;
       case "impact":
         this.bus.noise("dive", at, { freq: 150, q: 0.7, decay: 0.26, level: 0.6 });
@@ -303,7 +393,53 @@ export class GameAudio {
     });
   }
 
-  private at(x: number, y: number): Placement {
-    return this.bus.place(x, y, this.listeners, this.cameraRotates);
+  /**
+   * Where a sound sits for the squad, geometry included.
+   *
+   * The listener is chosen by LINE first and distance second, which is what makes the
+   * mechanic work in co-op: if anybody has a clear line to it, everybody hears it
+   * properly. Placing against the nearest listener instead would muffle a gunshot for
+   * the whole squad because the player closest to it happens to be behind a wall.
+   */
+  /**
+   * Where a sound at this point sits for the squad right now: level, pan and how much
+   * geometry is in the way. Public for the same reason `bus.played` is — occlusion is a
+   * *mechanic*, not a mixing detail, and a mechanic you cannot assert on is a mechanic
+   * that quietly stops working.
+   */
+  placementFor(x: number, y: number): Placement {
+    return this.at(x, y);
   }
+
+  private at(x: number, y: number): Placement {
+    const map = this.map;
+    if (!map || this.listeners.length === 0) {
+      return this.bus.place(x, y, this.listeners, this.cameraRotates);
+    }
+
+    let best = this.listeners[0];
+    let bestWalls = Infinity;
+    let bestDist = Infinity;
+    for (const l of this.listeners) {
+      const d = Math.hypot(l.x - x, l.y - y);
+      if (d >= EARSHOT) continue;
+      const walls = wallsBetween(map, l.x, l.y, x, y, GameAudio.OCCLUSION_CAP);
+      if (walls < bestWalls || (walls === bestWalls && d < bestDist)) {
+        best = l;
+        bestWalls = walls;
+        bestDist = d;
+      }
+    }
+    if (bestWalls === Infinity) return { gain: 0, pan: 0, occlusion: 1 };
+
+    const placed = this.bus.place(x, y, [best], this.cameraRotates);
+    // Deliberately not linear in the wall count. ONE partition is already most of the
+    // effect — that is the case the mechanic exists for — and anything beyond two is
+    // just the other side of the deck.
+    const occlusion = bestWalls === 0 ? 0 : bestWalls === 1 ? 0.82 : 1;
+    return { ...placed, occlusion };
+  }
+
+  /** Stop counting walls here: past two it is all the same silence. */
+  private static readonly OCCLUSION_CAP = 2;
 }

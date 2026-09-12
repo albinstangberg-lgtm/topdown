@@ -21,6 +21,8 @@ export class GamepadSource implements InputSource {
   private prevDive = false;
   private prevReload = false;
   private prevInteract = false;
+  private prevItem = false;
+  private prevLight = false;
   private prevStart = false;
   private prevCancel = false;
 
@@ -47,6 +49,7 @@ export class GamepadSource implements InputSource {
       out.sprint = false; out.divePressed = false; out.reloadPressed = false;
       out.lean = 0;
       out.interact = false; out.interactPressed = false;
+      out.item = false; out.itemPressed = false; out.lightPressed = false;
       out.startPressed = false; out.cancelPressed = false;
       return;
     }
@@ -88,6 +91,10 @@ export class GamepadSource implements InputSource {
     const dive = btn(1) || btn(6);            // B or LT, tapped
     const reload = btn(2);                    // X / square
     const interact = btn(3);                  // Y / triangle, held to revive
+    const item = btn(11);                     // R3, held: the utility slot
+    // Both bumpers at once already cancelled out to no lean, so the chord was free —
+    // and a light switch wants to be somewhere your thumbs are not busy.
+    const light = btn(4) && btn(5);
     const lean = (btn(5) ? 1 : 0) - (btn(4) ? 1 : 0);
     const start = btn(9) || btn(8);
     const cancel = btn(1);                    // B / circle
@@ -100,6 +107,9 @@ export class GamepadSource implements InputSource {
     out.lean = lean;
     out.interact = interact;
     out.interactPressed = interact && !this.prevInteract;
+    out.item = item;
+    out.itemPressed = item && !this.prevItem;
+    out.lightPressed = light && !this.prevLight;
     out.startPressed = start && !this.prevStart;
     out.cancelPressed = cancel && !this.prevCancel;
 
@@ -107,6 +117,8 @@ export class GamepadSource implements InputSource {
     this.prevDive = dive;
     this.prevReload = reload;
     this.prevInteract = interact;
+    this.prevItem = item;
+    this.prevLight = light;
     this.prevStart = start;
     this.prevCancel = cancel;
   }

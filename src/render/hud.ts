@@ -1,5 +1,7 @@
 import { clockText, type GameWorld } from "../sim/world";
 import type { Player } from "../sim/entities";
+import { itemDef } from "../sim/items";
+import { activeWeapon, primaryStowed } from "../sim/power";
 import type { Viewport } from "./viewport";
 
 /**
@@ -43,19 +45,25 @@ export function drawHud(
 
   // Ammo / reload. A melee weapon has no magazine, so it says so by saying nothing —
   // an ammo counter reading 0/0 on a crowbar looks like a bug.
-  ctx.fillStyle = "rgba(230,235,245,0.9)";
-  const ammoText = p.weapon.magazine <= 0
-    ? `${p.weapon.name}  —`
+  // What is actually in the hands, which is not always the loadout: a flat suit or a
+  // full pair of hands puts the primary away and leaves the crowbar.
+  const held = activeWeapon(p);
+  const stowed = primaryStowed(p);
+  ctx.fillStyle = stowed ? "rgba(255,206,110,0.9)" : "rgba(230,235,245,0.9)";
+  const ammoText = held.magazine <= 0
+    ? `${held.name}  —`
     : p.reloadTimer > 0
-      ? `${p.weapon.name}  RELOADING`
-      : `${p.weapon.name}  ${p.ammo}/${p.weapon.magazine}`;
+      ? `${held.name}  RELOADING`
+      : `${held.name}  ${p.ammo}/${held.magazine}`;
   ctx.fillText(ammoText, pad, pad + 18);
 
   if (p.reloadTimer > 0) {
-    const t = 1 - p.reloadTimer / p.weapon.reloadTime;
+    const t = 1 - p.reloadTimer / held.reloadTime;
     ctx.fillStyle = "rgba(255,255,255,0.35)";
     ctx.fillRect(pad, pad + 34, barW * t, 3);
   }
+
+  drawBattery(ctx, p, pad, pad + 30, barW);
 
   // Stamina. Goes amber while draining and red once you have run yourself out.
   const staminaW = barW * 0.72;
@@ -66,18 +74,25 @@ export function drawHud(
     : p.stamina < p.maxStamina ? "rgba(255,206,110,0.9)" : "rgba(120,200,255,0.8)";
   ctx.fillRect(pad, pad + 42, staminaW * (p.stamina / p.maxStamina), 5);
 
+  // The utility slot. Always drawn, even empty — an empty slot is information, and a
+  // slot that only appears when it is full is a slot people forget they have.
+  drawUtilitySlot(ctx, p, pad, pad + 56, barW);
+
   if (Math.abs(p.lean) > 0.05) {
     ctx.fillStyle = "rgba(150,200,255,0.9)";
-    ctx.fillText(p.lean < 0 ? "< LEAN" : "LEAN >", pad + 100, pad + 54);
+    ctx.fillText(p.lean < 0 ? "< LEAN" : "LEAN >", pad + 124, pad + 84);
   }
 
   if (p.stance !== "stand") {
     ctx.fillStyle = "rgba(255,206,110,0.9)";
-    ctx.fillText(p.stance === "standUp" ? "GETTING UP" : "PRONE", pad, pad + 54);
+    ctx.fillText(p.stance === "standUp" ? "GETTING UP" : "PRONE", pad, pad + 84);
   }
 
   ctx.fillStyle = "rgba(150,158,175,0.75)";
   ctx.fillText(`kills ${p.kills}`, pad, vp.h - pad - 14);
+
+  drawHeldWarning(ctx, p, vp);
+  drawSuitState(ctx, world, p, vp, pad);
 
   // Extraction. Shown to everyone, because it is a squad condition, not a personal one.
   const obj = world.objective;
@@ -127,7 +142,12 @@ export function drawHud(
   // What this player can do right now, if anything: read the terminal they are stood
   // on, seat a cell, work the door. Drawn low and near them rather than with the squad
   // objective, because a prompt is personal — only one player is stood on that tile.
-  const prompt = world.devices.promptFor(p.id);
+  // The welder is the one item whose dwell happens on a tile, so it reads as a device
+  // prompt rather than as an inventory action — you stand in the doorway and hold.
+  const weldable = p.item === "welder" && world.map.isBulkheadAt(p.x, p.y);
+  const prompt = weldable
+    ? { text: p.itemHold > 0 ? "WELDING…" : "HOLD ITEM — SEAL THIS BULKHEAD", progress: 0 }
+    : world.devices.promptFor(p.id);
   if (prompt) {
     ctx.textAlign = "center";
     ctx.font = "700 12px ui-monospace, monospace";
@@ -143,12 +163,24 @@ export function drawHud(
     ctx.textAlign = "left";
   }
 
+  // Somebody in reach is pinned and cannot get it off themselves.
+  const shove = shovePrompt(world, p);
+  if (shove) {
+    ctx.textAlign = "center";
+    ctx.font = "700 12px ui-monospace, monospace";
+    ctx.fillStyle = "#ff8cd2";
+    ctx.fillText(shove, vp.w / 2, vp.h * 0.78);
+    ctx.textAlign = "left";
+    ctx.font = "600 12px ui-monospace, monospace";
+  }
+
   // Someone else needs help — tell this player where, since they may be off-screen.
   for (const other of world.players) {
-    if (other === p || !other.downed) continue;
+    if (other === p || (!other.downed && other.restraint === null)) continue;
     const d = Math.hypot(other.x - p.x, other.y - p.y);
     ctx.fillStyle = other.color;
-    ctx.fillText(`P${other.id + 1} DOWN  ${Math.round(d / 10)}m`, pad, pad + 56);
+    const what = other.downed ? "DOWN" : other.restraint?.kind === "pin" ? "PINNED" : "GRABBED";
+    ctx.fillText(`P${other.id + 1} ${what}  ${Math.round(d / 10)}m`, pad, pad + 100);
     break;
   }
 
@@ -356,4 +388,192 @@ export function drawBanner(
   ctx.fillStyle = "#ffffff";
   ctx.fillText(text, width / 2, height * 0.42);
   ctx.restore();
+}
+
+
+/**
+ * The utility slot: what is in it, how many uses are left, and how far through a dwell
+ * you are. One line and one bar, because it has to be readable in a quarter of a screen
+ * with three other people's HUDs on the same display.
+ */
+function drawUtilitySlot(
+  ctx: CanvasRenderingContext2D, p: Player, x: number, y: number, w: number,
+): void {
+  const box = 18;
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, box, box);
+
+  if (p.item === null) {
+    ctx.fillStyle = "rgba(150,158,175,0.5)";
+    ctx.fillText("—", x + 6, y + 4);
+    ctx.fillText("no utility", x + box + 8, y + 4);
+    return;
+  }
+
+  const def = itemDef(p.item);
+  ctx.fillStyle = def.color;
+  ctx.fillRect(x + 3, y + 3, box - 6, box - 6);
+  ctx.fillStyle = "rgba(235,240,250,0.92)";
+  const charges = def.charges > 1 ? `  x${p.itemCharges}` : "";
+  ctx.fillText(`${def.name}${charges}`, x + box + 8, y + 4);
+
+  // The dwell. Only the items that have one ever show it.
+  if (def.hold > 0 && p.itemHold > 0) {
+    const t = Math.max(0, Math.min(1, p.itemHold / def.hold));
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(x, y + box + 2, w, 3);
+    ctx.fillStyle = def.color;
+    ctx.fillRect(x, y + box + 2, w * t, 3);
+  }
+
+  if (p.adrenaline > 0) {
+    ctx.fillStyle = "rgba(255,230,107,0.95)";
+    ctx.fillText("ADRENALINE", x + box + 8, y + 20);
+    return;
+  }
+
+  // What it is for, in small type. Survival items get picked up in the dark by somebody
+  // who has never used one, and a slot that only says a name is a slot nobody spends.
+  ctx.font = "500 10px ui-monospace, monospace";
+  ctx.fillStyle = "rgba(160,168,185,0.75)";
+  ctx.fillText(def.hint, x, y + box + 12);
+  ctx.font = "600 12px ui-monospace, monospace";
+}
+
+/**
+ * Something has hold of you. This is the loudest thing on the HUD on purpose: a held
+ * player cannot shoot, so the only thing they can usefully do is shout, and the only
+ * thing the screen can do is make sure they know why the trigger stopped working.
+ */
+function drawHeldWarning(ctx: CanvasRenderingContext2D, p: Player, vp: Viewport): void {
+  const r = p.restraint;
+  if (r === null) return;
+  const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.012);
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = "700 18px ui-monospace, monospace";
+  ctx.fillStyle = `rgba(255,120,190,${pulse})`;
+  ctx.fillText(
+    r.kind === "pin" ? "PINNED — CALL FOR A SHOVE" : "GRABBED — SOMEBODY CUT IT",
+    vp.w / 2, vp.h * 0.62,
+  );
+  ctx.font = "600 12px ui-monospace, monospace";
+  ctx.fillStyle = "rgba(235,240,250,0.8)";
+  ctx.fillText(
+    p.item === "adrenaline" ? "ADRENALINE BREAKS A GRIP" : "YOU CANNOT SHOOT",
+    vp.w / 2, vp.h * 0.62 + 22,
+  );
+  ctx.restore();
+}
+
+/**
+ * A teammate is in trouble within reach: hold USE. Drawn for the helper, not the
+ * victim — the person who can do something about it is the one who needs telling.
+ */
+export function shovePrompt(world: GameWorld, p: Player): string | null {
+  for (const other of world.players) {
+    if (other === p || other.restraint === null) continue;
+    if (Math.hypot(other.x - p.x, other.y - p.y) > 66) continue;
+    if (other.restraint.kind !== "pin") continue;
+    return `HOLD USE — SHOVE IT OFF P${other.id + 1}`;
+  }
+  return null;
+}
+
+
+/**
+ * The suit battery. One bar for the guns, the flashlight and the tools, because it is
+ * one cell — and it turns amber while the beam is eating it and red when there is not
+ * enough left for another magazine.
+ */
+function drawBattery(
+  ctx: CanvasRenderingContext2D, p: Player, x: number, y: number, w: number,
+): void {
+  const frac = p.battery / p.maxBattery;
+  const perMag = (p.weapon.draw ?? 0) * p.weapon.magazine;
+  const mags = perMag > 0 ? p.battery / perMag : 0;
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(x, y, w, 5);
+  ctx.fillStyle = frac < 0.15
+    ? "rgba(255,110,110,0.95)"
+    : p.lightOn ? "rgba(255,206,110,0.9)" : "rgba(120,200,255,0.85)";
+  ctx.fillRect(x, y, w * frac, 5);
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w, 5);
+
+  // The number that matters is not the percentage, it is how many magazines are left.
+  ctx.fillStyle = frac < 0.15 ? "rgba(255,150,150,0.95)" : "rgba(150,158,175,0.8)";
+  ctx.font = "500 10px ui-monospace, monospace";
+  const label = perMag > 0 ? `PWR ${Math.round(frac * 100)}%  ${mags.toFixed(1)} mags` : `PWR ${Math.round(frac * 100)}%`;
+  ctx.fillText(label, x + w + 8, y - 2);
+  ctx.font = "600 12px ui-monospace, monospace";
+}
+
+
+/**
+ * The three things that are about the ship rather than about you: the squad's air, what
+ * is in your hands, and an airlock counting down. All bottom-centre, because each one is
+ * a thing you act on right now rather than a stat you monitor.
+ */
+function drawSuitState(
+  ctx: CanvasRenderingContext2D, world: GameWorld, p: Player, vp: Viewport, pad: number,
+): void {
+  // Oxygen. Only shown when it is not full — a permanent full bar is furniture.
+  if (world.oxygen.level < 0.999) {
+    const w = Math.min(220, vp.w * 0.34);
+    const x = (vp.w - w) / 2;
+    const y = vp.h - pad - 34;
+    const frac = world.oxygen.level;
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(x, y, w, 6);
+    ctx.fillStyle = frac < 0.25 ? "rgba(255,110,110,0.95)" : "rgba(150,220,255,0.9)";
+    ctx.fillRect(x, y, w * frac, 6);
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, w, 6);
+    ctx.textAlign = "center";
+    ctx.fillStyle = frac < 0.25 ? "rgba(255,150,150,0.95)" : "rgba(200,225,245,0.85)";
+    ctx.fillText(frac <= 0 ? "NO AIR" : `O2 ${Math.round(frac * 100)}%`, vp.w / 2, y - 14);
+    ctx.textAlign = "left";
+  }
+
+  // A depressurisation in progress, and whether this player is anchored against it.
+  if (world.breach.active) {
+    const pull = world.suctionAt(p.x, p.y);
+    if (pull > 0) {
+      const held = world.map.isRailingAt(p.x, p.y);
+      ctx.textAlign = "center";
+      ctx.font = "700 16px ui-monospace, monospace";
+      ctx.fillStyle = held ? "rgba(150,255,190,0.95)" : "rgba(255,180,120,0.95)";
+      ctx.fillText(held ? "HOLDING ON" : "GET TO A RAILING", vp.w / 2, vp.h * 0.3);
+      ctx.font = "600 12px ui-monospace, monospace";
+      ctx.textAlign = "left";
+    }
+  }
+
+  // An airlock cycle. The number matters: it is how long the other half of the squad
+  // is on their own.
+  const cycle = world.airlockCycleFor(p);
+  if (cycle > 0) {
+    ctx.textAlign = "center";
+    ctx.font = "700 16px ui-monospace, monospace";
+    ctx.fillStyle = "rgba(140,225,255,0.95)";
+    ctx.fillText(`EQUALIZING  ${cycle.toFixed(1)}s`, vp.w / 2, vp.h * 0.36);
+    ctx.font = "600 12px ui-monospace, monospace";
+    ctx.textAlign = "left";
+  }
+
+  // What is in both hands.
+  if (p.carrying !== null) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = p.carrying === "core" ? "rgba(139,255,122,0.95)" : "rgba(122,210,255,0.95)";
+    ctx.fillText(
+      p.carrying === "core" ? "CARRYING A FUSION CORE — USE TO SEAT OR DROP"
+        : "CARRYING A POWER CELL — USE TO SWAP IT IN",
+      vp.w / 2, vp.h - pad - 52,
+    );
+    ctx.textAlign = "left";
+  }
 }

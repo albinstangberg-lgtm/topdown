@@ -622,7 +622,8 @@ function drawBar(ctx: CanvasRenderingContext2D, s: number, tip = 26): void {
   ctx.stroke();
 }
 
-function rrect(
+/** A rounded rectangle path. Shared, because half the props in the game are one. */
+export function rrect(
   ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number,
 ): void {
   const rr = Math.min(r, w / 2, h / 2);

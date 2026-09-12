@@ -4,6 +4,11 @@ import { moveCircle, pointInWall } from "../world/collision";
 import type { TileMap } from "../world/tilemap";
 import { makeLight } from "../vision/visibility";
 import { WEAPONS, type Player, type WeaponDef } from "./entities";
+import { ADRENALINE_RELOAD, ADRENALINE_SPEED, itemDef, spendCharge } from "./items";
+import {
+  activeWeapon, BATTERY_MAX, defaultSidearm, DIP_FLOOR, DIP_TIME, drawMagazine,
+  LIGHT_DRAIN,
+} from "./power";
 import type { BulletPool, ParticlePool } from "./pools";
 import { NOISE, type NoiseField } from "./noise";
 
@@ -91,6 +96,23 @@ const MELEE_CONTACT = 0.3;
 const STRIDE = 30;
 /** How fast the shot kick decays. Drives the arms, the muzzle rise and the pump. */
 const RECOIL_DECAY = 4.5;
+/**
+ * Light and aggro. A lit beam in a dead-dark room is a lure on the noise field: not a
+ * sound, but the same thing a sound is — a reason for something to come and look. In a
+ * room with its emergency lights still on it costs nothing, which is what makes "which
+ * way round the deck" a real question.
+ */
+const LIGHT_TELL_INTERVAL = 0.9;
+/** Seconds of washed-out vision from an arc flash. */
+export const ARC_BLIND_TIME = 2.6;
+/**
+ * How much of the drag you can fight off by hauling the other way. Deliberately under
+ * half: struggling should feel like it matters and never like it is the answer, because
+ * the answer is somebody else cutting the thing.
+ */
+const STRUGGLE_RESIST = 0.35;
+/** A failed item attempt does not retry until you let go. See `updateItem`. */
+const ITEM_DECAY = 2.2;
 const BLEEDOUT = 30;
 const REVIVE_TIME = 2.2;
 const REVIVE_RANGE = 62;
@@ -133,6 +155,21 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     weaponUp: 0,
     weaponHold: 0,
     walkPhase: 0,
+    item: null,
+    itemCharges: 0,
+    itemHold: 0,
+    adrenaline: 0,
+    battery: BATTERY_MAX,
+    maxBattery: BATTERY_MAX,
+    lightDip: 0,
+    carrying: null,
+    carryCharge: 0,
+    sidearm: defaultSidearm(),
+    // You wake up with it on. Turning it off is the decision, not turning it on.
+    lightOn: true,
+    lightTell: 0,
+    blinded: 0,
+    restraint: null,
     swingTimer: 0,
     swingTime: SWING_TIME,
     swingSide: 1,
@@ -170,6 +207,18 @@ export interface PlayerDeps {
    * knowing what an Enemy is, and kill accounting stays in one place in the world.
    */
   swing: (p: Player, reach: number, arc: number, damage: number) => number;
+  /**
+   * Spend the utility slot. Returns whether it was actually used — a welder with no
+   * bulkhead under it, or a medkit on somebody already at full health, is refused and
+   * keeps its charge. Same seam as `swing`: the player runs the clock, the world knows
+   * what a flare lights.
+   */
+  useItem: (p: Player) => boolean;
+  /**
+   * Is this point lit by something other than a flashlight? Emergency lighting, a
+   * lamp, a burning flare. Where it is true, having your beam on costs you nothing.
+   */
+  lit: (x: number, y: number) => boolean;
 }
 
 /**
@@ -186,6 +235,9 @@ export function updatePlayer(
   p.muzzleFlash = Math.max(0, p.muzzleFlash - dt * 8);
   p.hurtFlash = Math.max(0, p.hurtFlash - dt * 3);
   p.recoil = Math.max(0, p.recoil - dt * RECOIL_DECAY);
+  p.blinded = Math.max(0, p.blinded - dt);
+  p.adrenaline = Math.max(0, p.adrenaline - dt);
+  p.lightDip = Math.max(0, p.lightDip - dt);
 
   if (p.downed) {
     p.weaponUp = 0;
@@ -193,6 +245,9 @@ export function updatePlayer(
     // Going down cancels a swing in flight: the bar never lands, so it never hits.
     p.swingTimer = 0;
     p.swingHit = true;
+    p.itemHold = 0;
+    // Whatever had hold of you has what it wanted. It lets go and looks for the next one.
+    p.restraint = null;
     p.stance = "stand";
     p.stanceTimer = 0;
     p.lean = 0;
@@ -200,6 +255,8 @@ export function updatePlayer(
     return;
   }
 
+  updateLight(p, input, deps, dt);
+  updateItem(p, input, deps, dt);
   updateWeaponStance(p, aim, input, dt);
 
   // --- Aim -----------------------------------------------------------------
@@ -213,14 +270,18 @@ export function updatePlayer(
   // --- Move ----------------------------------------------------------------
   const sprinting = updateStanceAndStamina(p, input, deps, dt);
 
-  if (p.stance === "dive") {
+  if (p.restraint !== null) {
+    // Held. A pin puts you on the floor and keeps you there; a tendril hauls you toward
+    // whatever threw it, and all your feet can do is take a little off the speed.
+    applyRestraintDrag(p, input, dt);
+  } else if (p.stance === "dive") {
     // Decelerating launch, so the dive covers ground and then puts you down.
     const t = 1 - p.stanceTimer / DIVE_TIME;
     const speed = DIVE_SPEED * Math.max(0, 1 - t);
     p.vx = p.diveDirX * speed;
     p.vy = p.diveDirY * speed;
   } else if (p.stance === "stand") {
-    const speed = sprinting ? SPRINT_SPEED : WALK_SPEED;
+    const speed = (sprinting ? SPRINT_SPEED : WALK_SPEED) * (p.adrenaline > 0 ? ADRENALINE_SPEED : 1);
     p.vx = damp(p.vx, input.moveX * speed, ACCEL, dt);
     p.vy = damp(p.vy, input.moveY * speed, ACCEL, dt);
   } else {
@@ -242,7 +303,10 @@ export function updatePlayer(
   advanceGait(p);
 
   // --- Shoot ---------------------------------------------------------------
-  const w = p.weapon;
+  // The weapon in your hands is not always the one in your loadout: both hands full,
+  // an empty magazine with a flat suit behind it, and you are swinging. One function
+  // decides that, so the HUD and the renderer cannot disagree with the trigger.
+  const w = activeWeapon(p);
   p.fireCooldown = Math.max(0, p.fireCooldown - dt);
   const wantsToFire = w.auto ? input.fire : input.firePressed;
 
@@ -252,7 +316,9 @@ export function updatePlayer(
     if (wantsToFire && p.fireCooldown <= 0 && p.weaponUp >= 1 && canFire(p)) fire(p, deps);
   } else if (p.reloadTimer > 0) {
     p.reloadTimer -= dt;
-    if (p.reloadTimer <= 0) p.ammo = w.magazine;
+    // The charge goes in at the END of the reload, so a magazine you have already
+    // loaded keeps working on a suit that has since gone flat.
+    if (p.reloadTimer <= 0) drawMagazine(p);
   } else if (p.ammo <= 0) {
     // Running dry still reloads on its own — the manual button is for topping up
     // before you need it, which is the decision worth having.
@@ -311,14 +377,122 @@ function updateLean(p: Player, input: InputState, deps: PlayerDeps, dt: number):
   p.eyeY = p.y;
 }
 
+/**
+ * Start a reload — but only if there is charge behind it. A suit with nothing left does
+ * not go through the motions and hand you an empty magazine; the gun simply stays dead
+ * and `activeWeapon` puts the crowbar in your hands instead.
+ */
 function startReload(p: Player, deps: PlayerDeps): void {
-  p.reloadTimer = p.weapon.reloadTime;
+  if ((p.weapon.draw ?? 0) > 0 && p.battery < (p.weapon.draw ?? 0)) return;
+  p.reloadTimer = p.weapon.reloadTime * (p.adrenaline > 0 ? ADRENALINE_RELOAD : 1);
   deps.particles.burst(p.x, p.y, 4, 55, "#8d8677", 0.45, 2);
 }
 
-/** You can shoot standing or lying down, but not mid-dive and not while getting up. */
+/**
+ * You can shoot standing or lying down, but not mid-dive and not while getting up —
+ * and never while something has hold of you. That last clause is the load-bearing one:
+ * a held player is a squad problem, and if they could shoot their way out it would not
+ * be one.
+ */
 export function canFire(p: Player): boolean {
+  if (p.restraint !== null) return false;
   return p.stance === "stand" || p.stance === "prone";
+}
+
+/**
+ * Being dragged. The anchor and the speed both come off the restraint, refreshed by
+ * whatever is holding you — so this stays true whether a tendril is reeling you in or
+ * a Stalker is sitting on your chest (`pull` of zero, and you are going nowhere).
+ */
+function applyRestraintDrag(p: Player, input: InputState, dt: number): void {
+  const r = p.restraint;
+  if (r === null) return;
+  r.time += dt;
+  if (r.pull <= 0) {
+    p.vx = damp(p.vx, 0, 22, dt);
+    p.vy = damp(p.vy, 0, 22, dt);
+    return;
+  }
+  const dx = r.anchorX - p.x;
+  const dy = r.anchorY - p.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const ux = dx / d;
+  const uy = dy / d;
+  // Hauling the other way takes a little off it. Only a little — see STRUGGLE_RESIST.
+  const against = Math.max(0, -(input.moveX * ux + input.moveY * uy));
+  const speed = r.pull * (1 - STRUGGLE_RESIST * against);
+  p.vx = damp(p.vx, ux * speed, 14, dt);
+  p.vy = damp(p.vy, uy * speed, 14, dt);
+}
+
+/**
+ * Break whatever has hold of you, and say whether there was anything to break. The one
+ * way a restraint ends from the victim's side — everything else (a severed tendril, a
+ * dead Strangler, a shoved-off Stalker) ends it from the outside.
+ */
+export function breakFree(p: Player): boolean {
+  if (p.restraint === null) return false;
+  p.restraint = null;
+  return true;
+}
+
+/**
+ * The flashlight, and the price of having it on. In a room with power the beam is free.
+ * In a dead-dark one it is a lure on the noise field every few seconds — which is the
+ * whole of "light-dependent aggro": the dark is safer, and you cannot see in it.
+ */
+function updateLight(p: Player, input: InputState, deps: PlayerDeps, dt: number): void {
+  if (input.lightPressed) {
+    p.lightOn = !p.lightOn;
+    p.lightTell = 0;
+  }
+  if (!p.lightOn) return;
+  // The beam is the steadiest drain in the game, and the easiest one to forget about.
+  p.battery = Math.max(0, p.battery - LIGHT_DRAIN * dt);
+  if (p.battery <= 0) {
+    // Out. The switch stays where you left it; there is simply nothing behind it.
+    p.lightOn = false;
+    return;
+  }
+  p.lightTell -= dt;
+  if (p.lightTell > 0) return;
+  p.lightTell = LIGHT_TELL_INTERVAL;
+  if (!deps.lit(p.eyeX, p.eyeY)) deps.noise.emit(p.eyeX, p.eyeY, NOISE.beam, "beam");
+}
+
+/**
+ * The utility slot. Everything here is clock-keeping: what the item DOES is the world's
+ * business, reached through `deps.useItem`.
+ *
+ * A use is attempted on the single frame the dwell crosses its threshold. If the world
+ * refuses it — a welder nowhere near a bulkhead — the hold keeps climbing and never
+ * crosses again, so a refused item does not retry sixty times a second; let go and it
+ * decays back below the line, ready for another try.
+ */
+function updateItem(p: Player, input: InputState, deps: PlayerDeps, dt: number): void {
+  if (p.item === null) {
+    p.itemHold = 0;
+    return;
+  }
+  const def = itemDef(p.item);
+  // Held, you cannot rummage — except for the one thing that is for exactly this.
+  const allowed = p.restraint === null || p.item === "adrenaline";
+
+  if (!allowed || !input.item) {
+    p.itemHold = Math.max(0, p.itemHold - dt * ITEM_DECAY);
+    return;
+  }
+
+  if (def.hold <= 0) {
+    if (input.itemPressed && deps.useItem(p)) spendCharge(p);
+    return;
+  }
+
+  const before = p.itemHold;
+  p.itemHold += dt;
+  if (before < def.hold && p.itemHold >= def.hold) {
+    if (deps.useItem(p)) spendCharge(p);
+  }
 }
 
 function turnScale(p: Player): number {
@@ -357,6 +531,8 @@ function updateStanceAndStamina(
       }
     }
   } else if (
+    // Nothing dives with something sitting on it.
+    p.restraint === null &&
     input.divePressed && p.diveCooldown <= 0 &&
     p.stamina >= DIVE_STAMINA_COST && (input.moveX !== 0 || input.moveY !== 0)
   ) {
@@ -395,12 +571,14 @@ function updateStanceAndStamina(
 }
 
 function fire(p: Player, deps: PlayerDeps): void {
-  const w = p.weapon;
+  const w = activeWeapon(p);
   p.fireCooldown = 1 / w.fireRate;
   if (w.melee) { startSwing(p); return; }
   p.ammo--;
   p.muzzleFlash = 1;
   p.recoil = 1;
+  // Power diverts to the weapon, and for two seconds you can see noticeably less.
+  p.lightDip = DIP_TIME;
 
   // Shots leave from the eye, so a lean actually shoots round the corner.
   const muzzle = p.radius + 10;
@@ -430,7 +608,7 @@ function fire(p: Player, deps: PlayerDeps): void {
  * alternates so a flurry of swings is a flurry and not the same frame on a loop.
  */
 function startSwing(p: Player): void {
-  p.swingTimer = p.swingTime = Math.min(SWING_TIME, 1 / p.weapon.fireRate);
+  p.swingTimer = p.swingTime = Math.min(SWING_TIME, 1 / activeWeapon(p).fireRate);
   p.swingSide = -p.swingSide;
   p.swingHit = false;
 }
@@ -464,7 +642,7 @@ function advanceGait(p: Player): void {
  * cleared quietly stays cleared, and the first gun is a decision as much as a reward.
  */
 function resolveSwing(p: Player, deps: PlayerDeps): void {
-  const w = p.weapon;
+  const w = activeWeapon(p);
   const reach = w.reach ?? 40;
   const arc = w.arc ?? 0.9;
   const tipX = p.eyeX + Math.cos(p.facing) * (p.radius + reach * 0.6);
@@ -554,22 +732,44 @@ export function damagePlayer(p: Player, amount: number): void {
   }
 }
 
-export function syncLights(p: Player): void {
+/**
+ * Push the player's state into the two lights the vision system computes for them.
+ *
+ * Three things can take the cone away, and they are three different problems: the
+ * switch is yours, an arc flash is a mistake you made, and fog is a room you walked
+ * into. Only the last one leaves the halo — in coolant you can still see your own
+ * boots, which is exactly enough to keep walking and not nearly enough to fight.
+ *
+ * `fog` is 0..1 thickness at the eye, handed in by the world because the player module
+ * has no business reading the tile grid.
+ */
+export function syncLights(p: Player, fog = 0): void {
+  const flash = 1 - Math.min(1, p.blinded / ARC_BLIND_TIME);
+  // Firing diverts power: the cone drops toward DIP_FLOOR and recovers over DIP_TIME.
+  const dip = 1 - (1 - DIP_FLOOR) * Math.min(1, p.lightDip / DIP_TIME);
+  // Fog eats the beam rather than blocking it: the light is still on, it just has
+  // nothing to land on but the cloud in front of your face.
+  const murk = 1 - Math.min(1, fog * 1.15);
+  const power = p.lightOn && p.battery > 0 ? flash * murk * dip : 0;
+
   p.cone.x = p.eyeX;
   p.cone.y = p.eyeY;
   p.cone.facing = p.facing;
   p.cone.halfAngle = p.downed ? 0.7 : CONE_HALF_ANGLE;
-  p.cone.range = p.downed ? 210 : CONE_RANGE;
-  p.cone.intensity = p.downed ? 0.5 : 1 + p.muzzleFlash * 0.35;
+  p.cone.range = (p.downed ? 210 : CONE_RANGE) * power;
+  p.cone.intensity = (p.downed ? 0.5 : 1 + p.muzzleFlash * 0.35) * power;
 
   p.halo.x = p.eyeX;
   p.halo.y = p.eyeY;
   p.halo.facing = 0;
-  p.halo.range = HALO_RANGE;
+  // The halo is what is left when everything else is gone: your own feet, and not much
+  // more. It dims in fog and in a flash, and it is deliberately NOT on the battery —
+  // running a suit flat has to be a scene you can play out of, not a black screen.
+  p.halo.range = HALO_RANGE * (0.45 + 0.55 * Math.min(flash, murk));
 }
 
 export const PLAYER_TUNING = {
-  WALK_SPEED, SPRINT_SPEED, STAMINA_MAX, SPRINT_DRAIN,
+  WALK_SPEED, SPRINT_SPEED, STAMINA_MAX, SPRINT_DRAIN, LIGHT_TELL_INTERVAL,
   DIVE_TIME, PRONE_TIME, STAND_TIME, LEAN_OFFSET, BLEEDOUT, REVIVE_TIME, REVIVE_RANGE,
   SWING_TIME, MELEE_CONTACT, STRIDE,
 };

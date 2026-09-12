@@ -583,6 +583,39 @@ export class Game {
         this.completeMission();
       } else if (ev.kind === "missionFailed") {
         this.returnToMissions("MISSION FAILED");
+      } else if (ev.kind === "grabbed" || ev.kind === "pinned") {
+        // Somebody has been taken. This is the loudest thing short of a wipe, because a
+        // held player cannot shoot and the rest of the squad has to turn round NOW.
+        this.shakeAll(0.7);
+        if (ev.text) this.setBanner(ev.text);
+      } else if (ev.kind === "weldBroken") {
+        // A wall the squad was relying on just came off its frame.
+        this.shakeAll(0.6);
+        if (ev.text) this.setBanner(ev.text);
+      } else if (ev.kind === "arc") {
+        // The screen is already white for a moment; a line of text on top is noise.
+        this.shakeNear(ev.x ?? 0, ev.y ?? 0, 0.5, 420);
+      } else if (ev.kind === "breach") {
+        // Vacuum. A deck going is the biggest physical event in the game, so it takes
+        // the full jolt; the hull shutting again gets a thump; a lever with no breach
+        // wired to it gets neither. `breach.active` has already been decided by the
+        // time the shell drains this, which is what tells the three apart.
+        if (this.world.breach.active) this.shakeAll(0.9);
+        else if (ev.text === "HULL SEALED") this.shakeAll(0.3);
+        if (ev.text) this.setBanner(ev.text);
+      } else if (ev.kind === "airlock") {
+        // Doors closing between two halves of the squad is worth reading. The cycle
+        // FINISHING raises the same event with no text and stays sound-only: the doors
+        // opening says it better than a banner can.
+        this.shakeNear(ev.x ?? 0, ev.y ?? 0, 0.4, 420);
+        if (ev.text) this.setBanner(ev.text);
+      } else if (ev.kind === "carry") {
+        // Sound and the HUD cover this: there is a line under the ammo readout for as
+        // long as your hands are full. A banner every time somebody shoulders a core
+        // would push real warnings off the screen.
+      } else if (ev.kind === "item" || ev.kind === "heal") {
+        // Sound and the HUD slot say this already. A banner for picking a box up would
+        // push a real warning off the screen.
       } else if (ev.kind === "level" && ev.text) {
         this.setBanner(ev.text);
       } else if (ev.text) {

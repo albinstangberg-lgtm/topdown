@@ -8,6 +8,8 @@ import type { ParticlePool } from "./pools";
 import type { NoiseField } from "./noise";
 import type { FlowField } from "../world/flow";
 import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
+import { NOISE } from "./noise";
+import { updateLurker, updateStalker, updateStrangler } from "./mutants";
 
 /**
  * CORE 7 — Zombies and perception.
@@ -45,6 +47,14 @@ import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
 const SEPARATION = 34;
 /** World units per half-stride. Longer than a player's: they lurch. */
 const ZOMBIE_STRIDE = 34;
+/**
+ * The gait cycle is `walkPhase`, which advances by PI per stride and wraps at TAU — so
+ * halving it gives exactly one bucket per footfall, and a change of bucket is a foot
+ * going down. The dead are not sneaking, and in a coolant bank their shuffling is the
+ * only thing that tells you where they are: this is a *readability* number, not a
+ * stealth one. A `silent` kind emits nothing at all.
+ */
+const SHAMBLE_PHASE = Math.PI;
 /** How close is close enough when walking to a noise. */
 const ARRIVED = 26;
 /** Seconds of alertness a fresh sighting or a noise is worth. Decays in `investigate`. */
@@ -63,7 +73,7 @@ export function createEnemy(
     facing: randRange(0, TAU),
     health: def.health,
     maxHealth: def.health,
-    state: hunting ? "hunt" : "wander",
+    state: def.drop ? "roost" : def.lurks ? "lurk" : hunting ? "hunt" : "wander",
     hunting,
     stateTimer: 0,
     lungeDirX: 0,
@@ -76,8 +86,23 @@ export function createEnemy(
     wanderAngle: randRange(0, TAU),
     // Offset so a crowd of them does not step in lockstep.
     walkPhase: randRange(0, TAU),
+    lastStride: 0,
     hurtFlash: 0,
     visible: false,
+    tendrilOut: 0,
+    tendrilTargetId: -1,
+    tendrilHealth: def.tendril?.health ?? 0,
+    // A lurker's post is wherever it was put down. That is the whole of its patience.
+    postX: x,
+    postY: y,
+    pinTargetId: -1,
+    blind: 0,
+    litFor: 0,
+    ventTimer: 0,
+    ventFromX: x,
+    ventFromY: y,
+    ventToX: x,
+    ventToY: y,
   };
 }
 
@@ -93,6 +118,12 @@ export interface EnemyDeps {
   lureFlow: FlowField;
   /** How a bite reaches a player. The world owns damage, so it can raise the event. */
   hurtPlayer: (p: Player, amount: number) => void;
+  /**
+   * Is this point lit by something that stays put — a lamp, a burning flare? Not a
+   * flashlight. The Ceiling Lurker reads it to decide whether the floor under its grate
+   * is a place it is willing to come down, which is the whole of its counterplay.
+   */
+  lit: (x: number, y: number) => boolean;
 }
 
 export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
@@ -102,6 +133,27 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
   e.hurtFlash = Math.max(0, e.hurtFlash - dt * 4);
   e.attackCooldown = Math.max(0, e.attackCooldown - dt);
   e.stateTimer = Math.max(0, e.stateTimer - dt);
+
+  /*
+   * The mutants get first refusal on the step. Each one takes only the frames its own
+   * behaviour owns and hands back the rest — so a Stalker with nobody isolated, or a
+   * Strangler that has been forced into a melee, falls through to the shared machine
+   * below and behaves like the unusually unpleasant zombie it still is.
+   */
+  if (def.tendril && updateStrangler(e, deps, dt)) {
+    advanceGait(e);
+    shambleNoise(e, deps);
+    return;
+  }
+  if (def.drop && updateLurker(e, deps, dt)) {
+    advanceGait(e);
+    return;
+  }
+  if (def.pounce && updateStalker(e, deps, dt)) {
+    advanceGait(e);
+    shambleNoise(e, deps);
+    return;
+  }
 
   // The leap is a commitment: nothing it perceives mid-flight changes where it lands.
   if (e.state === "windup" || e.state === "lunge" || e.state === "recover") {
@@ -219,6 +271,21 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
 
   e.facing = rotateToward(e.facing, lookAngle, 6 * dt);
   advanceGait(e);
+  shambleNoise(e, deps);
+}
+
+/**
+ * A footfall, every couple of strides. Tagged as made by the dead so the horde does not
+ * spend the mission walking toward its own shuffling — see `byDead` in `sim/noise.ts`.
+ * What it IS for is the player: a ripple on the floor you can read when you cannot see.
+ */
+function shambleNoise(e: Enemy, deps: EnemyDeps): void {
+  if (zombieDef(e.kind).silent) return;
+  const stride = Math.floor(e.walkPhase / SHAMBLE_PHASE);
+  if (stride === e.lastStride) return;
+  e.lastStride = stride;
+  if (Math.hypot(e.x - e.prevX, e.y - e.prevY) < 0.05) return;
+  deps.noise.emit(e.x, e.y, NOISE.shamble, "step", true);
 }
 
 /**

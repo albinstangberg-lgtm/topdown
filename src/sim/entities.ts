@@ -1,4 +1,5 @@
 import type { VisionLight } from "../vision/visibility";
+import type { ItemKind } from "./items";
 
 /**
  * CORE 5 — Entities.
@@ -17,6 +18,42 @@ export type Team = "player" | "enemy";
  * makes it a decision rather than a dodge you spam.
  */
 export type Stance = "stand" | "dive" | "prone" | "standUp";
+
+/**
+ * Something has hold of you. Both mutants that can grab a player produce one of these,
+ * and everything downstream — the weapon, the movement, the HUD, what a teammate can do
+ * about it — reads the restraint rather than asking which creature caused it.
+ *
+ * The rule both share: **a held player cannot shoot.** That is what turns a grab into a
+ * squad problem instead of a personal one, and it is why the counterplay for both is
+ * somebody else's flashlight finding you in time.
+ */
+/**
+ * Something heavy enough to need both hands. Carrying one puts your primary weapon
+ * away — see `activeWeapon` in `src/sim/player.ts` — so moving a fusion core across a
+ * dark deck is a job that needs escorts rather than a pickup you walk over.
+ */
+export type CarryKind = "core" | "battery";
+
+export interface Restraint {
+  /** `tendril` drags you toward it; `pin` puts you on the floor under it. */
+  kind: "tendril" | "pin";
+  /** Which enemy has you. Killing it, or cutting what it has hold of, frees you. */
+  byId: number;
+  /** Seconds it has held you. Drives the damage ramp and the HUD. */
+  time: number;
+  /** 0..1 of a teammate's shove. Only a pin can be shoved off. */
+  shove: number;
+  /**
+   * Where the thing holding you is. The creature refreshes this every step so the
+   * player module can be dragged toward it without ever learning what an Enemy is —
+   * the same seam that keeps melee and revives out of the player's business.
+   */
+  anchorX: number;
+  anchorY: number;
+  /** World units per second it drags you at. Zero for a pin: that one just sits on you. */
+  pull: number;
+}
 
 /**
  * Which silhouette the renderer puts in the actor's hands. One of these per row in
@@ -44,6 +81,14 @@ export interface WeaponDef {
   range: number;
   /** How far the report carries, in world units. What the dead hear. */
   noise: number;
+  /**
+   * Charge one round takes out of the suit battery when you reload. Guns on this ship
+   * do not eat boxes of brass — they draw off the same cell as your flashlight and your
+   * welding tool, which is what makes "how much shooting can I afford" a live question
+   * in the dark. Melee weapons leave it out: a crowbar costs nothing and never runs dry,
+   * which is why a flat suit still leaves you something.
+   */
+  draw?: number;
   /**
    * A melee weapon swings instead of firing. No bullets, no magazine, and quiet
    * enough that clearing a room with one does not call the next one — which is the
@@ -74,17 +119,17 @@ export const WEAPONS: Record<string, WeaponDef> = {
   smg: {
     name: "SMG", art: "smg", fireRate: 9, bulletSpeed: 900, damage: 12, spread: 0.055,
     pellets: 1, magazine: 30, reloadTime: 1.3, recoil: 0.02, auto: true, range: 900,
-    noise: 650,
+    noise: 650, draw: 0.9,
   },
   shotgun: {
     name: "Shotgun", art: "shotgun", fireRate: 1.6, bulletSpeed: 780, damage: 9, spread: 0.16,
     pellets: 7, magazine: 6, reloadTime: 1.9, recoil: 0.09, auto: false, range: 500,
-    noise: 850,
+    noise: 850, draw: 4,
   },
   pistol: {
     name: "Pistol", art: "pistol", fireRate: 5, bulletSpeed: 820, damage: 10, spread: 0.03,
     pellets: 1, magazine: 14, reloadTime: 1.0, recoil: 0.03, auto: false, range: 800,
-    noise: 600,
+    noise: 600, draw: 1.2,
   },
 };
 
@@ -181,6 +226,50 @@ export interface Player {
   swingHit: boolean;
   /** 0..1, spikes on every shot and decays: the kick, and the shotgun's pump cycle. */
   recoil: number;
+
+  // --- The utility slot. See `src/sim/items.ts`. ------------------------------
+  /** What is in the one utility slot, or null. */
+  item: ItemKind | null;
+  /** Uses left on it. Only the welder ever has more than one. */
+  itemCharges: number;
+  /** Seconds of holding the item button so far, for the ones that are a dwell. */
+  itemHold: number;
+  /** Seconds of adrenaline left: faster, reloads quicker, and immune to the next grip. */
+  adrenaline: number;
+
+  // --- One power budget for the whole suit. See `src/sim/power.ts`. ------------
+  /** Charge left in the suit cell. Guns, the flashlight and the welder all draw on it. */
+  battery: number;
+  maxBattery: number;
+  /**
+   * Seconds of dimmed cone left after a shot: firing diverts power away from the light.
+   * Two seconds of half a beam is a real cost in a dark room, and it is the reason
+   * "shoot it yourself" and "hold the light steady for whoever can" are both real plays.
+   */
+  lightDip: number;
+  /**
+   * What is in both hands, or null. A carried object replaces the primary weapon with
+   * the fallback melee — you cannot shoulder a rifle and hold a fusion core.
+   */
+  carrying: CarryKind | null;
+  /** How full the thing being carried is, 0..1. A battery cell arrives part-used. */
+  carryCharge: number;
+  /** The thing you fall back on: no charge, or both hands full. Always a melee weapon. */
+  sidearm: WeaponDef;
+
+  // --- Light, and what has hold of you. --------------------------------------
+  /**
+   * Is the flashlight on? Off, you are nearly blind but nearly invisible; on, you can
+   * see and every dead thing in the dark can see where you are looking from.
+   */
+  lightOn: boolean;
+  /** Counts down to the next "there is a beam on in here" tell the dark can hear. */
+  lightTell: number;
+  /** Seconds of washed-out vision from an arc flash. Shrinks the cone to nothing. */
+  blinded: number;
+  /** What has hold of you, or null. See `Restraint`. */
+  restraint: Restraint | null;
+
   cone: VisionLight;
   halo: VisionLight;
 }
@@ -210,8 +299,21 @@ export interface Enemy {
    * - `windup` — planted, telegraphing the leap. This is the window you dodge in
    * - `lunge` — committed to a direction, damage on contact
    * - `recover` — face down, cannot move or turn, takes extra damage
+   *
+   * And three more that only the mutants with an ability ever enter:
+   * - `lurk`     — a Strangler holding its post in the dark, waiting for a line on you
+   * - `reel`     — its tendril is in someone and it is pulling them in
+   * - `stalk`    — a Stalker creeping the shadows toward somebody on their own
+   * - `pounce`   — committed to the leap that ends on top of a player
+   * - `pin`      — sitting on one, chewing, until it is shoved off or shot off
+   * - `vent`     — up in the ducts, between two grates. Cannot be touched from the floor
+   * - `roost`    — a Ceiling Lurker sitting IN a grate, watching the floor under it.
+   *                Deliberately not `lurk`: a Strangler lurks on the floor and can be
+   *                shot, a Lurker roosts in the ceiling and cannot
    */
-  state: "wander" | "hunt" | "investigate" | "chase" | "windup" | "lunge" | "recover";
+  state:
+    | "wander" | "hunt" | "investigate" | "chase" | "windup" | "lunge" | "recover"
+    | "lurk" | "reel" | "stalk" | "pounce" | "pin" | "vent" | "roost";
   /**
    * Came in with a wave, so it has a heading. A horde that spawns and then mills about
    * is not a horde. Ambient wanderers do not get this — being oblivious is their job.
@@ -233,7 +335,39 @@ export interface Enemy {
   wanderAngle: number;
   /** Gait cycle, in radians, advanced by distance travelled. Presentation only. */
   walkPhase: number;
+  /** Which stride of the gait last made a footfall, so one step is one noise. */
+  lastStride: number;
   hurtFlash: number;
+
+  // --- Strangler. Only a kind with a `tendril` def ever uses these. -----------
+  /** How far the tendril is out, 0..1. Drives the draw and says whether one is flying. */
+  tendrilOut: number;
+  /** Player the tendril is in, or -1. */
+  tendrilTargetId: number;
+  /**
+   * What is left of the tendril itself. It is deliberately soft: severing one is meant
+   * to be the panicked answer a teammate can manage across a dark room, so it takes far
+   * less than killing the thing on the other end of it.
+   */
+  tendrilHealth: number;
+  /** Where it anchors its post, so a Strangler holds a corner instead of wandering off. */
+  postX: number;
+  postY: number;
+
+  // --- Stalker. Only a kind with a `pounce` def ever uses these. --------------
+  /** Player it is pinning, or -1. */
+  pinTargetId: number;
+  /** Seconds of flashlight blindness left. It cannot leap, and it moves badly. */
+  blind: number;
+  /** How long a beam has been held on it. Reaching `pounce.blind` blinds it. */
+  litFor: number;
+  /** Seconds left in the ducts. While this is running it is overhead, not in the room. */
+  ventTimer: number;
+  /** Where it climbed in, and the grate it is heading for. */
+  ventFromX: number;
+  ventFromY: number;
+  ventToX: number;
+  ventToY: number;
   /** Recomputed each step: is this enemy inside any player's vision right now? */
   visible: boolean;
 }

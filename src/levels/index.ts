@@ -2,6 +2,8 @@ import { parseLevelText, type LevelData } from "../world/level";
 import { generateLevel } from "../world/generator";
 import { CORRIDORS } from "./corridors";
 import { SHOWCASE } from "./showcase";
+import { HAZARDS } from "./hazards";
+import { SYSTEMS } from "./systems";
 
 /**
  * Built-in maps. Both forms below go through the same importer the drag-and-drop path
@@ -16,6 +18,8 @@ export interface BuiltinLevel {
 export const BUILTIN_LEVELS: BuiltinLevel[] = [
   { id: "corridors", name: "Corridors", source: CORRIDORS },
   { id: "showcase", name: "Tile Showcase", source: SHOWCASE },
+  { id: "hazards", name: "Deck Hazards", source: HAZARDS },
+  { id: "systems", name: "Deck Systems", source: SYSTEMS },
 ];
 
 export const PROCEDURAL = "procedural";
