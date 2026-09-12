@@ -380,7 +380,17 @@ lost. Missions have placed zombies you can learn, spawn zones so reinforcements 
 always the same, and a safe room to reach. Progress is kept in `localStorage`.
 
 **Survival** is the endless one: a fresh procedural layout every run, bigger waves and
-shorter breathers. No exit, no objective — last as long as you can.
+shorter breathers. No exit, no objective — last as long as you can. The generated decks
+come **dressed**: ceiling vents, a flooded bay with a torn conduit beside it, a coolant
+leak, a bulkhead you can weld, supply caches, a charging point and a battery rack, a hull
+breach with its lever and railings — and one each of the Strangler, the Stalker and the
+Ceiling Lurker, none of which the director will ever spawn on its own. Restarting rerolls
+the deck.
+
+Two things are left out of generated maps on purpose: **airlocks**, because a chamber has
+to be a walled throat with a door at each end and there is no way to promise that in a
+two-wide corridor, and **core racks**, because a core is only worth carrying to a fusion
+socket and survival has no objective chain to put one in.
 
 The starter campaign, *Sector 7*, lives in `src/campaign/campaign.ts`: five missions as
 glyph art, each with a node position on the mission map and a list of missions it
@@ -606,7 +616,7 @@ water, coolant fog, a toggleable flashlight that trades sight for attention, one
 suit battery behind the guns, lights and tools, two-handed carries that stow the primary,
 hull breaches with shared oxygen and railings, two-person airlocks,
 audio occluded against the geometry, a sound-ripple visualiser,
-melee weapons, hold-to-use devices
+melee weapons, a generator that dresses its decks with all of it, hold-to-use devices
 (terminals, weapon lockers, fusion sockets and a blast door) driving a multi-act
 objective chain, per-floor difficulty pressure, HUD per viewport,
 a debug overlay, synthesised positional sound, the level format with a tolerant

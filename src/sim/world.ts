@@ -386,10 +386,13 @@ export class GameWorld {
   /** Grace period once the whole squad is down, so the wipe reads as a moment. */
   private wipeTimer = 0;
   private seed: number;
+  /** Whether the floor on screen came out of the generator. See `restart`. */
+  private generated: boolean;
 
   constructor(level?: LevelData, seed = 1337, mode: GameMode = "survival") {
     this.seed = seed;
     this.mode = mode;
+    this.generated = level === undefined || level.generated === true;
     this.map = buildTileMap(level ?? generateLevel(MAP_COLS, MAP_ROWS, seed));
     this.bakeStaticLights();
     this.director.rebuild(this.map);
@@ -405,6 +408,7 @@ export class GameWorld {
    */
   loadLevel(level: LevelData, opts: { keepSquad?: boolean } = {}): void {
     this.map = buildTileMap(level);
+    this.generated = level.generated === true;
     // Power is the one thing that crosses a floor boundary, and only within a mission:
     // keeping the squad means the same run, so the reactor stays on behind them.
     if (!opts.keepSquad) {
@@ -2216,7 +2220,11 @@ export class GameWorld {
    * because there is nothing to be faithful to.
    */
   restart(): void {
-    if (this.map.playerSpawns.length === 0 && this.map.enemySpawns.length === 0) {
+    // Asked of the level rather than of the grid. The old test for this was "the map has
+    // no spawns on it", which the generator has never satisfied — it lays a squad spawn
+    // and enemy spawns like any authored map — so a procedural run quietly restarted as
+    // the same floor instead of rerolling.
+    if (this.generated) {
       this.seed = (this.seed * 1664525 + 1013904223) >>> 0;
       this.loadLevel(generateLevel(MAP_COLS, MAP_ROWS, this.seed));
       return;

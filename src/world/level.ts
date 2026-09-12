@@ -16,6 +16,13 @@ export const LEVEL_VERSION = 1;
 export interface LevelData {
   name: string;
   grid: number[][];
+  /**
+   * Set by the generator, absent everywhere else. It travels with the level rather than
+   * being inferred later, because "did a person write this" cannot be read back off a
+   * grid — the generator lays spawns like any other map — and something has to decide
+   * whether restarting rerolls the floor or replays it.
+   */
+  generated?: boolean;
 }
 
 export interface ParseResult {

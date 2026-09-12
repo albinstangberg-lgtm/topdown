@@ -144,6 +144,17 @@ use it for a pool, a pit, a planter, rubble, or just to give a room a shape that
 would make ugly. It is drawn hatched and outlined rather than identical to walkable
 floor, deliberately: an invisible wall is the worst thing a level can have.
 
+**The generator places most of this for you.** A procedural deck
+(`?level=procedural`, and every survival run) is dressed by `dressShip` in
+`src/world/generator.ts`: vents, a pool with a cable beside it, a coolant leak, a
+bulkhead laid across *both* tiles of a two-wide mouth so welding it actually seals
+something, caches, a charging point, a battery rack, a breach with its lever and
+railings, and one of each mutant. If you add a tile worth generating, the rule to keep
+is the one that pass is built on — **a solid tile only ever replaces a wall, a walkable
+one only ever replaces plain floor** — which is what makes it impossible for the dressing
+to seal a room off or land on a spawn. Airlocks and core racks are excluded: an airlock
+needs a guaranteed walled throat, and a core needs a socket to go into.
+
 **Adding a tile type is one row in `TILE_DEFS`.** Give it an id, a colour and a glyph,
 set the two flags, and it appears in the editor palette, imports correctly, and behaves
 in-game — no other file needs to change.

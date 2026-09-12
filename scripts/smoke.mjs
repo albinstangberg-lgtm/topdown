@@ -2917,6 +2917,102 @@ check("a flare under the grate denies the drop outright",
 
 check("the systems deck raised no exceptions", sysErrors.length === 0, sysErrors.join(" | "));
 
+// --- the generator, dressed ---------------------------------------------------
+//
+// Survival has no authored decks, so everything the ship rounds added has to be placed
+// by the generator or it simply never appears in that mode. The two things worth
+// asserting are that it IS placed, and that placing it cannot break a map: the dressing
+// pass only ever puts a solid tile where a wall already was, so no amount of furniture
+// can seal a room off — which is checked here by flood-filling the whole deck.
+
+const procPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const procErrors = [];
+procPage.on("pageerror", (e) => procErrors.push(String(e)));
+await procPage.goto(`${URL}?level=procedural&players=2`, { waitUntil: "load" });
+await procPage.waitForTimeout(700);
+
+// Installed once and reused after every reroll, so a fresh deck is measured the same way.
+await procPage.evaluate(() => {
+  window.__survey = () => {
+    const w = window.game.world, m = w.map;
+    const starts = m.playerSpawns.map((p) => [Math.floor(p.x / 48), Math.floor(p.y / 48)]);
+    const seen = new Set(starts.map(([x, y]) => y * m.cols + x));
+    const queue = [...starts];
+    while (queue.length > 0) {
+      const [x, y] = queue.pop();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= m.cols || ny >= m.rows) continue;
+        const i = ny * m.cols + nx;
+        if (seen.has(i) || m.isSolid(nx, ny)) continue;
+        seen.add(i);
+        queue.push([nx, ny]);
+      }
+    }
+    let walkable = 0;
+    let stranded = 0;
+    for (let y = 0; y < m.rows; y++) {
+      for (let x = 0; x < m.cols; x++) {
+        if (m.isSolid(x, y)) continue;
+        walkable++;
+        if (!seen.has(y * m.cols + x)) stranded++;
+      }
+    }
+    return {
+      name: m.name,
+      vents: m.vents.length,
+      puddles: m.puddles.length,
+      cables: m.puddles.reduce((n, p) => n + p.cables.length, 0),
+      bulkheads: m.bulkheads.length,
+      chargers: m.chargers.length,
+      racks: m.racks.map((r) => r.gives).sort(),
+      breaches: m.breaches.length,
+      railings: m.railings.length,
+      levers: m.devices.filter((d) => d.kind === "lever").length,
+      caches: m.devices.filter((d) => d.kind === "supply").length,
+      airlocks: m.airlocks.length,
+      kinds: [...new Set(w.enemies.map((e) => e.kind))].sort(),
+      walkable, stranded,
+    };
+  };
+});
+const dressed = await procPage.evaluate(() => window.__survey());
+check("a procedural deck comes dressed, and nothing on it is sealed off",
+  dressed.stranded === 0 && dressed.walkable > 400 &&
+  dressed.vents >= 2 && dressed.puddles === 1 && dressed.cables >= 1 &&
+  dressed.chargers === 1 && dressed.racks.join() === "battery" &&
+  dressed.breaches === 1 && dressed.levers === 1 && dressed.railings >= 1 &&
+  dressed.caches >= 1 &&
+  // No core rack (nothing to seat a core in) and no airlock (a chamber has to be a
+  // walled throat, and a generator cannot promise one) — both deliberate.
+  dressed.airlocks === 0 &&
+  dressed.kinds.includes("strangler") && dressed.kinds.includes("stalker") &&
+  dressed.kinds.includes("lurker"),
+  JSON.stringify(dressed));
+
+// Restarting a generated run rerolls it. This used to be dead code: the test for "was
+// this generated" was "the map has no spawns", which the generator has never satisfied.
+const rerolled = await procPage.evaluate(async () => {
+  const names = [window.game.world.map.name];
+  const broken = [];
+  for (let i = 0; i < 5; i++) {
+    window.game.world.restart();
+    await new Promise((r) => setTimeout(r, 180));
+    const deck = window.__survey();
+    names.push(deck.name);
+    if (deck.stranded > 0 || deck.vents < 2 || deck.breaches !== 1 || deck.chargers !== 1) {
+      broken.push(deck);
+    }
+  }
+  return { rolls: names.length, unique: new Set(names).size, broken: broken.length };
+});
+check("restarting a procedural run rerolls the deck, and every roll holds up",
+  rerolled.unique === rerolled.rolls && rerolled.broken === 0,
+  JSON.stringify(rerolled));
+
+check("the procedural deck raised no exceptions", procErrors.length === 0, procErrors.join(" | "));
+
 await browser.close();
 
 const failed = checks.filter((c) => !c.ok);

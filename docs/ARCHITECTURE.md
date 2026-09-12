@@ -63,6 +63,22 @@ you will pay for the first time you want a window, smoke, or a grate.
 The generator emits the same thing a hand-authored level does — a grid of ids — so the
 game has exactly one way to load a map and no special case for "generated".
 
+Rooms and corridors first, then a **dressing pass** (`dressShip`) that puts the ship's
+own furniture into them: vents, a pool with a torn conduit beside it, a coolant leak, a
+bulkhead, supply caches, a charging point and a battery rack, a hull breach with its
+lever and railings, and one each of the three ambush mutants. Without it none of that
+exists in survival, because survival has no authored decks and the mutants carry
+`weight: 0` so the director never draws them.
+
+One rule makes the pass safe, and it is the only thing to preserve if it ever grows:
+**a solid tile only ever replaces a wall, and a walkable one only ever replaces plain
+floor.** Connectivity therefore cannot change, so no amount of dressing can seal a room
+off or strand a spawn — the property that makes a generator worth trusting, and the one
+the smoke suite checks by flood-filling the finished deck. Two things are deliberately
+*not* generated: airlocks, because a chamber has to be a walled throat with a door at
+each end and a two-wide corridor cannot promise one, and core racks, because a core is
+only worth carrying to a socket and survival has no objective chain to put one in.
+
 ### 4. Vision / line of sight — `src/vision/visibility.ts`
 
 The cone is the game. It is a visibility polygon: fan rays across the cone, keep where
