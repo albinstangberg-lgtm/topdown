@@ -414,9 +414,9 @@ containing you.
 
 **Act III — the descent.** Down into engineering and the reactor, the two darkest decks
 in the game — and the two where the suit battery starts to bite, which is why both have a
-charging point on them. The reactor wants three cells, and they are on a **rack**: each
-one is carried across the deck in both hands with your primary stowed, so every trip is
-a job for the squad rather than for the person holding it. Seating the first core starts
+charging point on them. The reactor wants three cells, and they are on a **rack** beside
+the housing: each one is carried out to its socket in both hands with your primary
+stowed, so every trip is a job for the squad rather than for the person holding it. Seating the first core starts
 a siege that runs until the last one is in. When it is, **main power comes back**: the
 lights slam on across every deck, the alarm starts, and the director is handed everything
 left.
