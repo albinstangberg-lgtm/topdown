@@ -133,7 +133,9 @@ export function drawHud(
     ctx.font = "600 12px ui-monospace, monospace";
     ctx.fillStyle = "rgba(255,255,255,0.7)";
     ctx.fillText(
-      `teammate: hold F / Y to revive   ·   ${Math.ceil(p.bleedout)}s`,
+      p.draggedBy !== null
+        ? `P${p.draggedBy + 1} is dragging you clear   ·   ${Math.ceil(p.bleedout)}s`
+        : `teammate: hold F / Y — stand still to revive, walk to drag   ·   ${Math.ceil(p.bleedout)}s`,
       vp.w / 2, vp.h * 0.62 + 22,
     );
     ctx.textAlign = "left";
@@ -179,7 +181,11 @@ export function drawHud(
     if (other === p || (!other.downed && other.restraint === null)) continue;
     const d = Math.hypot(other.x - p.x, other.y - p.y);
     ctx.fillStyle = other.color;
-    const what = other.downed ? "DOWN" : other.restraint?.kind === "pin" ? "PINNED" : "GRABBED";
+    // A body somebody already has hold of is not a second emergency: say so, or the
+    // squad sends two people to the same floor.
+    const what = other.downed
+      ? (other.draggedBy !== null ? `WITH P${other.draggedBy + 1}` : "DOWN")
+      : other.restraint?.kind === "pin" ? "PINNED" : "GRABBED";
     ctx.fillText(`P${other.id + 1} ${what}  ${Math.round(d / 10)}m`, pad, pad + 100);
     break;
   }
@@ -562,6 +568,28 @@ function drawSuitState(
     ctx.fillStyle = "rgba(140,225,255,0.95)";
     ctx.fillText(`EQUALIZING  ${cycle.toFixed(1)}s`, vp.w / 2, vp.h * 0.36);
     ctx.font = "600 12px ui-monospace, monospace";
+    ctx.textAlign = "left";
+  }
+
+  // Hands on a teammate. Said out loud because the primary going away is a surprise
+  // otherwise, and because "let go" is a button you are already holding.
+  if (p.dragging !== null) {
+    // Which of the two jobs the grip is doing right now, read off the feet the same
+    // way the simulation reads it. Standing still is the revive; moving is the haul.
+    const hauling = Math.hypot(p.vx, p.vy) > 12;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hauling ? "rgba(255,190,120,0.95)" : "rgba(150,255,190,0.95)";
+    ctx.fillText(
+      hauling
+        ? `HAULING P${p.dragging + 1} — STOP TO WORK ON THEM`
+        : `REVIVING P${p.dragging + 1} — WALK TO DRAG THEM CLEAR`,
+      vp.w / 2, vp.h - pad - 52,
+    );
+    ctx.textAlign = "left";
+  } else if (p.downed && p.draggedBy !== null) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(150,255,190,0.95)";
+    ctx.fillText(`P${p.draggedBy + 1} HAS YOU`, vp.w / 2, vp.h - pad - 52);
     ctx.textAlign = "left";
   }
 

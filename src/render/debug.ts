@@ -118,6 +118,10 @@ export class DebugOverlay {
       `director ${world.director.phase}  intensity ${world.director.intensity.toFixed(2)}`,
       `waves ${world.director.waves}  doors ${world.director.doorCount}  next ${Math.max(0, world.director.waveTimer).toFixed(1)}s`,
       `grace ${world.director.grace.toFixed(1)}s  alarm ${world.alarm.active ? world.alarm.timeLeft.toFixed(1) + "s" : "-"}`,
+      // What the dead think they know. Zero means the squad has genuinely gone quiet
+      // and the horde is walking at nothing — the single most useful number on here
+      // when you are trying to work out why nothing is coming.
+      `hunches ${world.hunches.length}  oldest ${world.hunches.length === 0 ? "-" : Math.max(...world.hunches.map((h) => h.life)).toFixed(1) + "s"}`,
       `extraction ${world.extraction.phase}  ${world.extraction.phase === "none" ? "" : world.extraction.timeLeft.toFixed(1) + "s"}`,
       `vision pts ${world.players.reduce((n, p) => n + p.cone.poly.length / 2, 0).toFixed(0)}`,
       `t ${world.time.toFixed(1)}s   [F2] collision  [F3] flow field`,

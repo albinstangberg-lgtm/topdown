@@ -89,6 +89,25 @@ bleed out with someone still up and you respawn at the squad; the whole squad do
 run reset. Every one of those rules is about the group, and they are much harder to add
 once "player dies, player respawns" is baked into a dozen systems.
 
+`updateRescues` is the whole of "somebody has hold of somebody", and it is worth
+reading as one function rather than two. There is a single grip — holding USE next to a
+downed teammate — and it does both jobs: standing still over them is the revive, walking
+is a drag. Splitting them onto two buttons was the obvious design and the wrong one; the
+decision worth having is *win this fight or leave this room*, and it should be made with
+the stick rather than looked up.
+
+The grip lives on the player as two ids (`dragging` / `draggedBy`) rather than as object
+references, for the same reason `Restraint` stores `byId`: the world stays plain data
+and survives a structured clone, which is the prerequisite for netcode in core 5. The
+body is pulled by `moveCircle` like anything else that moves, so geometry is never
+special-cased, and a grip that stretches past `DRAG_BREAK` simply stops being a grip on
+the next step — no tear-down path to get wrong.
+
+The cost is deliberately the carry system's cost, reusing its one rule: both hands full
+means `activeWeapon` hands back the fallback melee. That is why the revive stows the
+primary now too. One rule, one place, and the HUD, the trigger and the renderer cannot
+disagree about what is in somebody's hands.
+
 ### 7. Cameras and viewports — `src/render/camera.ts`, `src/render/viewport.ts`
 
 **Nothing may assume one screen.** Every draw call takes a viewport. The layout is
@@ -327,10 +346,30 @@ with the game.
 - **AI perception on the same primitive** (`src/sim/enemy.ts`) — a zombie sees you when
   you are in its arc *and* it has line of sight. Symmetry with the player's vision is
   what makes a light-and-shadow shooter fair and readable: if a wall stops you seeing
-  it, it cannot see you.
+  it, it cannot see you. How far the arc reaches is scaled by `visibleness`, which is
+  only ever a statement about photons: a lit floor, your own beam, a muzzle flash,
+  coolant fog at either end, a body lying still on the deck. Nothing in there is the
+  zombie reasoning about cover, and nothing in there should ever become that.
+- **Braindead on purpose** (`src/sim/enemy.ts`) — read the header comment before
+  changing anything in here. Every rule in the file is written to stop the horde
+  acquiring judgement, because the obvious improvements to an enemy are all improvements
+  to its judgement and they all end in the same place: a competent squad of soldiers
+  wearing zombie skins, which still passes every test about whether they can reach you.
+  They fixate instead of re-targeting, blunder instead of searching, groan instead of
+  communicating, and walk at noises instead of at people. If a change here needs the
+  word *decides*, it is the wrong change.
 - **Flow-field pathing** (`src/world/flow.ts`) — one breadth-first sweep out from the
-  squad gives every tile its distance to the nearest player, and any number of zombies
-  steer by reading one tile. Forty zombies cost one sweep, not forty path searches, and
+  goals gives every tile its distance to the nearest one, and any number of zombies
+  steer by reading one tile.
+
+  **The goals are not the players.** They are `hunches` (`sim/world.ts`): places the
+  squad was last loud, each worth twelve seconds. Sweeping from live player positions is
+  the obvious build and it is a trap — it hands every zombie a perfect, continuously
+  updating route to somebody it has never seen or heard, and the game quietly loses the
+  ability to let you break contact. With hunches, the field empties when the squad goes
+  quiet, `steer` starts returning false, and hunting zombies fall through to wandering
+  right where you used to be. Same sweep, same cost, and the dark and the noise field
+  become load-bearing instead of decorative. Forty zombies cost one sweep, not forty path searches, and
   the grid is what makes it that cheap: integer distances, four neighbours, a flat queue
   and no allocation after the first build. Diagonals are recovered at query time, where
   a corner check can see both sides of the step. A second field, aimed at whatever is
@@ -468,6 +507,10 @@ In rough order of when it starts hurting:
 | --- | --- |
 | Tile types, and what each id means | `TILE_DEFS` in `src/world/tiles.ts` |
 | Cone angle, range, player speed, dash, revive rules | `src/sim/player.ts` (top of file) |
+| Drag speed, leash length and what tears a grip | `DRAG_*` in `src/sim/player.ts` |
+| How hard it is to break contact | `HUNCH_LIFE` in `src/sim/world.ts` |
+| How blind the dark makes them, and how loud a groan is | `DARK_SEEN`, `GROAN_INTERVAL` in `src/sim/enemy.ts`, `NOISE.groan` |
+| What chewing a downed player costs them | `BLEEDOUT_PER_HIT` in `src/sim/player.ts` |
 | How dark the dark is | `AMBIENT_DARKNESS` in `src/render/renderer.ts` |
 | Flashlight brightness | `FLASHLIGHT_REVEAL` / `FLASHLIGHT_GLOW` in `src/render/renderer.ts` |
 | How hard you must push to raise the weapon | `WEAPON_RAISE_THRESHOLD` in `src/sim/player.ts` |

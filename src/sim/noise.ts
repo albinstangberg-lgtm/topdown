@@ -22,6 +22,13 @@ export type NoiseKind =
   | "beam"
   /** A Stalker moving through the ducts overhead. The only warning you get. */
   | "duct"
+  /** A downed teammate being hauled across the deck plating. The price of a retreat. */
+  | "drag"
+  /**
+   * One of the dead, making the noise it makes when it has found something. The only
+   * sound in the field that the dead themselves react to — see `rousing`.
+   */
+  | "groan"
   /** A deck going to vacuum. The loudest thing on the ship bar the helicopter. */
   | "breach"
   /** A discharge through standing water. Loud, and it carries. */
@@ -103,7 +110,7 @@ export class NoiseField {
     let best: Noise | null = null;
     let bestLoudness = 0;
     for (const n of this.items) {
-      if (!n.active || n.byDead) continue;
+      if (!n.active || !rousing(n)) continue;
       const reach = n.radius * hearing;
       const d = Math.hypot(n.x - x, n.y - y);
       if (d >= reach) continue;
@@ -112,6 +119,26 @@ export class NoiseField {
     }
     return best;
   }
+}
+
+/**
+ * Does this noise mean anything to a dead thing?
+ *
+ * One rule, in one place, because the horde's ears and the horde's sense of where the
+ * squad might be have to agree or the game gets very strange: **the dead ignore
+ * everything the dead do, except a groan.**
+ *
+ * Both halves of that are load-bearing. Without the first, a crowd walks toward its own
+ * shuffling and the mission is forty zombies slowly converging on themselves. Without
+ * the second, being seen by one of them is a private event between you and it, and a
+ * horde that cannot pass the news along is a collection of individuals.
+ *
+ * And a groan is emphatically not the news being passed along. Nothing is being told
+ * anything. One of them got loud, and the rest have ears — which is the same sentence
+ * as "you fired a gun", and runs on exactly the same field.
+ */
+export function rousing(n: Noise): boolean {
+  return !n.byDead || n.kind === "groan";
 }
 
 /** How far each thing carries. One table, so "is the shotgun loud?" has one answer. */
@@ -133,8 +160,20 @@ export const NOISE = {
    * not a gunshot — but it is the whole reason to walk a black deck with the light off.
    */
   beam: 300,
+  /**
+   * A groan. Between a shamble and a gunshot on purpose: it carries a room and its
+   * neighbours, not a deck. Loud enough that being seen is never a private event,
+   * short enough that it is not a klaxon.
+   */
+  groan: 460,
   /** Something dragging itself along a duct. Heard through the ceiling, not the walls. */
   duct: 330,
+  /**
+   * A body being hauled across deck plating. Louder than a sprint, because a limp
+   * teammate does not pick their feet up — this is the price of the retreat, and it is
+   * meant to be one you can hear yourself paying.
+   */
+  drag: 210,
   /** Current going through standing water. */
   arc: 780,
   /**

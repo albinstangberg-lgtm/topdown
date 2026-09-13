@@ -257,6 +257,19 @@ export interface Player {
   /** The thing you fall back on: no charge, or both hands full. Always a melee weapon. */
   sidearm: WeaponDef;
 
+  // --- Hands on a downed teammate. See `updateRescues` in `src/sim/player.ts`. ------
+  /**
+   * Who this player has hold of, by player id, or null. One grip does both jobs: stand
+   * still over them and it is a revive, walk and you are hauling them out of the room.
+   * Either way both hands are on the collar, so the primary is stowed for as long as
+   * this is set.
+   */
+  dragging: number | null;
+  /** Who has hold of this player while they are down, or null. The other end of it. */
+  draggedBy: number | null;
+  /** Counts down to the next scrape of a body coming off the deck plating. */
+  dragNoise: number;
+
   // --- Light, and what has hold of you. --------------------------------------
   /**
    * Is the flashlight on? Off, you are nearly blind but nearly invisible; on, you can
@@ -269,6 +282,12 @@ export interface Player {
   blinded: number;
   /** What has hold of you, or null. See `Restraint`. */
   restraint: Restraint | null;
+  /**
+   * How easy this player is to see right now, as a multiple of a zombie's sense range.
+   * Derived, and recomputed once per step by the world — it needs the lighting and the
+   * fog grid, which the player module has no business reading. See `visibleness`.
+   */
+  seenness: number;
 
   cone: VisionLight;
   halo: VisionLight;
@@ -330,6 +349,12 @@ export interface Enemy {
   lastSeenX: number;
   lastSeenY: number;
   alertness: number;
+  /**
+   * Counts down to the next groan. Runs whenever the thing is not groaning, so one
+   * that has been quiet for a while is loud the instant it sees somebody, and one
+   * that has been chasing you for ten seconds has told the floor about it twice.
+   */
+  groanTimer: number;
   /** Seconds before it may wind up another leap. */
   attackCooldown: number;
   wanderAngle: number;

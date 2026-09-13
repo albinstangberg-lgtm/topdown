@@ -72,6 +72,8 @@ const RIPPLE_TONE: Record<string, string> = {
   beam: "255,240,190",
   duct: "200,160,255",
   arc: "190,240,255",
+  drag: "255,190,150",
+  groan: "255,120,150",
 };
 
 export interface Bounds { x0: number; y0: number; x1: number; y1: number }
@@ -1000,6 +1002,14 @@ export class Renderer {
       // Nothing in the dark gets drawn — that is the whole point of the cone.
       if (!e.visible) continue;
       drawZombie(ctx, e, alpha);
+    }
+
+    // The grip goes under the bodies, so an arm's length of taut line reads as a hold
+    // on somebody rather than a rope lying across them.
+    for (const p of world.players) {
+      if (p.dragging === null) continue;
+      const body = world.players.find((q) => q.id === p.dragging);
+      if (body !== undefined) drawGrip(ctx, p, body, alpha);
     }
 
     for (const p of world.players) this.drawPlayer(ctx, p, alpha);
@@ -1957,6 +1967,7 @@ function drawZombie(ctx: CanvasRenderingContext2D, e: Enemy, alpha: number): voi
 function handsOf(p: Player): HandsPose | null {
   if (p.downed) return null;    // crawling: both hands on the floor
   if (p.carrying !== null) return null;  // both hands on the thing you are lugging
+  if (p.dragging !== null) return null;  // both hands on the teammate you are hauling
   // Whatever is actually in the hands — which is the fallback melee on a flat suit.
   const w = activeWeapon(p);
   return {
@@ -1967,6 +1978,38 @@ function handsOf(p: Player): HandsPose | null {
     swingSide: p.swingSide,
     reload: p.reloadTimer > 0 ? 1 - p.reloadTimer / w.reloadTime : 0,
   };
+}
+
+/**
+ * Somebody has hold of somebody. Two short bars where the hands are and a line between
+ * them: enough to read "those two are attached" across a dark room at a glance, which
+ * is the whole job — a squad has to be able to see that a body is already being moved
+ * and that the person moving it cannot shoot.
+ */
+function drawGrip(
+  ctx: CanvasRenderingContext2D, helper: Player, body: Player, alpha: number,
+): void {
+  const hx = lerp(helper.prevX, helper.x, alpha);
+  const hy = lerp(helper.prevY, helper.y, alpha);
+  const bx = lerp(body.prevX, body.x, alpha);
+  const by = lerp(body.prevY, body.y, alpha);
+
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(230,240,255,0.5)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(hx, hy);
+  ctx.lineTo(bx, by);
+  ctx.stroke();
+
+  // A pip in the dragger's colour at the body end: whose hands those are.
+  ctx.fillStyle = helper.color;
+  ctx.globalAlpha = 0.85;
+  ctx.beginPath();
+  ctx.arc(bx, by, 4, 0, TAU);
+  ctx.fill();
+  ctx.restore();
 }
 
 /** Blend two hex colours. `t` is how far from `a` toward `b`. */

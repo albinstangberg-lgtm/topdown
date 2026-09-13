@@ -171,7 +171,8 @@ export class DeviceSystem {
 
     const held = new Set<number>();
     for (const p of deps.players) {
-      if (p.downed) continue;
+      // Down, or holding a teammate: neither has a hand free for a panel.
+      if (p.downed || p.dragging !== null) continue;
       const device = deps.map.deviceAt(p.x, p.y);
       const using = deps.inputOf(p).interact;
 
@@ -298,7 +299,7 @@ export class DeviceSystem {
     if (this.door === "sealed") {
       // The arming dwell is accumulated per player above at a nominal rate; do the real
       // timing here so it does not depend on how many people are leaning on the panel.
-      const holding = deps.powered && deps.players.some((p) => !p.downed &&
+      const holding = deps.powered && deps.players.some((p) => !p.downed && p.dragging === null &&
         deps.inputOf(p).interact &&
         deps.map.blastDoors.some((d) => Math.hypot(d.x - p.x, d.y - p.y) < DOOR_REACH));
       this.doorArming = holding
