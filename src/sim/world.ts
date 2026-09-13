@@ -28,6 +28,11 @@ import type { CarryKind } from "./entities";
 import { randomZombieKind, zombieDef } from "./zombies";
 import { NOISE, NoiseField } from "./noise";
 import { Director, STORY_TUNING, SURVIVAL_TUNING, type DirectorDeps } from "./director";
+import {
+  FAULT_NOISE, startHack, updateHack,
+  type HackKind, type HackSession,
+} from "./hacking";
+import { buildTurrets, updateTurret, type Turret } from "./turret";
 import { BulletPool, ParticlePool } from "./pools";
 import type { Enemy, Player } from "./entities";
 
@@ -167,6 +172,8 @@ export interface GameEvent {
     // The utility slot, the hazards, and being got hold of.
     | "heal" | "item" | "weld" | "weldBroken" | "arc" | "grabbed" | "pinned" | "freed"
     | "carry" | "breach" | "airlock"
+    // Consoles: sitting down at one, each interlock, a fumbled one, and what it opens.
+    | "hack" | "hackFault"
       | "floorCleared" | "missionComplete" | "missionFailed"
       | "flareLit" | "holdout" | "chopperInbound" | "chopperDown"
       // The ship arc: a crew log, a locker, the reactor and the bridge door.
@@ -250,6 +257,25 @@ export class GameWorld {
    * "somebody watch this while I deal with that" a thing you can actually do.
    */
   readonly dropped: { kind: CarryKind; x: number; y: number; charge: number }[] = [];
+  /**
+   * Whoever is at a console right now, or null. One at a time for the whole squad: two
+   * people in screens is two people not watching the room, and the mechanic is the
+   * perimeter. It lives here rather than on the player because the renderer, the HUD and
+   * the world all read it, and the player only needs to know that they are in one.
+   */
+  hack: HackSession | null = null;
+  /**
+   * The deck's own guns. Built from the grid on load and emptied when a console cuts
+   * their power — the dead turret stays in the grid, so this list is only ever the live
+   * ones and nothing has to ask "is this one still switched on".
+   */
+  readonly turrets: Turret[] = [];
+  /**
+   * Players who have to let go of USE before a console will take them again. Without
+   * it, tapping USE to back out of a terminal drops you straight back into it: the
+   * button is still held, and the console's dwell starts filling the moment you leave.
+   */
+  private readonly hackLatch = new Set<number>();
   /**
    * A depressurisation in progress. There is only ever one — a second lever moves it
    * rather than stacking, the same rule the car alarm uses — and while it runs the room
@@ -395,10 +421,17 @@ export class GameWorld {
     this.generated = level === undefined || level.generated === true;
     this.map = buildTileMap(level ?? generateLevel(MAP_COLS, MAP_ROWS, seed));
     this.bakeStaticLights();
+    this.rebuildTurrets();
     this.director.rebuild(this.map);
     this.director.reset();
     this.devices.rebuild(this.map);
     this.resetExtraction();
+  }
+
+  /** Live turrets, from the grid. Called on every floor load. */
+  private rebuildTurrets(): void {
+    this.turrets.length = 0;
+    this.turrets.push(...buildTurrets(this.map));
   }
 
   /**
@@ -417,6 +450,10 @@ export class GameWorld {
       this.power.siren = 0;
     }
     this.bakeStaticLights();
+    this.rebuildTurrets();
+    // A console is bound to a tile on the floor being thrown away, so whoever was in
+    // one comes back out of it rather than staring at a screen that no longer exists.
+    this.endHack("quit");
     this.enemies.length = 0;
     // Everything below is keyed to the floor that is being thrown away. A weld and a
     // charged puddle are both indexed BY TILE, so carrying either across a floor load
@@ -649,6 +686,8 @@ export class GameWorld {
     this.noise.update(dt);
     this.updateAlarm(dt);
     this.updateSiren(dt);
+    this.updateTurrets(dt);
+    this.updateSession(dt, inputOf);
     this.updateDevices(dt, inputOf);
     this.updateDirector(dt);
     this.updateBleedout(dt);
@@ -1500,11 +1539,176 @@ export class GameWorld {
    */
   private hurtPlayer = (p: Player, amount: number): void => {
     const wasDown = p.downed;
+    // Anything that reaches you takes you out of the screen. This is the rule that turns
+    // "one of us hacks" into "three of us hold a perimeter": the hack does not survive
+    // the moment the perimeter fails, however small the bite was.
+    if (p.hacking && amount > 0) this.endHack("broken");
     damagePlayer(p, amount);
     if (p.downed && !wasDown) {
       this.events.push({ kind: "playerDown", x: p.x, y: p.y, text: `P${p.id + 1} down` });
     }
   };
+
+  // === Consoles ==============================================================
+
+  /**
+   * CORE 21 — somebody sits down at a console.
+   *
+   * Everything about this is the trade it makes: one of the squad stops existing as a
+   * gun for as long as it takes. The session is refused rather than queued if somebody
+   * else is already in one — two people in screens is the failure state the mechanic is
+   * built to avoid, and refusing it out loud is kinder than letting it happen.
+   */
+  private beginHack(p: Player, kind: HackKind, index: number, x: number, y: number): void {
+    if (this.hack !== null || p.downed || p.restraint !== null) return;
+    if (this.hackLatch.has(p.id)) return;
+    this.hack = startHack(p.id, kind, index, x, y);
+    p.hacking = true;
+    // Standing up from the world: hands off the gun, off the item, off everything.
+    p.itemHold = 0;
+    p.weaponUp = 0;
+    this.events.push({
+      kind: "hack", x, y,
+      text: kind === "door" ? `P${p.id + 1} IS IN THE LOCKS — HOLD THE ROOM`
+        : `P${p.id + 1} IS IN FIRE CONTROL — HOLD THE ROOM`,
+    });
+  }
+
+  /** The mini-game, one step, plus every way out of it. */
+  private updateSession(dt: number, inputOf: (p: Player) => InputState): void {
+    // Let go of USE and a console will have you again.
+    for (const q of this.players) {
+      if (!inputOf(q).interact) this.hackLatch.delete(q.id);
+    }
+    const session = this.hack;
+    if (session === null) return;
+    const p = this.players.find((q) => q.id === session.playerId);
+
+    // Thrown out of it: downed, grabbed, or simply not there any more. The perimeter
+    // failing is supposed to end the hack — that is what makes the perimeter the game.
+    if (!p || p.downed || p.restraint !== null) {
+      this.endHack("broken");
+      return;
+    }
+
+    const input = inputOf(p);
+    // USE, tapped, gets you out. The same button that put you in, which is the only one
+    // a player will think to press with something chewing on their teammate.
+    if (input.interactPressed) {
+      this.endHack("quit");
+      return;
+    }
+
+    for (const ev of updateHack(session, dt, input.firePressed)) {
+      if (ev.kind === "lock") {
+        this.events.push({ kind: "hack", x: session.x, y: session.y });
+      } else if (ev.kind === "fault") {
+        // The console shrieks. This is the cost of mashing: not a lost hack, a room
+        // full of things that now know exactly where the quiet person is.
+        this.noise.emit(session.x, session.y, FAULT_NOISE, "alarm");
+        this.events.push({ kind: "hackFault", x: session.x, y: session.y });
+      } else {
+        this.completeHack(session);
+        return;
+      }
+    }
+  }
+
+  /**
+   * The deck's guns. They are not in `enemies` on purpose: nothing about a turret is
+   * alive, and putting one in that list would hand it a flow field, a noise ear, an
+   * alertness and a lunge, none of which it has any use for.
+   */
+  private updateTurrets(dt: number): void {
+    if (this.turrets.length === 0) return;
+    const deps = {
+      map: this.map,
+      players: this.players,
+      fire: (x: number, y: number, angle: number, damage: number, speed: number) => {
+        this.bullets.spawn(x, y, angle, speed, damage, "enemy", -1, 1.1, "#ff8b5c");
+      },
+      noise: (x: number, y: number, radius: number) => {
+        this.noise.emit(x, y, radius, "shot");
+      },
+    };
+    for (const t of this.turrets) updateTurret(t, deps, dt);
+  }
+
+  /** A console beaten. What that opens is decided here and nowhere else. */
+  private completeHack(session: HackSession): void {
+    const device = this.map.devices[session.deviceIndex];
+    if (device) this.devices.spend(this.map, session.deviceIndex);
+    if (session.kind === "door") this.releaseLocks();
+    else this.killTurrets();
+    this.events.push({
+      kind: "hack", x: session.x, y: session.y,
+      text: session.kind === "door" ? "MAG-LOCKS RELEASED" : "TURRET GRID OFFLINE",
+    });
+    this.endHack("won");
+  }
+
+  /**
+   * Out of the screen and back into the room. `why` only decides what is said: every
+   * exit does the same thing, which is hand the player their body back.
+   */
+  private endHack(why: "won" | "quit" | "broken"): void {
+    const session = this.hack;
+    if (session === null) return;
+    const p = this.players.find((q) => q.id === session.playerId);
+    if (p) {
+      p.hacking = false;
+      this.hackLatch.add(p.id);
+    }
+    session.state = why === "won" ? "won" : "quit";
+    this.hack = null;
+    if (why === "broken" && p) {
+      this.events.push({ kind: "hack", x: p.x, y: p.y, text: `P${p.id + 1} THROWN OUT OF THE CONSOLE` });
+    }
+  }
+
+  /** Every mag-lock on the floor, thrown at once. In the grid, so a reload remembers. */
+  private releaseLocks(): void {
+    let opened = 0;
+    for (let ty = 0; ty < this.map.rows; ty++) {
+      for (let tx = 0; tx < this.map.cols; tx++) {
+        const def = tileDef(this.map.tileAt(tx, ty));
+        if (!def.magLock || def.unlocksInto === undefined) continue;
+        this.map.setTile(tx, ty, def.unlocksInto);
+        const c = this.map.tileCenter(tx, ty);
+        this.particles.burst(c.x, c.y, 8, 120, "#7fd4ff", 0.4, 2);
+        opened++;
+      }
+    }
+    if (opened === 0) return;
+    this.map.refresh();
+    this.rebuildFromGrid();
+  }
+
+  /** Fire control, cut. Same idea: the dead turret is a tile, so it stays dead. */
+  private killTurrets(): void {
+    let killed = 0;
+    for (const t of [...this.map.turrets]) {
+      const def = tileDef(this.map.tileAt(t.tx, t.ty));
+      if (!def.turret || def.deadInto === undefined) continue;
+      this.map.setTile(t.tx, t.ty, def.deadInto);
+      this.particles.burst(t.x, t.y, 14, 160, "#ff8b5c", 0.5, 3);
+      killed++;
+    }
+    if (killed === 0) return;
+    this.turrets.length = 0;
+    this.map.refresh();
+    this.rebuildFromGrid();
+  }
+
+  /**
+   * Something changed the grid. Everything derived from it — the flow fields the horde
+   * walks, the doors a wave can arrive through, the lure — has to be told, or the deck
+   * keeps pathing around a door that is now open. The same call the airlock makes.
+   */
+  private rebuildFromGrid(): void {
+    this.director.rebuild(this.map);
+    this.refreshLure();
+  }
 
   /**
    * Is there a tendril across this point? Severing one frees whoever is on the end of
@@ -1682,6 +1886,10 @@ export class GameWorld {
   }
 
   private applyDevice(o: DeviceOutcome): void {
+    if (o.kind === "hack") {
+      this.beginHack(o.player, o.hack, o.index, o.x, o.y);
+      return;
+    }
     if (o.kind === "lever") {
       this.openBreach(o.x, o.y);
       return;

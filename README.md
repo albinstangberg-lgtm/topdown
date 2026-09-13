@@ -43,6 +43,9 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Pull an emergency breach lever | Hold `F` | Hold Y |
 | Shoulder / put down a fusion core or a power cell | Tap `F` | Tap Y |
 | Seat a carried core, or hand a cell to a teammate | Tap `F` | Tap Y |
+| Sit down at a hack console | Hold `F` | Hold Y |
+| Work an interlock (while in a console) | Left click / `Space` | RT |
+| Back out of a console | Tap `F` | Tap Y |
 | Use the utility item (hold for a medkit or a welder) | `G` | R3 |
 | Flashlight on / off | `T` | LB + RB together |
 | Join the game | `ENTER` in the lobby | `START` in the lobby |
@@ -343,6 +346,52 @@ job for the squad, not for the person holding it.
   far side as two pairs, and for those five seconds nobody can help anybody. The HUD
   counts it down for whoever is inside. One person alone never triggers it.
 
+## Consoles, and the person who cannot see
+
+Some doors on this ship do not open for bullets. A **mag-lock** (`M`) is held by the
+deck's lock system, and a **floor turret** (`Q`) is held by its fire control — and both
+of those live behind a console somebody has to sit down at.
+
+Sitting down is the mechanic. Hold `F` at a console and **your viewport becomes a
+terminal**: a green screen, a scrolling log, and a row of interlocks. You cannot move,
+aim, shoot, or touch your flashlight, and you cannot see the room you are sitting in.
+Everyone else's half of the screen still shows the deck, with a line telling them what
+just happened to you and a ring over your head that fills as you get through it.
+
+- **The game itself is one button.** Each interlock is a sweep running along a bar, and
+  `FIRE` stops it. Land it inside the band and the interlock opens; miss and the console
+  **shrieks** — a fault does not fail the hack, it makes a noise on the same field a
+  gunshot rides, and then it sulks for a moment before it will take another press. So
+  mashing is not a strategy, it is a dinner bell.
+- **A door is three interlocks, fire control is four**, and the bands get tighter and
+  faster as you go. A clean run is about five seconds; a messy one is ten.
+- **Anything that touches you throws you out of it.** Not the damage — the interruption.
+  One bite, one bullet, one tendril, and you are back in the room with the interlocks
+  you have already opened still open. That is the rule the whole thing rests on: the
+  hack does not survive the perimeter failing.
+- **One at a time.** A second person cannot start one while somebody is in a console.
+  Two people in screens is precisely the situation the mechanic exists to prevent.
+- Tap `F` to back out on purpose. What you have opened stays open.
+
+Which is to say the fantasy is the four of you, not the one at the keyboard: **one player
+goes blind, and the other three point their cones outward and hold the room** until the
+locks go.
+
+### Floor turrets
+
+An automated gun on a post, and the only hostile in the game that is not alive: it does
+not path, it cannot be lured, and the dark means nothing to it.
+
+- It **sweeps** an arc, and the arc is drawn on the floor — crossing behind one is a plan
+  you can make from across the room.
+- Seeing you is not shooting you. There is a **sight window** with a laser on it that
+  brightens as it decides, which is exactly long enough to get behind something.
+- Then it fires **real bullets**, out of the same pool you use, so they can be ducked and
+  they stop at cover. It is loud, and every round it fires tells the deck where you are.
+- It is IFF-keyed to a crew list nobody aboard is still on, so it shoots the squad and
+  ignores the horde. Cut its power at a turret console and every turret on the deck goes
+  down at once — and stays down, because a dead turret is a different tile.
+
 ## Hazards, and the light you choose to carry
 
 - **Exposed cables and standing water.** Touching flooded tiles gather into one puddle
@@ -412,7 +461,10 @@ running on dying emergency batteries. You start with a **crowbar and no gun at a
 which changes the whole texture of a floor: melee is quiet, so a deck cleared with it
 stays cleared, and two zombies in a doorway is a fight rather than a formality. Standing
 orders say report to the security hub — and the first gun on the ship is in its armoury,
-along with a log that starts to explain what happened.
+behind a **mag-lock**. Somebody has to sit down at the console in the middle of the
+guard station, go blind for five seconds with the deck awake around them, and trust the
+others with a crowbar each to keep it off them. The armoury is optional; the stairs are
+not, which makes it the first real decision the mission asks for.
 
 **Act II — the wall.** Up through the residential deck — which has a Ceiling Lurker in
 its ducts — to the bridge approach, where the blast door is dead: *no main power, manual
@@ -435,8 +487,9 @@ left.
 cabins sealed that were open, vents broken through that were not, a **hull breach** in
 engineering with a lever and a line of railings for whoever is brave enough to use it,
 and a director leaning more than twice as hard as it did on the way down. At the top, the blast door finally
-answers — a ninety-second unseal you have to survive on the catwalk before the bridge is
-yours.
+answers — but the approach is covered by two of the ship's own **turrets**, and ninety
+seconds of holding a catwalk is not something you do with a gun sweeping it. Fire
+control is on the deck below them.
 
 Four crew terminals along the way carry the story. They gate nothing, which is exactly
 why they are worth the detour.
@@ -563,8 +616,9 @@ objective devices (`21` terminal, `23` weapon locker, `25` fusion socket, `27` b
 door, `28` stairs down), the ship's hazards (`29` ceiling vent, `30` flooded floor,
 `31` exposed cable, `32` coolant leak, `33` bulkhead), its systems (`42` core rack,
 `43` battery rack, `44` charging point, `45` breach lever, `47` hull breach,
-`48` railing, `49`–`51` airlock chamber and doors) and what you find and fight in
-them (`35`–`38` supply caches, `40` Strangler, `41` Stalker, `52` Ceiling Lurker):
+`48` railing, `49`–`51` airlock chamber and doors), its security (`53` lock console,
+`54` turret console, `56` mag-locked door, `58` floor turret) and what you find and fight
+in them (`35`–`38` supply caches, `40` Strangler, `41` Stalker, `52` Ceiling Lurker):
 
 ```
 [1,1,1,1,1,1,1],
@@ -594,13 +648,15 @@ Adding a new tile type is one row in `TILE_DEFS` — the collision, vision, rend
 editor palette and importer all read from that one table.
 [docs/LEVELS.md](docs/LEVELS.md) has the full reference.
 
-Four built-in maps ship with the game, cycled with `[` and `]`: **Corridors**,
-**Tile Showcase**, **Deck Hazards** and **Deck Systems**. The last two are showcase
-decks — one of everything, within walking distance of the spawn. Hazards has both
-ambush mutants, all four items, water and a cable, a coolant bank, vents and bulkheads;
-Systems has the power budget (a charging point, both racks, three sockets that will only
-take a carried core), an airlock, a hull breach with its lever and railings, and a
-Ceiling Lurker in the vents.
+Five built-in maps ship with the game, cycled with `[` and `]`: **Corridors**,
+**Tile Showcase**, **Deck Hazards**, **Deck Systems** and **Deck Consoles**. The last
+three are showcase decks — one of everything, within walking distance of the spawn.
+Hazards has both ambush mutants, all four items, water and a cable, a coolant bank, vents
+and bulkheads; Systems has the power budget (a charging point, both racks, three sockets
+that will only take a carried core), an airlock, a hull breach with its lever and
+railings, and a Ceiling Lurker in the vents; Consoles seals the squad into their own
+spawn room behind mag-locks and makes them hack their way out, with a turret-covered
+corridor on the far side.
 
 ## Current state
 
@@ -616,6 +672,8 @@ water, coolant fog, a toggleable flashlight that trades sight for attention, one
 suit battery behind the guns, lights and tools, two-handed carries that stow the primary,
 hull breaches with shared oxygen and railings, two-person airlocks,
 audio occluded against the geometry, a sound-ripple visualiser,
+console mini-games that take one player out of the world and put a terminal on their half
+of the screen, mag-locked doors and sweeping floor turrets to point them at,
 melee weapons, a generator that dresses its decks with all of it, hold-to-use devices
 (terminals, weapon lockers, fusion sockets and a blast door) driving a multi-act
 objective chain, per-floor difficulty pressure, HUD per viewport,

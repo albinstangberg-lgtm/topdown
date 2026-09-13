@@ -3013,6 +3013,245 @@ check("restarting a procedural run rerolls the deck, and every roll holds up",
 
 check("the procedural deck raised no exceptions", procErrors.length === 0, procErrors.join(" | "));
 
+// --- consoles, blindness and the deck's own guns -----------------------------
+//
+// Driven on the "Deck Consoles" map. Three players, because everything here is about
+// the two who are not in the screen: a hack is the only thing in the game that takes a
+// player out of it, and every check below is really about what that costs.
+
+const conPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const conErrors = [];
+conPage.on("pageerror", (e) => conErrors.push(String(e)));
+await conPage.goto(`${URL}?camera=fixed&players=3&level=consoles`, { waitUntil: "load" });
+await conPage.waitForTimeout(700);
+
+// Helpers installed once: sitting down at a console, and beating one honestly.
+await conPage.evaluate(() => {
+  window.__key = (code, down) => {
+    window.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { code }));
+  };
+  window.__sitAt = async (which) => {
+    const w = window.game.world;
+    const p = w.players[0];
+    const device = w.map.devices.filter((d) => d.kind === "hack")[which];
+    p.x = device.x; p.y = device.y; p.prevX = p.x; p.prevY = p.y;
+    p.eyeX = p.x; p.eyeY = p.y;
+    p.health = p.maxHealth; p.downed = false; p.restraint = null;
+    window.__key("KeyF", true);
+    const t0 = Date.now();
+    while (Date.now() - t0 < 2500 && !w.hack) await new Promise((r) => setTimeout(r, 25));
+    window.__key("KeyF", false);
+    await new Promise((r) => setTimeout(r, 120));
+    return w.hack !== null;
+  };
+  // Play it properly: wait for the sweep to be inside the band, then tap fire once.
+  window.__beat = async (limitMs = 20000) => {
+    const w = window.game.world;
+    const guard = Date.now() + limitMs;
+    while (w.hack && w.hack.state === "running" && Date.now() < guard) {
+      const h = w.hack;
+      const t = h.tumblers[h.index];
+      if (t && h.resync <= 0 && Math.abs(t.cursor - t.band) < t.width * 0.5) {
+        window.__key("Space", true);
+        await new Promise((r) => setTimeout(r, 20));
+        window.__key("Space", false);
+        await new Promise((r) => setTimeout(r, 60));
+      } else {
+        await new Promise((r) => setTimeout(r, 12));
+      }
+    }
+    await new Promise((r) => setTimeout(r, 180));
+  };
+  window.__countTiles = (id) => {
+    const m = window.game.world.map;
+    let n = 0;
+    for (let y = 0; y < m.rows; y++) for (let x = 0; x < m.cols; x++) if (m.tileAt(x, y) === id) n++;
+    return n;
+  };
+});
+
+const sealed = await conPage.evaluate(() => {
+  const w = window.game.world;
+  return {
+    consoles: w.map.devices.filter((d) => d.kind === "hack").length,
+    turrets: w.turrets.length,
+    // 56 mag-lock, 57 released, 58 turret, 59 dead turret.
+    locked: window.__countTiles(56),
+    released: window.__countTiles(57),
+    dead: window.__countTiles(59),
+  };
+});
+check("the console deck arrives sealed: two consoles, live turrets, mag-locks shut",
+  sealed.consoles === 2 && sealed.turrets === 3 && sealed.locked >= 3 &&
+  sealed.released === 0 && sealed.dead === 0,
+  JSON.stringify(sealed));
+
+/*
+ * The hack itself. Sitting down at one has to take the player out of the world — that
+ * is the entire mechanic, and "blind" is only worth anything if the sim agrees: no
+ * walking, no shooting, no light, and no second console while somebody is in one.
+ */
+const blind = await conPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const sat = await window.__sitAt(0);
+  if (!sat) return { sat: false };
+  const at = { x: p.x, y: p.y };
+  const ammo = p.ammo;
+  p.lightOn = false;
+
+  // Everything a player can press, pressed. None of it may reach the room.
+  for (const code of ["KeyW", "KeyD", "Space", "KeyT"]) window.__key(code, true);
+  await new Promise((r) => setTimeout(r, 450));
+  for (const code of ["KeyW", "KeyD", "Space", "KeyT"]) window.__key(code, false);
+
+  // And nobody else can start one while this is running.
+  const other = w.players[1];
+  const second = w.map.devices.filter((d) => d.kind === "hack")[1];
+  other.x = second.x; other.y = second.y; other.prevX = other.x; other.prevY = other.y;
+
+  return {
+    sat: true,
+    hacking: p.hacking,
+    moved: Math.hypot(p.x - at.x, p.y - at.y),
+    fired: p.ammo < ammo,
+    lightOn: p.lightOn,
+    tumblers: w.hack ? w.hack.tumblers.length : 0,
+    kind: w.hack ? w.hack.kind : null,
+    othersHacking: w.players.filter((q) => q.hacking).length,
+  };
+});
+check("in the screen the player is out of the room: no walking, no shooting, no light",
+  blind.sat === true && blind.hacking === true && blind.moved < 1 && blind.fired === false &&
+  blind.lightOn === false && blind.tumblers === 3 && blind.kind === "door" &&
+  blind.othersHacking === 1,
+  JSON.stringify(blind));
+
+// Mashing the button is the wrong answer, and it is the wrong answer out loud: every
+// miss is a fault, and a fault is a noise the whole deck can hear.
+const mashed = await conPage.evaluate(async () => {
+  const w = window.game.world;
+  const before = w.hack.faults;
+  w.noise.clear();
+  let heard = 0;
+  const watch = setInterval(() => {
+    if (w.noise.items.some((n) => n.active && n.kind === "alarm")) heard++;
+  }, 20);
+  for (let i = 0; i < 14; i++) {
+    window.__key("Space", true);
+    await new Promise((r) => setTimeout(r, 25));
+    window.__key("Space", false);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  clearInterval(watch);
+  return { faults: w.hack ? w.hack.faults - before : -1, heard: heard > 0, index: w.hack?.index ?? -1 };
+});
+check("mashing the trigger racks up faults, and every fault is a noise",
+  mashed.faults >= 2 && mashed.heard === true, JSON.stringify(mashed));
+
+// Beating it properly throws every mag-lock on the floor and hands the player back.
+const won = await conPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  await window.__beat();
+  return {
+    out: w.hack === null,
+    blind: p.hacking,
+    locked: window.__countTiles(56),
+    released: window.__countTiles(57),
+    consoleSpent: w.map.devices.filter((d) => d.kind === "hack")[0].spent,
+  };
+});
+check("beating the lock console throws every mag-lock and gives the player back",
+  won.out === true && won.blind === false && won.locked === 0 && won.released >= 3 &&
+  won.consoleSpent === true,
+  JSON.stringify(won));
+
+/*
+ * The turret. It is the reason the console is worth the risk, so it has to be a real
+ * threat: it sweeps, it takes a moment to decide, and then it fires actual bullets.
+ */
+const gun = await conPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  const t = w.turrets[0];
+  w.enemies.length = 0;
+  // Standing in the open, four tiles down the bearing it watches.
+  p.x = t.x + Math.cos(t.home) * 4 * 48;
+  p.y = t.y + Math.sin(t.home) * 4 * 48;
+  p.prevX = p.x; p.prevY = p.y; p.eyeX = p.x; p.eyeY = p.y;
+  p.health = p.maxHealth;
+  const states = [];
+  let bullets = false;
+  const t0 = Date.now();
+  while (Date.now() - t0 < 4000) {
+    if (states[states.length - 1] !== t.state) states.push(t.state);
+    if (w.bullets.items.some((b) => b.active && b.team === "enemy")) bullets = true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return { states, bullets, hurt: p.maxHealth - p.health };
+});
+check("a turret sweeps, sights, and then shoots real bullets at you",
+  gun.states.includes("sweep") && gun.states.includes("sight") && gun.states.includes("fire") &&
+  gun.bullets === true && gun.hurt > 0,
+  JSON.stringify(gun));
+
+// Fire control kills all of them at once, and they stay dead in the grid.
+const fireControl = await conPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  p.health = p.maxHealth;
+  w.enemies.length = 0;
+  const sat = await window.__sitAt(1);
+  if (!sat) return { sat: false };
+  const tumblers = w.hack.tumblers.length;
+  const kind = w.hack.kind;
+  await window.__beat();
+  return { sat: true, kind, tumblers, live: w.turrets.length, dead: window.__countTiles(59) };
+});
+check("fire control is four interlocks, and it takes every turret on the deck off at once",
+  fireControl.sat === true && fireControl.kind === "turret" && fireControl.tumblers === 4 &&
+  fireControl.live === 0 && fireControl.dead === 3,
+  JSON.stringify(fireControl));
+
+/*
+ * And the rule the whole round rests on: the hack does not survive the perimeter
+ * failing. Anything that reaches the person in the screen takes them out of it.
+ */
+const thrown = await conPage.evaluate(async () => {
+  const w = window.game.world;
+  const p = w.players[0];
+  // The consoles on this deck are both spent now, so put a live one back to sit at.
+  const device = w.map.devices.filter((d) => d.kind === "hack")[0];
+  w.map.setTile(device.tx, device.ty, 53);
+  w.map.refresh();
+  w.devices.rebuild(w.map);
+  const sat = await window.__sitAt(0);
+  if (!sat) return { sat: false };
+  const inIt = p.hacking;
+  // One bullet, from anything at all.
+  w.bullets.spawn(p.x - 60, p.y, 0, 700, 4, "enemy", -1, 0.6, "#ff8b5c");
+  const t0 = Date.now();
+  while (Date.now() - t0 < 1500 && w.hack) await new Promise((r) => setTimeout(r, 25));
+  const afterHit = { out: w.hack === null, blind: p.hacking, hurt: p.health < p.maxHealth };
+
+  // And backing out on purpose: USE, tapped, and it must not drag you straight back in.
+  p.health = p.maxHealth;
+  const again = await window.__sitAt(0);
+  window.__key("KeyF", true);
+  await new Promise((r) => setTimeout(r, 90));
+  window.__key("KeyF", false);
+  await new Promise((r) => setTimeout(r, 500));
+  return { sat: true, inIt, ...afterHit, again, quit: w.hack === null, stillBlind: p.hacking };
+});
+check("a hit throws you out of the console, and USE backs you out without pulling you back",
+  thrown.sat === true && thrown.inIt === true && thrown.out === true && thrown.blind === false &&
+  thrown.hurt === true && thrown.again === true && thrown.quit === true &&
+  thrown.stillBlind === false,
+  JSON.stringify(thrown));
+
+check("the console deck raised no exceptions", conErrors.length === 0, conErrors.join(" | "));
+
 await browser.close();
 
 const failed = checks.filter((c) => !c.ok);

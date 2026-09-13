@@ -162,6 +162,18 @@ export class GameAudio {
         case "freed":
           this.bus.tone("cut", CENTRE, { freq: 700, to: 980, type: "triangle", decay: 0.25, level: 0.32 });
           break;
+        case "hack":
+          // A key going down, and the clunk of an interlock letting go. Placed, so the
+          // squad can hear the console working from wherever they are standing.
+          this.bus.tone("hackKey", at, { freq: 1400, to: 1800, type: "square", decay: 0.05, level: 0.14 });
+          this.bus.noise("hackLock", at, { freq: 480, q: 1.6, decay: 0.13, level: 0.35 });
+          break;
+        case "hackFault":
+          // The console rejecting you. Deliberately unpleasant and deliberately LOUD —
+          // it is also a noise on the field, and the whole deck just heard it.
+          this.bus.tone("hackBuzz", at, { freq: 260, to: 110, type: "sawtooth", decay: 0.34, level: 0.5 });
+          this.bus.noise("hackRasp", at, { freq: 900, q: 0.7, decay: 0.3, level: 0.4, sweepTo: 220 });
+          break;
         case "carry":
           // Something heavy changing hands. Placed, because hearing WHERE the core went
           // is half of escorting the person holding it.

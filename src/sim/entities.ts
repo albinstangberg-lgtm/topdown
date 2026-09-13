@@ -269,6 +269,14 @@ export interface Player {
   blinded: number;
   /** What has hold of you, or null. See `Restraint`. */
   restraint: Restraint | null;
+  /**
+   * Sitting at a console with your face in a screen. The whole point of it is what it
+   * takes away: while this is true the player cannot move, aim, fire, or touch their
+   * light, and their own viewport shows the terminal instead of the room. The session
+   * itself lives on the world (`GameWorld.hack`) — this flag is what every other system
+   * reads, so nothing else has to know the mini-game exists.
+   */
+  hacking: boolean;
 
   cone: VisionLight;
   halo: VisionLight;

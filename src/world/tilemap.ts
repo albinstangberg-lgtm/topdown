@@ -28,7 +28,7 @@ export interface CarBody {
  * reading log 2 after terminal 1 has been read. See `src/sim/devices.ts`.
  */
 export interface DeviceTile {
-  kind: "terminal" | "socket" | "locker" | "supply" | "lever";
+  kind: "terminal" | "socket" | "locker" | "supply" | "lever" | "hack";
   /** Tile coordinates, so using one can rewrite the grid. */
   tx: number;
   ty: number;
@@ -141,6 +141,12 @@ export class TileMap {
   readonly airlocks: Airlock[] = [];
   /** Railings. Where you can stand and not be dragged into one. */
   readonly railings: Point[] = [];
+  /**
+   * Floor turrets, live ones only. Solid, so they are collected with the walls; the
+   * world builds a sweeping, firing thing out of each one and kills it in the grid when
+   * a console cuts the power — which is what makes a dead turret survive a reload.
+   */
+  readonly turrets: { tx: number; ty: number; x: number; y: number }[] = [];
   /** Bodies of standing water, gathered from touching flooded tiles. See `Puddle`. */
   readonly puddles: Puddle[] = [];
   /** Open bulkheads a welding tool can seal, and welded ones waiting to be chewed open. */
@@ -196,6 +202,7 @@ export class TileMap {
     this.chargers.length = 0;
     this.breaches.length = 0;
     this.railings.length = 0;
+    this.turrets.length = 0;
     this.airlocks.length = 0;
     this.puddles.length = 0;
     this.bulkheads.length = 0;
@@ -222,6 +229,12 @@ export class TileMap {
           if (def.light) {
             const c = this.tileCenter(tx, ty);
             this.lamps.push({ x: c.x, y: c.y, range: def.light });
+          }
+          // Turrets are solid too: a gun on a post is cover, which is half of why
+          // walking up to one is a decision.
+          if (def.turret) {
+            const c = this.tileCenter(tx, ty);
+            this.turrets.push({ tx, ty, x: c.x, y: c.y });
           }
           // A welded bulkhead is solid, so like a blast door it is collected up here.
           if (def.welded) {

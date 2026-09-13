@@ -61,6 +61,13 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `50` | `]` | Airlock door | no | no | an open airlock door. The chamber shuts both of them for the length of a cycle |
 | `51` | `[` | Airlock door (shut) | yes | yes | a door mid-cycle. Rarely authored — the chamber makes these |
 | `52` | `l` | Ceiling Lurker | no | no | one Ceiling Lurker. Needs vents to live in — it drops on anyone standing still under an unlit grate |
+| `53` | `*` | Lock console | no | no | hold USE to sit down at it. Beating the mini-game throws **every** mag-lock on the floor |
+| `54` | `&` | Turret console | no | no | the same, for fire control: it takes every turret on the floor off at once |
+| `55` | `,` | Console (bypassed) | no | no | one somebody has already beaten. Rarely authored |
+| `56` | `M` | Mag-locked door | yes | yes | shooting it does nothing. It opens when a lock console says so, and not before |
+| `57` | `m` | Mag-lock (released) | no | no | a lock that has been thrown. Rarely authored — a console makes these |
+| `58` | `Q` | Floor turret | **yes** | no | sweeps, sights you, then fires. Solid, so it is also cover. Shoots over crates — it does not block bullets |
+| `59` | `q` | Floor turret (dead) | yes | no | a turret with its power cut. Cover, and nothing else |
 
 ### Authoring the new tiles
 
@@ -97,6 +104,23 @@ The ship's systems are the other set that only work in combination:
   core over by hand, with the primary stowed. That is a deliberate switch, so put the
   rack where the walk is the interesting part. A floor with no `O` keeps the old
   hold-USE behaviour, which is why existing reactor decks were not touched by it.
+- **A mag-lock must never seal the way to its own console.** Both consoles are
+  floor-wide — one `*` throws every `M` on the deck — so the only thing that can go wrong
+  is authoring a lock between the squad and the console that opens it. Check it the way
+  the campaign floors are checked: flood-fill from the spawn with every `M` solid, and
+  make sure the console is in the reachable part.
+- **Gate a reward, not a route.** A `M` across the only path to the stairs is a floor
+  that cannot be finished if the console is missed or the hack keeps being interrupted.
+  A `M` across the armoury is a decision. The guard station in *Dead in Space* is the
+  worked example: the lockers are behind the lock, the stairs never are.
+- **Turrets are solid, and they shoot over cover.** A `Q` blocks bodies but not bullets,
+  so it is half a crate with a gun on it. Put them where their arc covers something worth
+  denying — a corridor, an approach, a catwalk — and remember one faces down the longest
+  open line from where you put it, so a turret in the middle of a room may not be looking
+  where you expect.
+- **Consoles want to be somewhere awkward.** The whole cost of a hack is the five to ten
+  seconds the squad spends a player down, so a console in a dead-end safe room asks
+  nothing. One in the middle of a junction with two approaches is the mechanic.
 - **Charging points and battery racks are pacing, not decoration.** `e` is slow and out
   in the open; `b` hands out something you have to carry with both hands. Put them where
   you want the squad to stop, not where they are convenient.
@@ -209,7 +233,7 @@ You do not need a border of walls: out of bounds already counts as solid and opa
 
 | How | What to do |
 | --- | --- |
-| Built-in | `?level=corridors`, `?level=showcase`, `?level=hazards`, `?level=systems`, `?level=procedural` |
+| Built-in | `?level=corridors`, `?level=showcase`, `?level=hazards`, `?level=systems`, `?level=consoles`, `?level=procedural` |
 | From the editor | Press **▶ Play this map** — it stores the level and opens `?level=draft` |
 | From a file | Drag a `.json` / `.txt` onto the game window |
 | From the clipboard | Focus the game and press `Ctrl+V` |
@@ -320,6 +344,22 @@ Solid and opaque, and the only piece of geometry an objective can delete.
 
 A floor with a blast door and no stairs makes the door the objective even unpowered,
 which is the escape hatch for a map that has nothing else to point at.
+
+### Hack consoles (`*`, `&`)
+
+Not a dwell with a consequence on the end of it — a dwell that hands the player to a
+different game. Holding USE for `HACK_ARM_TIME` raises a `hack` outcome, and the world
+takes it from there: the player's viewport becomes a terminal, `p.hacking` goes true, and
+every other system stops treating them as somebody who is in the room.
+
+The console is **not spent by the dwell**. It is spent by somebody beating the mini-game,
+which means walking away from one half-done leaves it for the next person — and it means
+a console interrupted four times in a row is still a console, not a wasted tile.
+
+What it opens is floor-wide and decided by the tile: `*` is wired to every mag-lock on
+the deck and `&` to every turret. There is no per-door wiring, on purpose — a console
+connected to one specific door across the deck is a wiring diagram the player cannot see
+and has no way to learn.
 
 ### Breach levers (`Y`)
 

@@ -53,6 +53,12 @@ export const TERMINAL_TIME = 1.4;
  * coming at you, and the hold is the only part of it you control.
  */
 export const LEVER_TIME = 1.1;
+/**
+ * Seconds of holding USE to sit down at a hack console. Short on purpose: what a hack
+ * costs is the time spent blind INSIDE it, and a long dwell in front of it would only
+ * be that same cost charged twice.
+ */
+export const HACK_ARM_TIME = 0.6;
 /** Seconds of holding USE to seat one fusion cell. Long enough to need cover. */
 export const SOCKET_TIME = 7;
 /** Seconds of holding USE beside the blast door before the unseal actually starts. */
@@ -78,6 +84,13 @@ export type DeviceOutcome =
   | { kind: "supply"; player: Player; item: SupplyItem; x: number; y: number }
   /** Somebody pulled an emergency depressurisation lever. */
   | { kind: "lever"; player: Player; x: number; y: number }
+  /**
+   * Somebody has sat down at a console. The device system's job ends here: the world
+   * starts the mini-game, takes the player out of the room, and decides what beating it
+   * opens. `index` is the console's place in `map.devices`, so whatever wins it can
+   * spend the right tile.
+   */
+  | { kind: "hack"; player: Player; index: number; hack: "door" | "turret"; x: number; y: number }
   /**
    * One fusion cell is in. `primed` of `total` sockets are now live. `player` is null
    * when a core was carried in rather than dwelled in — the reactor does not care who,
@@ -171,7 +184,9 @@ export class DeviceSystem {
 
     const held = new Set<number>();
     for (const p of deps.players) {
-      if (p.downed) continue;
+      // Somebody in a console is not standing on the floor as far as this is concerned:
+      // their USE button belongs to the mini-game until they come out of it.
+      if (p.downed || p.hacking) continue;
       const device = deps.map.deviceAt(p.x, p.y);
       const using = deps.inputOf(p).interact;
 
@@ -209,6 +224,7 @@ export class DeviceSystem {
 
         const time = device.kind === "terminal" ? TERMINAL_TIME
           : device.kind === "lever" ? LEVER_TIME
+          : device.kind === "hack" ? HACK_ARM_TIME
           : SOCKET_TIME;
         if (using) {
           held.add(index);
@@ -219,7 +235,9 @@ export class DeviceSystem {
             ? (using ? "READING…" : "HOLD USE — READ LOG")
             : device.kind === "lever"
               ? (using ? "VENTING…" : "HOLD USE — BLOW THE ROOM")
-              : (using ? "SEATING CELL…" : "HOLD USE — SEAT FUSION CELL"),
+              : device.kind === "hack"
+                ? (using ? "LOGGING IN…" : "HOLD USE — WORK THE CONSOLE")
+                : (using ? "SEATING CELL…" : "HOLD USE — SEAT FUSION CELL"),
           progress: this.progress[index] ?? 0,
         });
 
@@ -230,6 +248,12 @@ export class DeviceSystem {
           } else if (device.kind === "lever") {
             this.spend(deps.map, index);
             out.push({ kind: "lever", player: p, x: device.x, y: device.y });
+          } else if (device.kind === "hack") {
+            // NOT spent here. A console is only used up by somebody beating it, and
+            // walking away from one half-done has to leave it for the next person.
+            const wired = tileDef(deps.map.tileAt(device.tx, device.ty)).hack ?? "door";
+            this.progress[index] = 0;
+            out.push({ kind: "hack", player: p, index, hack: wired, x: device.x, y: device.y });
           } else {
             out.push(...this.primeSocket(deps.map, index, p));
           }
@@ -245,7 +269,11 @@ export class DeviceSystem {
     // half-seated should cost something, or the socket is just a long corridor.
     for (let i = 0; i < this.progress.length; i++) {
       if (held.has(i) || this.progress[i] <= 0) continue;
-      const time = deps.map.devices[i]?.kind === "terminal" ? TERMINAL_TIME : SOCKET_TIME;
+      const kind = deps.map.devices[i]?.kind;
+      const time = kind === "terminal" ? TERMINAL_TIME
+        : kind === "hack" ? HACK_ARM_TIME
+        : kind === "lever" ? LEVER_TIME
+        : SOCKET_TIME;
       this.progress[i] = Math.max(0, this.progress[i] - (dt / time) * DECAY_SCALE);
     }
 
@@ -357,7 +385,12 @@ export class DeviceSystem {
     return out;
   }
 
-  private spend(map: TileMap, index: number): void {
+  /**
+   * Mark a device used, in the grid — public because a console is not spent by the
+   * dwell that opens it but by somebody beating the mini-game behind it, which is a
+   * world rule and happens a long way from here.
+   */
+  spend(map: TileMap, index: number): void {
     const device = map.devices[index];
     if (!device) return;
     const used = tileDef(map.tileAt(device.tx, device.ty)).usedInto;

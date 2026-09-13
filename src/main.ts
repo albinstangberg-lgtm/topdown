@@ -12,6 +12,7 @@ import { Camera, type CameraMode } from "./render/camera";
 import { Renderer } from "./render/renderer";
 import { layoutViewports, type Viewport } from "./render/viewport";
 import { drawBanner, drawHud, drawLog, drawSplitBorders } from "./render/hud";
+import { drawTerminal } from "./render/terminal";
 import { DebugOverlay } from "./render/debug";
 import { Lobby, MAX_PLAYERS } from "./menu/lobby";
 import { ModeSelect } from "./menu/modeSelect";
@@ -609,6 +610,15 @@ export class Game {
         // opening says it better than a banner can.
         this.shakeNear(ev.x ?? 0, ev.y ?? 0, 0.4, 420);
         if (ev.text) this.setBanner(ev.text);
+      } else if (ev.kind === "hack") {
+        // Sitting down at one, and what beating it opened, are both worth reading: one
+        // of the squad has just stopped being a gun, and the other three need to know.
+        // The per-interlock event carries no text and is sound only.
+        if (ev.text) this.setBanner(ev.text);
+      } else if (ev.kind === "hackFault") {
+        // A fumbled interlock. The console already shrieked and the whole deck heard
+        // it; a banner as well would be piling on.
+        this.shakeNear(ev.x ?? 0, ev.y ?? 0, 0.25, 300);
       } else if (ev.kind === "carry") {
         // Sound and the HUD cover this: there is a line under the ammo readout for as
         // long as your hands are full. A banner every time somebody shoulders a core
@@ -730,7 +740,15 @@ export class Game {
     renderer.beginFrame();
     for (let i = 0; i < this.views.length; i++) {
       const vp = this.views[i];
-      if (!world.players[vp.playerIndex]) continue;
+      const player = world.players[vp.playerIndex];
+      if (!player) continue;
+      // One quarter of the glass can be a terminal instead of a room. The world is
+      // still running behind it — this player simply has no window onto it, which is
+      // the entire mechanic and the reason drawing is per viewport (CORE 10).
+      if (world.hack && world.hack.playerId === player.id) {
+        drawTerminal(renderer.ctx, world.hack, vp, renderer.dpr);
+        continue;
+      }
       renderer.renderViewport(world, vp, this.cameras[i], alpha);
       this.debug.drawWorld(renderer.ctx, world, this.cameras[i], vp);
       drawHud(renderer.ctx, world, vp, renderer.dpr);

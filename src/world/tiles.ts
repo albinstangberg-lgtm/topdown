@@ -52,7 +52,7 @@ export interface TileDef {
    * the reactor, `locker` hands out the next weapon up. See `src/sim/devices.ts` — the
    * tile says what kind of thing it is, the device system says what using one does.
    */
-  device?: "terminal" | "socket" | "locker" | "supply" | "lever";
+  device?: "terminal" | "socket" | "locker" | "supply" | "lever" | "hack";
   /** True once a device has been used. Kept as a separate tile so a reload remembers. */
   spent?: boolean;
   /** What a device turns into once it has been used. */
@@ -132,6 +132,26 @@ export interface TileDef {
    * coin flip, because the railings are drawn on the map and you can see them.
    */
   railing?: boolean;
+  /**
+   * What a hack console opens when somebody beats it. `door` throws every mag-lock on
+   * the floor; `turret` kills the power to every turret on it. Floor-wide on purpose —
+   * the same rule a fusion socket uses — because a console wired to one door across the
+   * deck is a wiring diagram the player cannot see.
+   */
+  hack?: "door" | "turret";
+  /**
+   * A mag-locked door. Solid and opaque until a console says otherwise, at which point
+   * it becomes `unlocksInto` — in the grid, so a floor that reloads stays open.
+   */
+  magLock?: boolean;
+  unlocksInto?: number;
+  /**
+   * An automated floor turret. It sweeps, it sights, and then it fires — and it does
+   * not care which side you are on, which is the only reason shooting one is ever the
+   * wrong answer. `deadInto` is what it becomes once the power is cut.
+   */
+  turret?: boolean;
+  deadInto?: number;
   /**
    * Which creature an enemy spawn puts down. Keys come from `ZOMBIE_DEFS` in
    * `src/sim/zombies.ts`; left out, a spawn tile places the default walker. This is
@@ -321,6 +341,36 @@ export const TILE_DEFS: readonly TileDef[] = [
     airlockDoor: true, opensInto: 50, prop: "door",
     color: "#41627f", glyph: "[",
     hint: "an airlock door mid-cycle. Rarely authored — the chamber makes these" },
+
+  // Consoles, mag-locks and the guns the ship points at its own corridors ------------
+
+  { id: 53, key: "hackConsole", name: "Hack console", solid: false, opaque: false,
+    device: "hack", hack: "door", usedInto: 55, light: 90,
+    color: "#63e0ff", glyph: "*",
+    hint: "a door override. Hold USE to sit down at it — and go completely blind for as long as you are in it" },
+  { id: 54, key: "turretConsole", name: "Turret console", solid: false, opaque: false,
+    device: "hack", hack: "turret", usedInto: 55, light: 90,
+    color: "#ffa9f0", glyph: "&",
+    hint: "fire-control for every turret on the deck. Same deal: you are in the screen, and blind in the room" },
+  { id: 55, key: "hackConsoleSpent", name: "Console (bypassed)", solid: false, opaque: false,
+    device: "hack", spent: true,
+    color: "#4a5a63", glyph: ",",
+    hint: "a console somebody has already beaten" },
+  { id: 56, key: "magLock", name: "Mag-locked door", solid: true, opaque: true,
+    magLock: true, unlocksInto: 57, prop: "door",
+    color: "#3f7fa8", glyph: "M",
+    hint: "sealed by the deck's lock system. No amount of shooting opens it — find the console" },
+  { id: 57, key: "magLockOpen", name: "Mag-lock (released)", solid: false, opaque: false,
+    prop: "door",
+    color: "#7fd4ff", glyph: "m",
+    hint: "a mag-lock that has been thrown. Rarely authored — a console makes these" },
+  { id: 58, key: "turret", name: "Floor turret", solid: true, opaque: false, blocksShots: false,
+    turret: true, deadInto: 59, light: 40,
+    color: "#ff6b5c", glyph: "Q",
+    hint: "an automated gun on a post. It sweeps, it sights you, then it fires — cut its power at a turret console" },
+  { id: 59, key: "turretDead", name: "Floor turret (dead)", solid: true, opaque: false, blocksShots: false,
+    color: "#5a4a48", glyph: "q",
+    hint: "a turret with its power cut. Cover now, and nothing else" },
 
   // Placed mutants. Neither is ever drawn at random — see `weight: 0` in ZOMBIE_DEFS.
   { id: 40, key: "stranglerSpawn", name: "Strangler", solid: false, opaque: false,

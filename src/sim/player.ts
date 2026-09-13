@@ -170,6 +170,7 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     lightTell: 0,
     blinded: 0,
     restraint: null,
+    hacking: false,
     swingTimer: 0,
     swingTime: SWING_TIME,
     swingSide: 1,
@@ -252,6 +253,32 @@ export function updatePlayer(
     p.stanceTimer = 0;
     p.lean = 0;
     updateDowned(p, input, deps, dt);
+    return;
+  }
+
+  if (p.hacking) {
+    /*
+     * In the screen. Everything below this point is the player acting on the room, and
+     * a player at a console is not in the room — so all of it is skipped rather than
+     * individually disabled. What is deliberately NOT skipped: the cone stays pointing
+     * wherever they left it, because a torch set down on a desk still lights what it
+     * was lighting, and the squad has to cover the other three sides regardless.
+     *
+     * The world drives the mini-game itself and decides when this ends; if it has ended
+     * between steps the flag is already false and we never get here.
+     */
+    p.vx = damp(p.vx, 0, 22, dt);
+    p.vy = damp(p.vy, 0, 22, dt);
+    p.weaponUp = 0;
+    p.weaponHold = 0;
+    p.swingTimer = 0;
+    p.swingHit = true;
+    p.itemHold = 0;
+    p.lean = 0;
+    p.stance = "stand";
+    p.eyeX = p.x;
+    p.eyeY = p.y;
+    advanceGait(p);
     return;
   }
 

@@ -6,6 +6,8 @@ import { PLAYER_TUNING } from "../sim/player";
 import { activeWeapon } from "../sim/power";
 import { UNSEAL_TIME } from "../sim/devices";
 import { WELD_INTEGRITY } from "../sim/items";
+import { hackProgress } from "../sim/hacking";
+import { turretLock, TURRET_RANGE } from "../sim/turret";
 import type { Enemy, Player } from "../sim/entities";
 import { zombieDef } from "../sim/zombies";
 import { VENT_SHADOW, type GameWorld } from "../sim/world";
@@ -148,6 +150,7 @@ export class Renderer {
     this.drawStairs(ctx, world, bounds);
     this.drawSignals(ctx, world, bounds);
     this.drawDevices(ctx, world, bounds);
+    this.drawTurrets(ctx, world, bounds);
     this.drawLamps(ctx, world, bounds);
     this.drawParticles(ctx, world);
     this.drawActors(ctx, world, alpha);
@@ -161,6 +164,11 @@ export class Renderer {
     // Aim lasers and tracers sit ON TOP of the darkness: a bullet you cannot see is a
     // bullet you cannot learn from, and the whole point of a tracer is that it glows.
     this.drawAimLines(ctx, world);
+    // A turret's laser and the ring over somebody in a console both sit on top of the
+    // darkness: they are the two things you must be able to see from across a dark
+    // room, because both of them are the game asking you to move.
+    this.drawTurretSights(ctx, world);
+    this.drawHackTell(ctx, world);
     this.drawBullets(ctx, world);
     this.drawLightEdges(ctx, world);
     // Fog goes OVER the darkness: coolant does not care whose light is on, and a bank
@@ -325,7 +333,7 @@ export class Renderer {
     // per tile, so a 2x2 wreck is one body with one outline.
     const props: Record<string, number[]> = {
       crate: [], glass: [], reception: [], cubicle: [], door: [], blast: [],
-      cable: [], coolant: [], welded: [], airlockDoor: [],
+      cable: [], coolant: [], welded: [], airlockDoor: [], magLock: [], turretPost: [],
     };
 
     ctx.fillStyle = COLOR_WALL;
@@ -341,6 +349,8 @@ export class Renderer {
         if (def.key === "blocked") continue;   // drawn with the floor, not as geometry
         if (def.prop === "car") continue;         // drawn as a whole vehicle, below
         const bucket = def.blastDoor ? "blast"
+          : def.magLock ? "magLock"
+          : (def.turret || def.key === "turretDead") ? "turretPost"
           : def.cable ? "cable"
           : def.coolant ? "coolant"
           : def.welded ? "welded"
@@ -393,6 +403,58 @@ export class Renderer {
         ctx.arc(sx, sy, 2.5, 0, TAU);
         ctx.fill();
         ctx.globalCompositeOperation = "source-over";
+      }
+    }
+
+    // A mag-lock: a heavy shutter with the lock plate on it, lit while it is holding.
+    // It reads as machinery rather than as a wall on purpose — a door you cannot shoot
+    // open has to look like a door, or the player spends the round shooting it.
+    for (let i = 0; i < props.magLock.length; i += 2) {
+      const x = props.magLock[i] * TILE;
+      const y = props.magLock[i + 1] * TILE;
+      ctx.fillStyle = "#0b1016";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = "#16303f";
+      ctx.fillRect(x + 3, y + 3, TILE - 6, TILE - 6);
+      ctx.strokeStyle = "rgba(99,224,255,0.55)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x + 3, y + 3, TILE - 6, TILE - 6);
+      // The seam down the middle, and the bolt holding it.
+      ctx.beginPath();
+      ctx.moveTo(x + TILE / 2, y + 4);
+      ctx.lineTo(x + TILE / 2, y + TILE - 4);
+      ctx.stroke();
+      const pulse = 0.45 + 0.35 * Math.sin(performance.now() * 0.005);
+      ctx.fillStyle = `rgba(99,224,255,${pulse})`;
+      ctx.beginPath();
+      ctx.arc(x + TILE / 2, y + TILE / 2, 4.5, 0, TAU);
+      ctx.fill();
+    }
+
+    // The base of a turret. The part that turns is drawn later, from the live turret,
+    // so a dead one is simply a post with nothing on top of it.
+    for (let i = 0; i < props.turretPost.length; i += 2) {
+      const tx = props.turretPost[i];
+      const ty = props.turretPost[i + 1];
+      const x = tx * TILE;
+      const y = ty * TILE;
+      const dead = tileDef(map.tileAt(tx, ty)).key === "turretDead";
+      ctx.fillStyle = "#0b0b10";
+      ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+      ctx.fillStyle = dead ? "#241f1e" : "#2a1b19";
+      ctx.beginPath();
+      ctx.arc(x + TILE / 2, y + TILE / 2, TILE * 0.4, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = dead ? "rgba(120,105,100,0.45)" : "rgba(255,107,92,0.6)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      if (dead) {
+        // Cut power: the housing slumps, and the barrel is on the floor pointing at it.
+        ctx.strokeStyle = "rgba(120,105,100,0.5)";
+        ctx.beginPath();
+        ctx.moveTo(x + TILE * 0.3, y + TILE * 0.7);
+        ctx.lineTo(x + TILE * 0.72, y + TILE * 0.38);
+        ctx.stroke();
       }
     }
 
@@ -660,6 +722,30 @@ export class Renderer {
         continue;
       }
 
+      if (d.kind === "hack") {
+        // A console you work rather than read: a heavier cabinet, a wide screen, and a
+        // cyan or magenta glow depending on what it is wired to. Once beaten it goes
+        // dark like everything else spent — the deck remembers what you have done.
+        const turret = tileDef(world.map.tileAt(d.tx, d.ty)).hack === "turret";
+        const tone = turret ? "255,169,240" : "99,224,255";
+        ctx.fillStyle = "#0c141c";
+        ctx.fillRect(d.x - half + 4, d.y - half + 6, TILE - 8, TILE - 12);
+        ctx.fillStyle = d.spent
+          ? "rgba(90,110,120,0.30)"
+          : `rgba(${tone},${0.32 + t * 0.5})`;
+        ctx.fillRect(d.x - half + 8, d.y - half + 10, TILE - 16, TILE - 22);
+        if (d.spent) continue;
+        // Two rows of "text" on the screen, because a blank glow reads as a lamp.
+        ctx.fillStyle = `rgba(10,20,26,${0.5 + t * 0.2})`;
+        for (let r = 0; r < 2; r++) {
+          ctx.fillRect(d.x - half + 12, d.y - half + 16 + r * 7, (TILE - 24) * (r === 0 ? 1 : 0.6), 3);
+        }
+        ctx.strokeStyle = `rgba(${tone},${0.3 + t * 0.4})`;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(d.x - half + 3, d.y - half + 5, TILE - 6, TILE - 10);
+        continue;
+      }
+
       if (d.kind === "locker") {
         // A wall locker, hanging open once somebody has taken what was in it.
         ctx.fillStyle = d.spent ? "#2a2622" : "#38301f";
@@ -858,6 +944,10 @@ export class Renderer {
           drawAirlockFloor(ctx, x, y);
           continue;
         }
+        if (key === "magLockOpen") {
+          drawReleasedLock(ctx, x, y);
+          continue;
+        }
         if (def.dispense || def.charger) {
           drawStation(ctx, def, x, y);
           continue;
@@ -983,6 +1073,105 @@ export class Renderer {
       ctx.lineWidth = 1.5;
       ctx.strokeRect(lamp.x - 7, lamp.y - 7, 14, 14);
     }
+  }
+
+  /**
+   * The part of a turret that turns. Drawn from the live list rather than from the grid,
+   * because the housing points wherever the thing is actually looking — and where it is
+   * looking is the only information that matters about it.
+   */
+  private drawTurrets(ctx: CanvasRenderingContext2D, world: GameWorld, b: Bounds): void {
+    for (const t of world.turrets) {
+      if (t.x < b.x0 - TILE || t.x > b.x1 + TILE || t.y < b.y0 - TILE || t.y > b.y1 + TILE) continue;
+      const lock = turretLock(t);
+
+      // The arc it is watching. Faint, wide, and it moves — the point is that a player
+      // can stand in the corridor and see which half of it is currently unsafe.
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const cone = ctx.createRadialGradient(t.x, t.y, TILE * 0.4, t.x, t.y, TURRET_RANGE);
+      cone.addColorStop(0, `rgba(255,107,92,${0.10 + lock * 0.12})`);
+      cone.addColorStop(1, "rgba(255,107,92,0)");
+      ctx.fillStyle = cone;
+      ctx.beginPath();
+      ctx.moveTo(t.x, t.y);
+      ctx.arc(t.x, t.y, TURRET_RANGE, t.facing - 0.5, t.facing + 0.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // Housing and barrel.
+      ctx.save();
+      ctx.translate(t.x, t.y);
+      ctx.rotate(t.facing);
+      ctx.fillStyle = "#3a2422";
+      ctx.fillRect(-TILE * 0.22, -TILE * 0.18, TILE * 0.44, TILE * 0.36);
+      ctx.strokeStyle = lock > 0 ? "rgba(255,140,110,0.9)" : "rgba(255,107,92,0.6)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-TILE * 0.22, -TILE * 0.18, TILE * 0.44, TILE * 0.36);
+      ctx.fillStyle = "#1b1210";
+      ctx.fillRect(TILE * 0.1, -TILE * 0.07, TILE * 0.36, TILE * 0.14);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * The laser. Off while it is sweeping, thin and growing while it decides, and solid
+   * the moment it starts shooting — so the sight window reads as a countdown you can
+   * still do something about rather than as damage that already happened.
+   */
+  private drawTurretSights(ctx: CanvasRenderingContext2D, world: GameWorld): void {
+    for (const t of world.turrets) {
+      const lock = turretLock(t);
+      if (lock <= 0) continue;
+      const len = raycast(world.map, t.x, t.y, Math.cos(t.facing), Math.sin(t.facing), TURRET_RANGE, "shot");
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = `rgba(255,90,70,${0.25 + lock * 0.6})`;
+      ctx.lineWidth = 1 + lock * 2;
+      ctx.beginPath();
+      ctx.moveTo(t.x, t.y);
+      ctx.lineTo(t.x + Math.cos(t.facing) * len, t.y + Math.sin(t.facing) * len);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Somebody is in a console. Their teammates get a ring over their head that fills as
+   * the interlocks go down, drawn over the darkness so it can be found across an unlit
+   * room — it is the only way the rest of the squad knows how much longer to hold.
+   */
+  private drawHackTell(ctx: CanvasRenderingContext2D, world: GameWorld): void {
+    const hack = world.hack;
+    if (!hack) return;
+    const p = world.players.find((q) => q.id === hack.playerId);
+    if (!p) return;
+    const r = p.radius + 12;
+    const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.006);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `rgba(99,224,255,${0.25 * pulse})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, TAU);
+    ctx.stroke();
+    // The part that is done.
+    ctx.strokeStyle = `rgba(124,255,155,${0.65 + 0.25 * pulse})`;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, -Math.PI / 2, -Math.PI / 2 + TAU * hackProgress(hack));
+    ctx.stroke();
+    if (hack.resync > 0) {
+      // A fumble. Bright, brief, and the same amber the console is flashing at them.
+      ctx.strokeStyle = "rgba(255,210,87,0.8)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 5, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private drawActors(ctx: CanvasRenderingContext2D, world: GameWorld, alpha: number): void {
@@ -1636,6 +1825,24 @@ function drawRailing(ctx: CanvasRenderingContext2D, x: number, y: number): void 
 }
 
 /** Airlock chamber floor: hazard stripes, so you know what you are standing in. */
+/**
+ * A mag-lock that has been thrown: the door is in the wall pockets and what is left is
+ * the threshold. Drawn rather than left as bare floor so a released lock reads as a way
+ * through that WAS shut — the squad should be able to see the console worked from the
+ * other end of the corridor.
+ */
+function drawReleasedLock(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+  ctx.fillStyle = "rgba(127,212,255,0.10)";
+  ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);
+  ctx.strokeStyle = "rgba(127,212,255,0.55)";
+  ctx.lineWidth = 3;
+  // The two halves, retracted into the frame.
+  ctx.beginPath();
+  ctx.moveTo(x + 2, y + 4); ctx.lineTo(x + 2, y + TILE - 4);
+  ctx.moveTo(x + TILE - 2, y + 4); ctx.lineTo(x + TILE - 2, y + TILE - 4);
+  ctx.stroke();
+}
+
 function drawAirlockFloor(ctx: CanvasRenderingContext2D, x: number, y: number): void {
   ctx.fillStyle = "#48586a";
   ctx.fillRect(x, y, TILE + 0.5, TILE + 0.5);

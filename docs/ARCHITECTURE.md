@@ -319,6 +319,65 @@ railings drawn on the floor where the squad can plan around them.
 
 ---
 
+### 8h. The console, and the player who is not in the room — `src/sim/hacking.ts`, `src/render/terminal.ts`
+
+CORE 21 is the only mechanic in the game that takes a player *out* of it, and it is the
+one that proves CORE 10 was worth the trouble. **Nothing may assume there is one screen**
+— so when somebody sits down at a console, one quarter of the glass becomes a terminal
+and the other three keep showing the deck. The player in it genuinely cannot see what is
+happening to them; their squad genuinely can. With a single camera this mechanic does
+not exist.
+
+The split is the usual one, and it is worth restating because this feature could so
+easily have been written the other way round:
+
+- `sim/hacking.ts` is **plain data and a step function**. A session is tumblers, an
+  index and a fault count; `updateHack` advances the sweep and returns what happened.
+  It draws nothing, plays nothing, and does not know what a door is.
+- `sim/world.ts` owns every consequence: who may start one, what beating one opens, and
+  every way out of it.
+- `render/terminal.ts` reads the session and draws a screen. It is the only file that
+  knows the thing looks like a 1980s terminal.
+- `sim/player.ts` reads **one boolean**. `p.hacking` is the whole of what the rest of the
+  simulation needs to know, and `updatePlayer` returns early on it rather than disabling
+  movement, aim, fire and light one at a time — a list of exceptions is a list of things
+  somebody will forget to add to.
+
+Two rules carry the design, and both are one line of code each:
+
+- **Anything that touches you throws you out.** `hurtPlayer` ends the session before it
+  applies the damage. That single line is what turns "one of us hacks" into "three of us
+  hold a perimeter", because it means the hack cannot outlive the cordon.
+- **One at a time.** `beginHack` refuses while a session exists. Two players in screens
+  is exactly the failure the mechanic is built to prevent, so it is refused at the door
+  rather than balanced against.
+
+The one piece of fiddliness worth knowing about is the **latch**. You enter by holding
+USE and leave by tapping it — and the button is still held on the frame you leave, so
+without `hackLatch` the console's dwell refills and drags you straight back in. A player
+must release USE before a console will take them again.
+
+### 8i. Turrets — `src/sim/turret.ts`
+
+CORE 22 exists to make the console worth the risk: something on the deck that cannot be
+solved by shooting it or by running away. It is deliberately **not** an `Enemy`. Putting
+it in that list would hand it a flow field, an ear for noise, an alertness and a lunge,
+none of which a bolted-down gun has any use for — and every one of which would have to be
+special-cased back off it.
+
+What it does have is a state machine with a tell in the middle of it: sweep → sight →
+fire → cool. The sight window is the whole of its fairness, and it is drawn as a laser
+that brightens as it fills. It fires out of the **same bullet pool players use**, with
+`team: "enemy"`, so its rounds are dodgeable, stopped by cover and already understood by
+every system that touches bullets. The alternative — hitscan damage — would have been
+fewer lines and a worse game.
+
+Its default bearing is worked out from the map: eight rays, and it faces down the longest
+open one. Drop one in a corridor and it covers the corridor without the author having to
+say so, which is the same courtesy the car renderer does with its bounding box.
+
+---
+
 ### 9. The level format — `src/world/level.ts`, `src/levels/`
 
 A level is a 2D array of tile ids and a name. It diffs cleanly, you can type one by hand,
@@ -506,6 +565,10 @@ In rough order of when it starts hurting:
 | How much a wall takes off a sound, and what it silences | `OCCLUDED_GAIN` / `OCCLUDED_CUTOFF` / `OCCLUDED_FLOOR` in `src/audio/bus.ts` |
 | How many walls count as "behind a bulkhead" | `GameAudio.OCCLUSION_CAP` in `src/audio/gameAudio.ts` |
 | The Lurker's dwell, reach and how often it moves grate | `drop` on the Lurker row in `src/sim/zombies.ts` |
+| How many interlocks a console asks for, and how tight they are | `TUMBLERS` / `BAND_WIDTH` / `BASE_SPEED` in `src/sim/hacking.ts` |
+| What a fumbled interlock costs | `FAULT_SPEEDUP` / `RESYNC_TIME` / `FAULT_NOISE` in `src/sim/hacking.ts` |
+| How long you stand at a console before it takes you | `HACK_ARM_TIME` in `src/sim/devices.ts` |
+| Turret range, sight window, burst and damage | `src/sim/turret.ts` (top of file) |
 | How long a swing takes, and when in it the bar connects | `SWING_TIME` / `MELEE_CONTACT` in `src/sim/player.ts` |
 | Stride length — how far the body walks per footfall | `STRIDE` in `src/sim/player.ts`, `ZOMBIE_STRIDE` in `src/sim/enemy.ts` |
 | Body proportions, and what each weapon looks like | `drawActor` / `WEAPON_ART` in `src/render/actorArt.ts` |

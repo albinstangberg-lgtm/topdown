@@ -2,6 +2,7 @@ import { clockText, type GameWorld } from "../sim/world";
 import type { Player } from "../sim/entities";
 import { itemDef } from "../sim/items";
 import { activeWeapon, primaryStowed } from "../sim/power";
+import { hackProgress } from "../sim/hacking";
 import type { Viewport } from "./viewport";
 
 /**
@@ -551,6 +552,29 @@ function drawSuitState(
       ctx.font = "600 12px ui-monospace, monospace";
       ctx.textAlign = "left";
     }
+  }
+
+  // Somebody is in a console — and it is not this player, because a player who IS in
+  // one is looking at the terminal instead of this HUD. What they need to know is who,
+  // and how much longer they are covering for them.
+  const hack = world.hack;
+  if (hack && hack.playerId !== p.id) {
+    const who = hack.playerId + 1;
+    ctx.textAlign = "center";
+    ctx.font = "700 14px ui-monospace, monospace";
+    ctx.fillStyle = "rgba(99,224,255,0.95)";
+    ctx.fillText(`P${who} IS BLIND — HOLD THE ROOM`, vp.w / 2, vp.h * 0.22);
+    // The same bar the hacker's ring shows, so "nearly there" means the same thing to
+    // the people shooting as it does to the person typing.
+    const w = Math.min(180, vp.w * 0.3);
+    const x = (vp.w - w) / 2;
+    const y = vp.h * 0.22 + 20;
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(x, y, w, 5);
+    ctx.fillStyle = "rgba(124,255,155,0.9)";
+    ctx.fillRect(x, y, w * hackProgress(hack), 5);
+    ctx.font = "600 12px ui-monospace, monospace";
+    ctx.textAlign = "left";
   }
 
   // An airlock cycle. The number matters: it is how long the other half of the squad

@@ -4,6 +4,7 @@ import { CORRIDORS } from "./corridors";
 import { SHOWCASE } from "./showcase";
 import { HAZARDS } from "./hazards";
 import { SYSTEMS } from "./systems";
+import { CONSOLES } from "./consoles";
 
 /**
  * Built-in maps. Both forms below go through the same importer the drag-and-drop path
@@ -20,6 +21,7 @@ export const BUILTIN_LEVELS: BuiltinLevel[] = [
   { id: "showcase", name: "Tile Showcase", source: SHOWCASE },
   { id: "hazards", name: "Deck Hazards", source: HAZARDS },
   { id: "systems", name: "Deck Systems", source: SYSTEMS },
+  { id: "consoles", name: "Deck Consoles", source: CONSOLES },
 ];
 
 export const PROCEDURAL = "procedural";
