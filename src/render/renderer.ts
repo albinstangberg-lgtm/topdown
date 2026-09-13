@@ -73,6 +73,7 @@ const RIPPLE_TONE: Record<string, string> = {
   duct: "200,160,255",
   arc: "190,240,255",
   drag: "255,190,150",
+  groan: "255,120,150",
 };
 
 export interface Bounds { x0: number; y0: number; x1: number; y1: number }

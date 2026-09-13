@@ -820,7 +820,11 @@ const climbed = await storyPage.evaluate(async () => {
   const before = { map: w.map.name, x: p.x, y: p.y };
   // The zone check above leaves a real fight behind, and it sometimes leaves the
   // tester on the floor. This check is about what the stairs carry up, so it starts
-  // from a squad that is on its feet rather than from whoever won that scrap.
+  // from a squad that is on its feet rather than from whoever won that scrap — and
+  // with that scrap cleared off the deck, because the numbers below are asserted
+  // exactly and one bite in the 1.4s spent standing on the step would fail a check
+  // that has nothing to do with being bitten.
+  w.enemies.length = 0;
   p.downed = false;
   p.bleedout = 0;
   p.health = 41;
@@ -3024,6 +3028,279 @@ check("standing still over them is still the revive",
   drag.revived === true, JSON.stringify({ revived: drag.revived }));
 
 check("the systems deck raised no exceptions", sysErrors.length === 0, sysErrors.join(" | "));
+
+// --- the dead, and what they are not ------------------------------------------
+
+// Every one of these is a check that the horde is STUPID, which is worth testing
+// precisely because the drift in any AI is toward competence — and a zombie that has
+// quietly become competent still passes every test about whether it can reach you.
+
+const aiPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+const aiErrors = [];
+aiPage.on("pageerror", (e) => aiErrors.push(String(e)));
+await aiPage.goto(`${URL}?camera=fixed&players=2&level=systems`, { waitUntil: "load" });
+await aiPage.waitForTimeout(700);
+await aiPage.waitForFunction(() => window.game.world.enemies.length >= 2, null, { timeout: 12000 });
+
+const dead = await aiPage.evaluate(async () => {
+  const w = window.game.world;
+  const T = 48;
+  const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+  const P = w.players[0];
+  const Q = w.players[1];
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const probe = { x: 0, y: 0 };
+
+  // Two bodies we own outright, forced to plain walkers so they run the shared machine
+  // rather than a mutant's.
+  const pair = w.enemies.slice(0, 2);
+  const asWalker = (e, hunting) => {
+    e.kind = "walker"; e.radius = 14; e.health = 400; e.maxHealth = 400;
+    e.state = "wander"; e.stateTimer = 0; e.alertness = 0; e.targetId = -1;
+    e.groanTimer = 0; e.attackCooldown = 0; e.hunting = hunting; e.blind = 0;
+    e.vx = 0; e.vy = 0;
+  };
+  const put = (e, x, y) => { e.x = x; e.y = y; e.prevX = x; e.prevY = y; e.vx = 0; e.vy = 0; };
+
+  // A deck with nothing on it but the test: no waves, no strays, no noise, no hunches,
+  // and two players standing still in the dark with their beams off. `keep` is how many
+  // of the pair the scenario wants on the floor — a leftover that can still see
+  // somebody will groan into the middle of a measurement about silence.
+  const hush = (keep) => {
+    w.mode = "story";
+    w.map.spawnZones.length = 0;
+    w.enemies.length = 0;
+    for (const e of pair.slice(0, keep)) { asWalker(e, false); w.enemies.push(e); }
+    w.hunches.length = 0;
+    w.squadFlow.rebuild(w.map, w.hunches);
+    for (const n of w.noise.items) n.active = false;
+    for (const p of w.players) {
+      p.downed = false; p.health = p.maxHealth; p.bleedout = 0;
+      p.restraint = null; p.dragging = null; p.draggedBy = null;
+      p.lightOn = false; p.stance = "stand"; p.stanceTimer = 0;
+      p.vx = 0; p.vy = 0; p.adrenaline = 0; p.lightDip = 0;
+    }
+  };
+
+  // Somewhere open, dark, and with a clear run in BOTH directions along one axis, so a
+  // scenario can put things on either side of the player without landing in a wall.
+  const openDark = (back, fwd) => {
+    for (let ty = 1; ty < w.map.rows - 1; ty++) {
+      for (let tx = 1; tx < w.map.cols - 1; tx++) {
+        const x = (tx + 0.5) * T;
+        const y = (ty + 0.5) * T;
+        if (w.map.isSolidAt(x, y) || w.litHere(x, y) || w.map.fogAt(x, y) > 0.02) continue;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          let clear = true;
+          for (let d = -back; d <= fwd; d += 10) {
+            if (w.map.isSolidAt(x + dx * d, y + dy * d)) { clear = false; break; }
+          }
+          if (clear) return { x, y, dx, dy };
+        }
+      }
+    }
+    return null;
+  };
+
+  const site = openDark(90, 300);
+  if (!site) return { site: null };
+  const at = (d) => ({ x: site.x + site.dx * d, y: site.y + site.dy * d });
+  const facingIn = Math.atan2(-site.dy, -site.dx);    // from out along the run, back at the site
+  const facingOut = Math.atan2(site.dy, site.dx);
+
+  const atSite = (p) => { put(p, site.x, site.y); p.eyeX = p.x; p.eyeY = p.y; };
+  const offstage = (p) => { put(p, site.x + 6000, site.y); p.eyeX = p.x; p.eyeY = p.y; };
+
+  // --- 1. With nothing to hear, it has no heading at all ---------------------
+  hush(1);
+  atSite(P);
+  offstage(Q);
+  const hunter = pair[0];
+  asWalker(hunter, true);
+  const start1 = at(190);
+  put(hunter, start1.x, start1.y);
+  hunter.facing = facingOut;                         // looking away from the player
+  await settle(1400);
+  const silent = {
+    hunches: w.hunches.length,
+    goals: w.squadFlow.goalCount,
+    state: hunter.state,
+    // The mechanism, stated exactly. It is not that it declines to come. It is that
+    // asking the field which way the squad is returns nothing at all.
+    steerable: w.squadFlow.steer(w.map, hunter.x, hunter.y, probe),
+  };
+
+  // --- 2. It walks to where you were loud, not to where you are --------------
+  // The noise is a sprinting footfall, which carries 180, and it is standing 190 away:
+  // whatever moves it, it is not its ears. Sampled while it walks, because if we let it
+  // arrive it finds the player with its eyes and the state we are asking about is gone.
+  // Put it back on its mark first: scenario 1 left it wandering, and a zombie that has
+  // drifted 60 units closer can HEAR the noise this scenario needs it not to hear.
+  const start2 = at(240);
+  put(hunter, start2.x, start2.y);
+  hunter.facing = facingOut;
+  asWalker(hunter, true);
+  await settle(60);
+  const before2 = dist(hunter, P);
+  w.noise.emit(P.x, P.y, 150, "step");
+  let huntedBlind = false;
+  let hunchesWhileBlind = 0;
+  const t2 = Date.now();
+  while (Date.now() - t2 < 2000) {
+    if (hunter.targetId !== -1) break;               // it has eyes on him now; stop asking
+    if (hunter.state === "hunt") {
+      huntedBlind = true;
+      hunchesWhileBlind = w.hunches.length;
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  const heard = {
+    closed: +(before2 - dist(hunter, P)).toFixed(1),
+    huntedBlind,
+    hunchesWhileBlind,
+  };
+
+  // --- 3. Go quiet and the field goes back to nothing ------------------------
+  hush(1);
+  atSite(P);
+  offstage(Q);
+  const forgetter = pair[0];
+  asWalker(forgetter, true);
+  const start3 = at(280);                            // far beyond sight, lit or not
+  put(forgetter, start3.x, start3.y);
+  forgetter.facing = facingOut;
+  w.noise.emit(P.x, P.y, 180, "step");
+  await settle(500);
+  const remembered = {
+    hunches: w.hunches.length, goals: w.squadFlow.goalCount, state: forgetter.state,
+  };
+  // Wind the hunch clock forward rather than standing here for twelve seconds.
+  for (const h of w.hunches) h.life = 0.05;
+  await settle(600);
+  const wentQuiet = {
+    hunches: w.hunches.length,
+    goals: w.squadFlow.goalCount,
+    state: forgetter.state,
+    steerable: w.squadFlow.steer(w.map, forgetter.x, forgetter.y, probe),
+  };
+
+  // --- 4. One that sees you is loud about it, and the next room has ears -----
+  hush(2);
+  atSite(P);
+  offstage(Q);
+  P.lightOn = true;                                  // a lamp: easy to see, which is the point
+  const seer = pair[0];
+  const listener = pair[1];
+  const seerAt = at(120);
+  put(seer, seerAt.x, seerAt.y);
+  seer.facing = facingIn;                            // straight at the player
+  // The listener is further out, past the seer: too far to see the player in the dark,
+  // well inside a groan, and looking the other way.
+  const listenerAt = at(290);
+  put(listener, listenerAt.x, listenerAt.y);
+  listener.facing = facingOut;
+
+  let groans = 0;
+  const ear = setInterval(() => {
+    for (const n of w.noise.items) if (n.active && n.kind === "groan") groans++;
+  }, 16);
+  await settle(900);
+  clearInterval(ear);
+  const groaned = {
+    groans: groans > 0,
+    seerSaw: seer.targetId === P.id,
+    listenerRoused: listener.state !== "wander" && listener.alertness > 0,
+    listenerCouldNotSee: listener.targetId === -1,
+  };
+
+  // --- 5. Eyes need photons -------------------------------------------------
+  hush(1);
+  atSite(P);
+  offstage(Q);
+  const eye = pair[0];
+  const eyeAt = at(170);                             // past a dark shape, inside a lit one
+  const look = (lightOn) => {
+    asWalker(eye, false);
+    put(eye, eyeAt.x, eyeAt.y);
+    eye.facing = facingIn;
+    P.lightOn = lightOn;
+  };
+  look(false);
+  await settle(600);
+  const inTheDark = { target: eye.targetId, state: eye.state };
+  look(true);
+  await settle(600);
+  const withTheBeamOn = { target: eye.targetId, state: eye.state };
+
+  // --- 6. A body on the floor is food, and it costs time rather than health --
+  hush(1);
+  atSite(P);
+  offstage(Q);
+  P.downed = true; P.health = 0; P.bleedout = 30;
+  const feeder = pair[0];
+  const feederAt = at(40);
+  put(feeder, feederAt.x, feederAt.y);
+  feeder.facing = facingIn;
+  await settle(2400);
+  const chewed = {
+    bleedout: +P.bleedout.toFixed(1),
+    health: P.health,
+    stillDown: P.downed,
+    onTheBody: feeder.targetId === P.id,
+  };
+
+  // Something upright walks in — on the side it is already facing, past the body rather
+  // than behind its head. Nothing weighs anything up: the standing one is simply the
+  // one that is moving, and it wins outright.
+  put(Q, site.x - site.dx * 55, site.y - site.dy * 55);
+  Q.eyeX = Q.x; Q.eyeY = Q.y;
+  Q.lightOn = true;
+  // Sampled while it happens, not after. Taking one reading at the end catches it
+  // having already leapt at the standing player and overshot, by which point it has
+  // dropped the target and the thing under test has been and gone.
+  let dropsTheBody = false;
+  const t6 = Date.now();
+  while (Date.now() - t6 < 1200 && !dropsTheBody) {
+    dropsTheBody = feeder.targetId === Q.id;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+
+  hush(0);
+  return {
+    site: true, silent, heard, remembered, wentQuiet, groaned,
+    inTheDark, withTheBeamOn, chewed, dropsTheBody,
+  };
+});
+
+check("a hunting zombie with nothing to hear has no heading at all",
+  dead.site === true && dead.silent.hunches === 0 && dead.silent.goals === 0 &&
+  dead.silent.state === "wander" && dead.silent.steerable === false,
+  JSON.stringify(dead.silent));
+check("it walks to where you were loud, on a noise it could not even hear",
+  dead.heard.huntedBlind === true && dead.heard.hunchesWhileBlind === 1 &&
+  dead.heard.closed > 60,
+  JSON.stringify(dead.heard));
+check("go quiet and the field empties: it is left where you were, with no heading",
+  dead.remembered.goals === 1 && dead.remembered.state === "hunt" &&
+  dead.wentQuiet.hunches === 0 && dead.wentQuiet.goals === 0 &&
+  dead.wentQuiet.state === "wander" && dead.wentQuiet.steerable === false,
+  `${JSON.stringify(dead.remembered)} -> ${JSON.stringify(dead.wentQuiet)}`);
+check("being seen is not a private event: it groans, and the next room hears it",
+  dead.groaned.groans && dead.groaned.seerSaw &&
+  dead.groaned.listenerRoused && dead.groaned.listenerCouldNotSee,
+  JSON.stringify(dead.groaned));
+check("a suit running dark is a shape nothing sees; a lit beam is a lamp you carry",
+  dead.inTheDark.target === -1 && dead.inTheDark.state === "wander" &&
+  dead.withTheBeamOn.target === 0,
+  `dark ${JSON.stringify(dead.inTheDark)}, lit ${JSON.stringify(dead.withTheBeamOn)}`);
+check("they chew a downed player, and it costs bleedout rather than health",
+  dead.chewed.onTheBody && dead.chewed.stillDown && dead.chewed.health === 0 &&
+  dead.chewed.bleedout < 28,
+  JSON.stringify(dead.chewed));
+check("anything upright outranks a body on the floor",
+  dead.dropsTheBody === true, JSON.stringify({ switched: dead.dropsTheBody }));
+
+check("the dead raised no exceptions", aiErrors.length === 0, aiErrors.join(" | "));
 
 await browser.close();
 

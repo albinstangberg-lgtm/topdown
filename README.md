@@ -228,15 +228,26 @@ close-range, and every part of it is readable off the world rather than off UI.
 
 - **They wander** when they have no idea you exist — a third of your walking pace,
   turning at random and bouncing off walls. That is the ambient population only.
-- **They hunt.** A zombie that arrives with a wave knows roughly where the squad is and
-  walks the actual route there, reading a heading off a flow field over the tile grid.
-  Sight alone is not enough to make a horde: chasing needs line of sight, so a wave
-  spawning three rooms away would otherwise mill about until the fight found it. The
-  same field is what gets an investigating zombie *round* a corner instead of into it.
+- **They hunt where you were loud.** A zombie that arrives with a wave walks an actual
+  route rather than milling about, reading a heading off a flow field over the tile
+  grid — but the field is not built from your bodies. It is built from **hunches**:
+  places the squad gave itself away. A shot, a sprinting footfall, a pane going out, a
+  beam swinging round a dark corridor, a body being dragged. Each is worth twelve
+  seconds and then it is gone. The same field is what gets an investigating zombie
+  *round* a corner instead of into it. See [What they are not](#what-they-are-not).
 - **They see in a wide, short arc** — about 160° across and under five tiles, and it
   needs line of sight, the same primitive the player's flashlight uses. Walking past one
   head-on is hard; slipping behind it is easy. If a wall stops you seeing it, it cannot
-  see you.
+  see you. **How far it reaches depends on how lit you are**: standing in a lamp or a
+  flare is the worst case, your own beam is most of the way there, a muzzle flash counts
+  for a couple of seconds, and coolant fog blinds them on exactly the terms it blinds
+  you. Dark, beam off, standing still, you are a shape at about two tiles.
+- **They groan.** Anything that lays eyes on somebody makes a noise about it, and that
+  noise carries 460 — a room and its neighbours, not a deck. It is the only sound the
+  dead make that the dead react to.
+- **They eat what is on the floor.** A downed player is food, and a bite off one takes
+  bleedout rather than health, because there is nothing below downed to take. They are
+  slow to notice a body and they drop it the instant anything is upright.
 - **They hear through walls.** A shot carries 600–850 units depending on the weapon,
   breaking a pane 600, a sprinting footfall 180, and hitting the floor at the end of a
   dive 250. **Walking makes no noise at all.** Loudness falls off with distance and the
@@ -250,7 +261,41 @@ close-range, and every part of it is readable off the world rather than off UI.
   their chase pace is below your walk, so the leap is the only way they can catch you.
 
 `F1` then `F3` draws the field, one arrow per tile — the fastest way to see why a horde
-is going the wrong way.
+is going the wrong way. `F1` also prints the live hunch count; **zero means the squad
+has genuinely gone quiet and the horde is walking at nothing.**
+
+### What they are not
+
+Every improvement the zombies have had was an improvement in the *other* direction. This
+is worth writing down, because the obvious upgrades to an enemy are all upgrades to its
+judgement, and a zombie with judgement is a soldier in a bad skin. The rule for anything
+that goes in `src/sim/enemy.ts`: if it needs the word *decides*, it is the wrong change.
+
+- **They do not know where you are.** The flow field used to be swept from live player
+  positions, which quietly made every hunting zombie omniscient — a perfect,
+  continuously updating route to somebody it had never seen or heard, through geometry
+  it had never been in. You could not break contact because there was never any contact
+  to break. Now it walks at noises. Go quiet and move, and twelve seconds later the
+  field is empty, they have no heading at all, and they are milling about exactly where
+  you used to be.
+- **They do not tell each other anything.** One that sees you groans, and a groan is a
+  noise on the same field a gunshot rides. The rest do not learn a fact; they hear
+  something and walk at it. Kill the first one fast enough and nothing was ever said.
+- **They have eyes, not insight.** Sight scales with light because eyes need photons,
+  not because anything is reasoning about cover.
+- **They fixate.** Once one has something in its eye it keeps it, even when a closer,
+  softer target walks straight past. Picking the nearest player every frame was the
+  smarter rule and it read as a machine re-evaluating; this reads as an animal, and it
+  means you can pull one off a teammate by being the thing in front of it.
+- **They do not search.** One that walks to a noise and finds nothing does not sweep the
+  room or check the next one. It keeps going roughly the way it was already going, loses
+  interest, and blunders into whatever is there — which is more often you than any
+  search pattern would have managed.
+
+The upshot is that the dark, the fog and your own noise discipline are now the game
+rather than the flavour. Walking a black deck with the beam off is still a genuinely bad
+idea — you cannot see, and the Strangler and the Lurker are counting on exactly that —
+but it is now a *trade* rather than a pure loss.
 
 Every number above lives in one row of `ZOMBIE_DEFS` (`src/sim/zombies.ts`). **Adding a
 kind of zombie is one entry in that table** — a runner is a walker with a bigger
@@ -632,9 +677,11 @@ Ceiling Lurker in the vents.
 Implemented: fixed-timestep loop, device-agnostic input with drop-in join, tile world
 driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones with
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
-composite with static lamps, pooled bullets and particles, zombies that see in an arc,
-hear through walls, path by flow field and lunge, downed, revive and dragging a downed
-teammate out of the room, an intensity-driven wave director,
+composite with static lamps, pooled bullets and particles, zombies that see by
+how lit you are, hear through walls, groan when they find you, walk a flow field built
+from where the squad was last loud rather than from where it is, fixate, eat what is on
+the floor and lunge, downed, revive and dragging a downed teammate out of the room,
+an intensity-driven wave director,
 a flare-and-helicopter extraction finale, top-down character art with a solved arm rig,
 distance-driven gaits and per-weapon silhouettes, three ambush mutants (a ranged grab,
 a pin and a ceiling drop) with vent travel, a one-slot utility inventory, electrified

@@ -114,6 +114,15 @@ const STRUGGLE_RESIST = 0.35;
 /** A failed item attempt does not retry until you let go. See `updateItem`. */
 const ITEM_DECAY = 2.2;
 const BLEEDOUT = 30;
+/**
+ * Seconds of bleedout one point of damage takes off somebody already on the floor.
+ *
+ * With `CHEW_BITE` and the walker's bite cooldown in `sim/enemy.ts`, one of them
+ * chewing uninterrupted costs about 1.5s of clock a second on top of the 1s the clock
+ * was already losing — so it roughly halves a thirty-second bleedout to twelve. Long
+ * enough that it is a problem you can solve, short enough that it is one.
+ */
+const BLEEDOUT_PER_HIT = 0.2;
 const REVIVE_TIME = 2.2;
 const REVIVE_RANGE = 62;
 
@@ -201,6 +210,7 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     lightTell: 0,
     blinded: 0,
     restraint: null,
+    seenness: 1,
     swingTimer: 0,
     swingTime: SWING_TIME,
     swingSide: 1,
@@ -893,8 +903,21 @@ function haulBody(helper: Player, target: Player, deps: PlayerDeps, dt: number):
   }
 }
 
+/**
+ * Hurt somebody.
+ *
+ * A downed player has nothing left to take off their health, so what a bite takes from
+ * them is **time**: it comes straight off the bleedout clock. That is the rule that
+ * makes a body on the floor a thing happening rather than a thing parked — the dead
+ * will chew on one, and every second they spend doing it is a second off the window
+ * somebody has to get there, pick them up, or drag them out.
+ */
 export function damagePlayer(p: Player, amount: number): void {
-  if (p.downed) return;
+  if (p.downed) {
+    p.bleedout = Math.max(0, p.bleedout - amount * BLEEDOUT_PER_HIT);
+    p.hurtFlash = 1;
+    return;
+  }
   p.health -= amount;
   p.hurtFlash = 1;
   if (p.health <= 0) {
@@ -945,5 +968,5 @@ export const PLAYER_TUNING = {
   WALK_SPEED, SPRINT_SPEED, STAMINA_MAX, SPRINT_DRAIN, LIGHT_TELL_INTERVAL,
   DIVE_TIME, PRONE_TIME, STAND_TIME, LEAN_OFFSET, BLEEDOUT, REVIVE_TIME, REVIVE_RANGE,
   SWING_TIME, MELEE_CONTACT, STRIDE,
-  DRAG_SPEED, DRAG_LEASH, DRAG_BREAK,
+  DRAG_SPEED, DRAG_LEASH, DRAG_BREAK, BLEEDOUT_PER_HIT,
 };

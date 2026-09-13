@@ -13,7 +13,7 @@ import {
   ARC_BLIND_TIME, breakFree, createPlayer, damagePlayer, giveWeapon, syncLights,
   updatePlayer, updateRescues, type AimCommand,
 } from "./player";
-import { createEnemy, damageEnemy, updateEnemy } from "./enemy";
+import { createEnemy, damageEnemy, updateEnemy, visibleness } from "./enemy";
 import { DeviceSystem, UNSEAL_TIME, type DeviceOutcome } from "./devices";
 import { nextWeaponUp } from "./entities";
 import {
@@ -26,7 +26,7 @@ import {
 } from "./power";
 import type { CarryKind } from "./entities";
 import { randomZombieKind, zombieDef } from "./zombies";
-import { NOISE, NoiseField } from "./noise";
+import { NOISE, NoiseField, rousing } from "./noise";
 import { Director, STORY_TUNING, SURVIVAL_TUNING, type DirectorDeps } from "./director";
 import { BulletPool, ParticlePool } from "./pools";
 import type { Enemy, Player } from "./entities";
@@ -57,6 +57,15 @@ const ALARM_PULSE = 0.6;
  * already finer than anything walking at 140 units/s can tell.
  */
 const FLOW_INTERVAL = 0.25;
+/**
+ * How long a noise is worth walking toward, how close two of them count as one place,
+ * and how many the horde keeps at once. `HUNCH_LIFE` is the dial that decides how hard
+ * it is to break contact: long enough that a firefight keeps the deck coming for a
+ * while after it stops, short enough that going quiet and moving is a real answer.
+ */
+const HUNCH_LIFE = 12;
+const HUNCH_MERGE = TILE * 2;
+const MAX_HUNCHES = 24;
 /** Seconds the whole squad has to stand on the exit before the mission ends. */
 const EXIT_DWELL = 0.8;
 
@@ -225,6 +234,11 @@ export class GameWorld {
    * every zombie that needs a route rather than a straight line. See `world/flow.ts`.
    */
   readonly squadFlow = new FlowField();
+  /**
+   * Places the squad gave itself away, and how long each has left. This is the whole of
+   * what the dead know: not where you are, where you were loud. See `updateHunches`.
+   */
+  readonly hunches: { x: number; y: number; life: number }[] = [];
   /** The same, toward whatever is currently screaming. Empty unless an alarm is going. */
   readonly lureFlow = new FlowField();
   readonly events: GameEvent[] = [];
@@ -423,6 +437,9 @@ export class GameWorld {
     this.cableCooldown.clear();
     this.thrownFlares.length = 0;
     this.dropped.length = 0;
+    // Whatever the last deck heard, it heard on the last deck.
+    this.hunches.length = 0;
+    this.squadFlow.rebuild(this.map, this.hunches);
     this.heldLast.clear();
     this.breach.active = false;
     this.breach.timeLeft = 0;
@@ -620,7 +637,15 @@ export class GameWorld {
     const revived = updateRescues(this.players, inputOf, deps, dt);
     if (revived) this.events.push({ kind: "revive", x: revived.x, y: revived.y, text: `P${revived.id + 1} up` });
 
+    this.updateHunches(dt);
     this.updateFlow(dt);
+    // How visible each player is, once, before anything looks at them. It reads the
+    // lighting and the fog grid, so it belongs here rather than in the AI — and the
+    // `lit` test behind it raycasts against every static light on the deck, which is
+    // affordable four times a step and is not affordable enemies x players times.
+    for (const p of this.players) {
+      p.seenness = visibleness(p, this.litHere(p.x, p.y), this.map.fogAt(p.x, p.y));
+    }
     const enemyDeps = {
       map: this.map,
       particles: this.particles,
@@ -1581,15 +1606,62 @@ export class GameWorld {
   }
 
   /**
-   * Re-sweep the squad's flow field. Downed players are not goals: a horde should
-   * converge on whoever is still shooting, not pile onto the one already on the floor.
-   * With nobody up, the field empties and hunting zombies fall back to wandering.
+   * What the dead think they know about where you are.
+   *
+   * The field used to be swept from the squad's live positions, which quietly made
+   * every hunting zombie omniscient: it had a perfect, continuously updating route to
+   * a player it had never seen or heard, through geometry it had never been in. You
+   * could not break contact, because there was no contact to break — the horde was
+   * never following anything, it was being told.
+   *
+   * Now the goals are **hunches**: places the squad gave itself away. A shot, a
+   * sprinting footfall, a pane going out, a body being dragged, a beam swinging round a
+   * dark corridor, and the groan of whichever of them last laid eyes on you. Each one
+   * is worth `HUNCH_LIFE` seconds and then it is gone.
+   *
+   * Nothing here is memory and nothing here is deduction. A hunch is a place that was
+   * loud. The horde walks at loud places; when the loud places run out, the field
+   * empties, `steer` starts returning false, and hunting zombies fall through to
+   * wandering exactly where the last noise was — which is why going quiet works, and
+   * why it works *slowly*, and why the place it leaves them is the place you just were.
    */
+  private updateHunches(dt: number): void {
+    for (const n of this.noise.items) {
+      // The same predicate the horde's ears use, so what they walk toward and what
+      // they can hear can never disagree.
+      if (!n.active || !rousing(n)) continue;
+      this.remember(n.x, n.y);
+    }
+    for (let i = this.hunches.length - 1; i >= 0; i--) {
+      this.hunches[i].life -= dt;
+      if (this.hunches[i].life <= 0) this.hunches.splice(i, 1);
+    }
+  }
+
+  /**
+   * Fold a noise into the hunches. Anything within a couple of tiles of one that is
+   * already there refreshes it rather than adding another, so a firefight in one room
+   * is one place the horde is walking to and not two hundred — and a noise that keeps
+   * going, like a car alarm, keeps its hunch alive for as long as it is going.
+   */
+  private remember(x: number, y: number): void {
+    for (const h of this.hunches) {
+      if (Math.hypot(h.x - x, h.y - y) > HUNCH_MERGE) continue;
+      h.x = x;
+      h.y = y;
+      h.life = HUNCH_LIFE;
+      return;
+    }
+    if (this.hunches.length >= MAX_HUNCHES) this.hunches.shift();
+    this.hunches.push({ x, y, life: HUNCH_LIFE });
+  }
+
+  /** Re-sweep the field the horde walks. See `updateHunches` for what is in it. */
   private updateFlow(dt: number): void {
     this.flowTimer -= dt;
     if (this.flowTimer > 0) return;
     this.flowTimer = FLOW_INTERVAL;
-    this.squadFlow.rebuild(this.map, this.players.filter((p) => !p.downed));
+    this.squadFlow.rebuild(this.map, this.hunches);
   }
 
   /**
