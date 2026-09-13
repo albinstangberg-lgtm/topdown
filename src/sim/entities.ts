@@ -257,6 +257,19 @@ export interface Player {
   /** The thing you fall back on: no charge, or both hands full. Always a melee weapon. */
   sidearm: WeaponDef;
 
+  // --- Hands on a downed teammate. See `updateRescues` in `src/sim/player.ts`. ------
+  /**
+   * Who this player has hold of, by player id, or null. One grip does both jobs: stand
+   * still over them and it is a revive, walk and you are hauling them out of the room.
+   * Either way both hands are on the collar, so the primary is stowed for as long as
+   * this is set.
+   */
+  dragging: number | null;
+  /** Who has hold of this player while they are down, or null. The other end of it. */
+  draggedBy: number | null;
+  /** Counts down to the next scrape of a body coming off the deck plating. */
+  dragNoise: number;
+
   // --- Light, and what has hold of you. --------------------------------------
   /**
    * Is the flashlight on? Off, you are nearly blind but nearly invisible; on, you can

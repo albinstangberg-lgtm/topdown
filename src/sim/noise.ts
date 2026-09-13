@@ -22,6 +22,8 @@ export type NoiseKind =
   | "beam"
   /** A Stalker moving through the ducts overhead. The only warning you get. */
   | "duct"
+  /** A downed teammate being hauled across the deck plating. The price of a retreat. */
+  | "drag"
   /** A deck going to vacuum. The loudest thing on the ship bar the helicopter. */
   | "breach"
   /** A discharge through standing water. Loud, and it carries. */
@@ -135,6 +137,12 @@ export const NOISE = {
   beam: 300,
   /** Something dragging itself along a duct. Heard through the ceiling, not the walls. */
   duct: 330,
+  /**
+   * A body being hauled across deck plating. Louder than a sprint, because a limp
+   * teammate does not pick their feet up — this is the price of the retreat, and it is
+   * meant to be one you can hear yourself paying.
+   */
+  drag: 210,
   /** Current going through standing water. */
   arc: 780,
   /**

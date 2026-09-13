@@ -11,7 +11,7 @@ import { computeVisibility, inCone, type VisionLight } from "../vision/visibilit
 import { hasLineOfSight } from "../world/raycast";
 import {
   ARC_BLIND_TIME, breakFree, createPlayer, damagePlayer, giveWeapon, syncLights,
-  updatePlayer, updateRevives, type AimCommand,
+  updatePlayer, updateRescues, type AimCommand,
 } from "./player";
 import { createEnemy, damageEnemy, updateEnemy } from "./enemy";
 import { DeviceSystem, UNSEAL_TIME, type DeviceOutcome } from "./devices";
@@ -473,8 +473,11 @@ export class GameWorld {
       p.reviveProgress = 0;
       p.reloadTimer = 0;
       // Whatever had hold of somebody is on the floor below now. A restraint outlives
-      // its owner here, and nothing left alive would ever release it.
+      // its owner here, and nothing left alive would ever release it. The same goes
+      // for a teammate you were hauling: everybody arrives on their own feet.
       p.restraint = null;
+      p.dragging = null;
+      p.draggedBy = null;
       p.itemHold = 0;
       p.stance = "stand";
       p.stanceTimer = 0;
@@ -614,7 +617,7 @@ export class GameWorld {
       updatePlayer(p, input, resolveAim(p, input), deps, dt);
     }
 
-    const revived = updateRevives(this.players, inputOf, dt);
+    const revived = updateRescues(this.players, inputOf, deps, dt);
     if (revived) this.events.push({ kind: "revive", x: revived.x, y: revived.y, text: `P${revived.id + 1} up` });
 
     this.updateFlow(dt);
@@ -925,6 +928,9 @@ export class GameWorld {
           this.particles.burst(p.x, p.y, 2, 60, "#5affd2", 0.3, 2);
         }
       }
+
+      // Somebody's collar is in both hands. Put them down before you pick anything up.
+      if (p.dragging !== null) continue;
 
       const pressed = inputOf(p).interactPressed;
 
@@ -2190,6 +2196,9 @@ export class GameWorld {
         p.health = p.maxHealth * 0.4;
         p.reviveProgress = 0;
         p.restraint = null;
+        // Whoever was hauling them is left holding air; `updateRescues` clears their
+        // end of it on the next step, when it sees the body is no longer down.
+        p.draggedBy = null;
         p.ammo = p.weapon.magazine;
         p.stance = "stand";
         p.stanceTimer = 0;

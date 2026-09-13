@@ -89,6 +89,25 @@ bleed out with someone still up and you respawn at the squad; the whole squad do
 run reset. Every one of those rules is about the group, and they are much harder to add
 once "player dies, player respawns" is baked into a dozen systems.
 
+`updateRescues` is the whole of "somebody has hold of somebody", and it is worth
+reading as one function rather than two. There is a single grip — holding USE next to a
+downed teammate — and it does both jobs: standing still over them is the revive, walking
+is a drag. Splitting them onto two buttons was the obvious design and the wrong one; the
+decision worth having is *win this fight or leave this room*, and it should be made with
+the stick rather than looked up.
+
+The grip lives on the player as two ids (`dragging` / `draggedBy`) rather than as object
+references, for the same reason `Restraint` stores `byId`: the world stays plain data
+and survives a structured clone, which is the prerequisite for netcode in core 5. The
+body is pulled by `moveCircle` like anything else that moves, so geometry is never
+special-cased, and a grip that stretches past `DRAG_BREAK` simply stops being a grip on
+the next step — no tear-down path to get wrong.
+
+The cost is deliberately the carry system's cost, reusing its one rule: both hands full
+means `activeWeapon` hands back the fallback melee. That is why the revive stows the
+primary now too. One rule, one place, and the HUD, the trigger and the renderer cannot
+disagree about what is in somebody's hands.
+
 ### 7. Cameras and viewports — `src/render/camera.ts`, `src/render/viewport.ts`
 
 **Nothing may assume one screen.** Every draw call takes a viewport. The layout is
@@ -468,6 +487,7 @@ In rough order of when it starts hurting:
 | --- | --- |
 | Tile types, and what each id means | `TILE_DEFS` in `src/world/tiles.ts` |
 | Cone angle, range, player speed, dash, revive rules | `src/sim/player.ts` (top of file) |
+| Drag speed, leash length and what tears a grip | `DRAG_*` in `src/sim/player.ts` |
 | How dark the dark is | `AMBIENT_DARKNESS` in `src/render/renderer.ts` |
 | Flashlight brightness | `FLASHLIGHT_REVEAL` / `FLASHLIGHT_GLOW` in `src/render/renderer.ts` |
 | How hard you must push to raise the weapon | `WEAPON_RAISE_THRESHOLD` in `src/sim/player.ts` |

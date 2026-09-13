@@ -37,7 +37,8 @@ npm run smoke        # headless playthrough assertions (needs `npm run preview` 
 | Dive (tap) | `Ctrl` / `C` | B / LT |
 | Lean left / right | `Q` / `E` | LB / RB |
 | Reload | `R` | X |
-| Revive teammate | Hold `F` | Hold Y |
+| Revive teammate | Hold `F` (standing still) | Hold Y (standing still) |
+| Drag a downed teammate | Hold `F` and walk | Hold Y and push the stick |
 | Shove a mutant off a pinned teammate | Hold `F` | Hold Y |
 | Use a device (terminal, fusion socket, blast door) | Hold `F` | Hold Y |
 | Pull an emergency breach lever | Hold `F` | Hold Y |
@@ -185,6 +186,40 @@ The roster is fixed once the match starts — everyone joins in the lobby, so a 
 To work on the split-screen layout without four controllers plugged in, open
 `?players=4`. That skips the lobby entirely and starts with four players, the extra
 three inert but fully rendered — which is also how the test suite drives the game.
+
+## Picking somebody up, or picking them up and leaving
+
+Reviving used to be a stand-and-hold, which meant a teammate going down in a bad room
+gave you exactly one option: win the fight standing on the spot he fell, or die next to
+him. There is now a second one, and it is the same button.
+
+**Hold `F` next to somebody on the floor and you have them.** What happens next is
+decided by your feet, not by a menu:
+
+- **Stand still** and you are working on them — the 2.2-second revive that was always
+  here, unchanged.
+- **Walk** and you are hauling them out instead. The body rides a short leash behind
+  you and is moved with the same circle-vs-grid step the living use, so a corner you
+  can round is a corner it has to round too. Let the leash stretch too far — a body
+  snagged in a doorway you already walked through — and the grip tears. You go back
+  for them.
+
+It costs what a fusion core costs, because it is the same shape of problem: **both
+hands are full.** Your primary stows and you have a crowbar, you move at a little over
+half a walk with no sprint, no dive and no lean, and you cannot work a terminal or
+shoulder anything while you are holding somebody. A body coming off deck plating is
+also on the noise field — quieter than a gunshot, louder than a sprint, and it is the
+one sound in the game that says "the squad is retreating" to everything that can hear
+it. A retreat you can hear yourself making is still a retreat.
+
+Work chipped in under fire is not lost when you move: revive progress holds while you
+haul. Two seconds of it taken in the doorway, then the body dragged round the corner
+and finished in the quiet, is the play this exists for.
+
+Note that the grip stows the primary for the **revive** as well as the drag, which it
+did not before. That is deliberate and it is one rule rather than two: hands on a
+teammate means hands off your rifle, and covering the person doing the picking up is
+now somebody else's job. It is the single line in `activeWeapon` if you want it back.
 
 ## Zombies
 
@@ -598,7 +633,8 @@ Implemented: fixed-timestep loop, device-agnostic input with drop-in join, tile 
 driven by a tile-id registry, circle-vs-grid collision, DDA raycast vision cones with
 adaptive shadow edges, per-viewport cameras and split-screen layout, the lighting
 composite with static lamps, pooled bullets and particles, zombies that see in an arc,
-hear through walls, path by flow field and lunge, downed and revive, an intensity-driven wave director,
+hear through walls, path by flow field and lunge, downed, revive and dragging a downed
+teammate out of the room, an intensity-driven wave director,
 a flare-and-helicopter extraction finale, top-down character art with a solved arm rig,
 distance-driven gaits and per-weapon silhouettes, three ambush mutants (a ranged grab,
 a pin and a ceiling drop) with vent travel, a one-slot utility inventory, electrified

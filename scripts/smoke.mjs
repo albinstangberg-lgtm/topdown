@@ -2333,7 +2333,16 @@ await hazPage.waitForTimeout(150);
 Object.assign(itemResults, await hazPage.evaluate(() => {
   const w = window.game.world;
   const f = w.thrownFlares[0];
-  return { flare: w.thrownFlares.length, flareLights: f ? w.litHere(f.x + 20, f.y) : false };
+  const p = w.players[0];
+  if (!f) return { flare: 0, flareLights: false };
+  // Probe back along the throw, toward whoever threw it. The flare flew through that
+  // space, so it is open floor by construction — which a fixed world-space offset is
+  // NOT: the throw goes wherever the player happens to be facing on the frame the
+  // button lands, and a probe 20 units to world +x can easily be inside a wall.
+  const inv = 1 / (Math.hypot(p.x - f.x, p.y - f.y) || 1);
+  const px = f.x + (p.x - f.x) * inv * 20;
+  const py = f.y + (p.y - f.y) * inv * 20;
+  return { flare: w.thrownFlares.length, flareLights: w.litHere(px, py) };
 }));
 
 await hazPage.evaluate(() => {
@@ -2914,6 +2923,105 @@ check("a flare under the grate denies the drop outright",
   lurker.flares === 1 && lurker.litFloor === true &&
   lurker.underTheFlare.restraint === null && lurker.underTheFlare.winding === 0,
   JSON.stringify(lurker.underTheFlare));
+
+// --- dragging a downed teammate ----------------------------------------------
+
+// One grip, two jobs. Standing still over somebody is the revive that has always been
+// here; walking with them is the haul. The costs are what make it a decision, so they
+// are what this checks: the body actually moves, it stays on the leash, the primary is
+// stowed while you have hold of them, and sprint does nothing.
+const drag = await sysPage.evaluate(async () => {
+  const w = window.game.world;
+  const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+  w.mode = "story";
+  w.map.spawnZones.length = 0;
+  w.enemies.length = 0;
+
+  const p = w.players[0];
+  const mate = w.players[1];
+  const spot = w.map.mostOpenPoint();
+  const put = (q, dx, dy) => {
+    q.x = spot.x + dx; q.y = spot.y + dy; q.prevX = q.x; q.prevY = q.y;
+    q.vx = 0; q.vy = 0; q.stance = "stand"; q.stanceTimer = 0;
+    q.restraint = null; q.carrying = null; q.dragging = null; q.draggedBy = null;
+    q.health = q.maxHealth; q.downed = false;
+  };
+  const reset = () => {
+    put(p, 0, 0);
+    put(mate, 0, 34);
+    p.facing = -Math.PI / 2;
+    p.stamina = p.maxStamina; p.exhausted = false;
+    p.ammo = p.weapon.magazine; p.reloadTimer = 0; p.fireCooldown = 0;
+    mate.downed = true; mate.bleedout = 30; mate.reviveProgress = 0;
+    window.game.cameras[0].snapTo(p.x, p.y, p.facing);
+  };
+  const release = async () => {
+    for (const code of ["KeyF", "KeyW", "ShiftLeft", "Space"]) {
+      window.dispatchEvent(new KeyboardEvent("keyup", { code }));
+    }
+    await settle(150);
+  };
+
+  // 1. Hold USE and walk. The body comes with you, on a short leash.
+  reset();
+  await settle(200);
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF" }));
+  await settle(120);
+  const gripped = p.dragging === mate.id && mate.draggedBy === p.id;
+  const from = { x: mate.x, y: mate.y };
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyW" }));
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "ShiftLeft" }));
+  await settle(800);
+  const hauled = {
+    body: Math.hypot(mate.x - from.x, mate.y - from.y),
+    leash: Math.hypot(mate.x - p.x, mate.y - p.y),
+    speed: Math.hypot(p.vx, p.vy),
+    stamina: p.stamina,
+    stillDown: mate.downed,
+  };
+
+  // 2. Both hands are on them: the trigger swings a crowbar, it does not fire.
+  const ammoBefore = p.ammo;
+  p.weaponUp = 1; p.weaponHold = 1; p.fireCooldown = 0;
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }));
+  await settle(400);
+  const ammoWhileHolding = p.ammo;
+  await release();
+
+  // 3. Let go and the gun comes back.
+  p.weaponUp = 1; p.weaponHold = 1; p.fireCooldown = 0;
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }));
+  await settle(400);
+  const ammoAfterLetGo = p.ammo;
+  await release();
+  const letGo = p.dragging === null && mate.draggedBy === null;
+
+  // 4. Standing still over them is still the revive it always was.
+  reset();
+  await settle(200);
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF" }));
+  await settle(2600);
+  const revived = mate.downed === false;
+  await release();
+
+  return {
+    gripped, hauled, letGo, revived,
+    ammo: { before: ammoBefore, holding: ammoWhileHolding, after: ammoAfterLetGo },
+  };
+});
+check("holding USE and walking hauls a downed teammate along on a short leash",
+  drag.gripped && drag.hauled.body > 40 && drag.hauled.leash < 104 &&
+  drag.hauled.stillDown === true,
+  JSON.stringify(drag.hauled));
+check("a haul is slower than a walk and sprint cannot rush it",
+  Math.abs(drag.hauled.speed - 91) < 10 && drag.hauled.stamina >= 99.5,
+  `${drag.hauled.speed.toFixed(0)}u/s, stamina ${drag.hauled.stamina.toFixed(0)}`);
+check("both hands on a teammate stows the primary, and letting go gives it back",
+  drag.ammo.holding === drag.ammo.before && drag.ammo.after < drag.ammo.before &&
+  drag.letGo,
+  JSON.stringify(drag.ammo));
+check("standing still over them is still the revive",
+  drag.revived === true, JSON.stringify({ revived: drag.revived }));
 
 check("the systems deck raised no exceptions", sysErrors.length === 0, sysErrors.join(" | "));
 

@@ -266,6 +266,12 @@ export class GameAudio {
           ? { freq: 150, q: 0.9, decay: 0.11, level: 0.16 }
           : { freq: 210, q: 1.2, decay: 0.07, level: 0.28 });
         break;
+      case "drag":
+        // A body coming off deck plating. Longer and grittier than a footfall, and
+        // pitched under it, so "somebody is being moved" never reads as "somebody is
+        // walking" — which matters most in a fog bank, where it is all you have.
+        this.bus.noise("drag", at, { freq: 380, q: 0.7, decay: 0.34, level: 0.3, sweepTo: 180 });
+        break;
       case "duct":
         // Something dragging itself along sheet metal, above your head. Deliberately
         // the most unpleasant sound in the game: it is the only warning you get.

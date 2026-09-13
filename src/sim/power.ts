@@ -43,13 +43,18 @@ export const HANDOVER_RANGE = 62;
 /**
  * The weapon a player can actually use right now.
  *
- * Three things put the primary away, and all of them leave the fallback melee: both
- * hands full, a magazine with nothing behind it, or a flat suit. This is the one place
- * that decides it, so the HUD, the firing code and the renderer can never disagree
- * about what is in somebody's hands.
+ * Four things put the primary away, and all of them leave the fallback melee: a heavy
+ * object in both hands, a teammate's collar in both hands, a magazine with nothing
+ * behind it, or a flat suit. This is the one place that decides it, so the HUD, the
+ * firing code and the renderer can never disagree about what is in somebody's hands.
+ *
+ * The teammate case covers the revive as well as the drag, and on purpose: kneeling
+ * over somebody and hauling them are the same grip, and neither of them leaves you a
+ * hand for a rifle. It means covering the revive is now somebody else's job, which is
+ * the conversation the rest of this game is made of.
  */
 export function activeWeapon(p: Player): WeaponDef {
-  if (p.carrying !== null) return p.sidearm;
+  if (p.carrying !== null || p.dragging !== null) return p.sidearm;
   if (p.weapon.melee) return p.weapon;
   // A loaded magazine works on a dead suit — the charge went in when you reloaded.
   if (p.ammo > 0) return p.weapon;

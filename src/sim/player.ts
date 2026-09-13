@@ -117,6 +117,34 @@ const BLEEDOUT = 30;
 const REVIVE_TIME = 2.2;
 const REVIVE_RANGE = 62;
 
+/**
+ * Dragging a downed teammate.
+ *
+ * There is only one grip, and your feet decide what it is: hold USE next to somebody
+ * on the floor and stand still and you are reviving them, exactly as before; push a
+ * direction and you are hauling them instead. That is deliberately not a new button —
+ * the decision worth having is "do I win this fight or leave this room", and it should
+ * be made with the stick rather than looked up.
+ *
+ * The costs are the same three the carry system charges, for the same reason: both
+ * hands are full. Your primary stows, you move at a little over half a walk, and a
+ * body coming off steel plating is the loudest thing you have done since the last
+ * time you fired.
+ */
+const DRAG_SPEED = WALK_SPEED * 0.55;
+/** How far behind the dragger the body rides, so it trails instead of underfoot. */
+const DRAG_LEASH = 26;
+/** How fast the leash takes up slack. Above the drag speed, so the body keeps up. */
+const DRAG_REEL = 170;
+/**
+ * Stretch further than this and the grip tears. It is what happens when the body
+ * snags on a corner the dragger rounded: you do not tow somebody through geometry,
+ * you go back for them.
+ */
+const DRAG_BREAK = 104;
+/** Seconds between scrapes on the noise field while a body is actually moving. */
+const DRAG_NOISE_INTERVAL = 0.5;
+
 export function createPlayer(id: number, sourceId: string, x: number, y: number): Player {
   return {
     id,
@@ -165,6 +193,9 @@ export function createPlayer(id: number, sourceId: string, x: number, y: number)
     carrying: null,
     carryCharge: 0,
     sidearm: defaultSidearm(),
+    dragging: null,
+    draggedBy: null,
+    dragNoise: 0,
     // You wake up with it on. Turning it off is the decision, not turning it on.
     lightOn: true,
     lightTell: 0,
@@ -281,7 +312,11 @@ export function updatePlayer(
     p.vx = p.diveDirX * speed;
     p.vy = p.diveDirY * speed;
   } else if (p.stance === "stand") {
-    const speed = (sprinting ? SPRINT_SPEED : WALK_SPEED) * (p.adrenaline > 0 ? ADRENALINE_SPEED : 1);
+    // Hands on a teammate is a little over half a walk. Adrenaline still helps, which
+    // is the one thing that makes the syringe worth keeping for somebody else's bad
+    // moment rather than your own.
+    const base = p.dragging !== null ? DRAG_SPEED : sprinting ? SPRINT_SPEED : WALK_SPEED;
+    const speed = base * (p.adrenaline > 0 ? ADRENALINE_SPEED : 1);
     p.vx = damp(p.vx, input.moveX * speed, ACCEL, dt);
     p.vy = damp(p.vy, input.moveY * speed, ACCEL, dt);
   } else {
@@ -358,7 +393,8 @@ function updateWeaponStance(
  * corner is the point, leaning INTO it is not.
  */
 function updateLean(p: Player, input: InputState, deps: PlayerDeps, dt: number): void {
-  const allowed = p.stance === "stand" || p.stance === "prone";
+  // Nothing peeks round a corner with somebody's collar in both hands.
+  const allowed = (p.stance === "stand" || p.stance === "prone") && p.dragging === null;
   p.lean = damp(p.lean, allowed ? clamp(input.lean, -1, 1) : 0, LEAN_RATE, dt);
 
   // Perpendicular to facing, pointing to screen-right.
@@ -531,8 +567,8 @@ function updateStanceAndStamina(
       }
     }
   } else if (
-    // Nothing dives with something sitting on it.
-    p.restraint === null &&
+    // Nothing dives with something sitting on it, or with somebody in both hands.
+    p.restraint === null && p.dragging === null &&
     input.divePressed && p.diveCooldown <= 0 &&
     p.stamina >= DIVE_STAMINA_COST && (input.moveX !== 0 || input.moveY !== 0)
   ) {
@@ -549,7 +585,8 @@ function updateStanceAndStamina(
   // --- stamina ---
   const moving = input.moveX !== 0 || input.moveY !== 0;
   const sprinting =
-    p.stance === "stand" && input.sprint && moving && !p.exhausted && p.stamina > 0;
+    p.stance === "stand" && p.dragging === null &&
+    input.sprint && moving && !p.exhausted && p.stamina > 0;
 
   if (sprinting) {
     p.stamina = Math.max(0, p.stamina - SPRINT_DRAIN * dt);
@@ -679,6 +716,13 @@ export function giveWeapon(p: Player, weapon: WeaponDef): void {
 
 function updateDowned(p: Player, input: InputState, deps: PlayerDeps, dt: number): void {
   p.bleedout -= dt;
+  if (p.draggedBy !== null) {
+    // Somebody has you by the collar. The leash moves you, not your elbows — see
+    // `haulBody`, which runs after every player has had their step.
+    advanceGait(p);
+    syncLights(p);
+    return;
+  }
   // Crawling: slow, no weapon, cone shrinks to a stub.
   p.vx = damp(p.vx, input.moveX * WALK_SPEED * 0.35, 10, dt);
   p.vy = damp(p.vy, input.moveY * WALK_SPEED * 0.35, 10, dt);
@@ -689,35 +733,164 @@ function updateDowned(p: Player, input: InputState, deps: PlayerDeps, dt: number
   syncLights(p);
 }
 
-/** CORE 6 — teammates pick each other up. Returns true when someone was revived. */
-export function updateRevives(
-  players: Player[], inputOf: (p: Player) => InputState, dt: number,
+/**
+ * CORE 6 — hands on a downed teammate.
+ *
+ * One grip, two jobs, and your feet pick which. Hold USE next to somebody on the floor
+ * and you have them. Stand over them and you are working on them, which is the revive
+ * that has always been here. Walk, and you are hauling them instead — which is the
+ * point: "he went down in the bad room" stops being a fight you have to win standing
+ * on the spot he fell and becomes a room you can leave.
+ *
+ * It costs what a fusion core costs, because it is the same shape of problem. Both
+ * hands are on them, so the primary is stowed and you have a crowbar; you move at a
+ * little over half a walk with no sprint, no dive and no lean; and the body scraping
+ * along the plating is on the noise field for every dead thing on the deck to follow.
+ * A retreat you can hear yourself making is still a retreat.
+ *
+ * Returns whoever came back up this step, or null.
+ */
+export function updateRescues(
+  players: Player[], inputOf: (p: Player) => InputState, deps: PlayerDeps, dt: number,
 ): Player | null {
-  for (const target of players) {
-    if (!target.downed) continue;
-    let beingRevived = false;
-    for (const helper of players) {
-      if (helper === target || helper.downed) continue;
-      const d = Math.hypot(helper.x - target.x, helper.y - target.y);
-      if (d > REVIVE_RANGE) continue;
-      if (!inputOf(helper).interact) continue;
-      beingRevived = true;
-      break;
+  // Grips that have stopped being grips. Done first, so a helper who let go, went
+  // down, got grabbed or simply lost the body round a corner is not still counted as
+  // holding somebody on the lines below.
+  for (const helper of players) {
+    if (helper.dragging === null) continue;
+    const target = players.find((q) => q.id === helper.dragging);
+    const holds =
+      target !== undefined && target.downed && canGrip(helper) &&
+      inputOf(helper).interact &&
+      Math.hypot(target.x - helper.x, target.y - helper.y) <= DRAG_BREAK;
+    if (!holds) {
+      if (target !== undefined && target.draggedBy === helper.id) target.draggedBy = null;
+      helper.dragging = null;
+      helper.dragNoise = 0;
     }
-    target.reviveProgress = clamp(
-      target.reviveProgress + (beingRevived ? dt : -dt * 0.6), 0, REVIVE_TIME,
-    );
+  }
+
+  let revived: Player | null = null;
+
+  for (const target of players) {
+    if (!target.downed) {
+      target.draggedBy = null;
+      continue;
+    }
+
+    const helper = gripOn(players, target, inputOf);
+    if (helper === null) {
+      // Nobody has them. Progress bleeds away, as it always did.
+      target.reviveProgress = Math.max(0, target.reviveProgress - dt * 0.6);
+      continue;
+    }
+
+    if (isHauling(inputOf(helper))) {
+      // Moving with them: the work stops but it does not come undone. Two seconds of
+      // revive chipped in under fire and then spent hauling out of the room is a real
+      // play, and the point of the whole feature is that it should be.
+      haulBody(helper, target, deps, dt);
+      continue;
+    }
+
+    target.reviveProgress = clamp(target.reviveProgress + dt, 0, REVIVE_TIME);
     if (target.reviveProgress >= REVIVE_TIME) {
       target.downed = false;
+      target.draggedBy = null;
+      helper.dragging = null;
+      helper.dragNoise = 0;
       target.reviveProgress = 0;
       target.health = target.maxHealth * 0.5;
       target.ammo = target.weapon.magazine;
       target.stamina = target.maxStamina * 0.5;
       target.exhausted = false;
-      return target;
+      revived ??= target;
     }
   }
+
+  return revived;
+}
+
+/** Free hands, on your feet, and nothing hanging off you. */
+function canGrip(p: Player): boolean {
+  return !p.downed && p.carrying === null && p.restraint === null && p.stance === "stand";
+}
+
+/** Is this helper asking to move? The only thing that separates a haul from a revive. */
+function isHauling(input: InputState): boolean {
+  return input.moveX !== 0 || input.moveY !== 0;
+}
+
+/**
+ * Who has hands on this body: whoever already had, if they still do, otherwise the
+ * first free-handed teammate in reach holding USE. Latching matters — without it a
+ * second player wandering past would take the body out of the dragger's hands.
+ */
+function gripOn(
+  players: Player[], target: Player, inputOf: (p: Player) => InputState,
+): Player | null {
+  if (target.draggedBy !== null) {
+    const held = players.find((q) => q.id === target.draggedBy && q.dragging === target.id);
+    if (held !== undefined) return held;
+  }
+  for (const candidate of players) {
+    if (candidate === target || !canGrip(candidate)) continue;
+    if (candidate.dragging !== null) continue;   // already has somebody
+    if (Math.hypot(candidate.x - target.x, candidate.y - target.y) > REVIVE_RANGE) continue;
+    if (!inputOf(candidate).interact) continue;
+    candidate.dragging = target.id;
+    candidate.dragNoise = 0;
+    target.draggedBy = candidate.id;
+    return candidate;
+  }
   return null;
+}
+
+/**
+ * Pull a body along behind whoever has hold of it.
+ *
+ * The leash is anchored a short way *behind* the dragger rather than on them, so the
+ * body trails instead of standing on their feet, and it is resolved with the same
+ * `moveCircle` step the living use: a corner the dragger can round is a corner the
+ * body has to round too. A body that snags hard enough stretches past `DRAG_BREAK`
+ * and the grip tears on the next step — you do not tow somebody through geometry.
+ */
+function haulBody(helper: Player, target: Player, deps: PlayerDeps, dt: number): void {
+  const ax = helper.x - Math.cos(helper.facing) * DRAG_LEASH;
+  const ay = helper.y - Math.sin(helper.facing) * DRAG_LEASH;
+  const dx = ax - target.x;
+  const dy = ay - target.y;
+  const dist = Math.hypot(dx, dy);
+
+  if (dist > 1) {
+    const step = Math.min(dist, DRAG_REEL * dt);
+    const moved = moveCircle(
+      deps.map, target.x, target.y, target.radius, (dx / dist) * step, (dy / dist) * step,
+    );
+    // Velocity off the distance actually covered, not the distance asked for: a body
+    // wedged in a doorway reads as wedged, and the gait stops dragging its feet.
+    target.vx = (moved.x - target.x) / dt;
+    target.vy = (moved.y - target.y) / dt;
+    target.x = moved.x;
+    target.y = moved.y;
+  } else {
+    target.vx = 0;
+    target.vy = 0;
+  }
+
+  // Head toward whoever has them, feet trailing. Slow, because a limp body does not
+  // help you turn it.
+  target.facing = rotateToward(
+    target.facing, Math.atan2(helper.y - target.y, helper.x - target.x), 6 * dt,
+  );
+  advanceGait(target);
+
+  helper.dragNoise -= dt;
+  if (helper.dragNoise <= 0 && Math.hypot(target.vx, target.vy) > 12) {
+    helper.dragNoise = DRAG_NOISE_INTERVAL;
+    // Emitted at the body, not at the dragger. It is the body making the noise.
+    deps.noise.emit(target.x, target.y, NOISE.drag, "drag");
+  }
 }
 
 export function damagePlayer(p: Player, amount: number): void {
@@ -772,4 +945,5 @@ export const PLAYER_TUNING = {
   WALK_SPEED, SPRINT_SPEED, STAMINA_MAX, SPRINT_DRAIN, LIGHT_TELL_INTERVAL,
   DIVE_TIME, PRONE_TIME, STAND_TIME, LEAN_OFFSET, BLEEDOUT, REVIVE_TIME, REVIVE_RANGE,
   SWING_TIME, MELEE_CONTACT, STRIDE,
+  DRAG_SPEED, DRAG_LEASH, DRAG_BREAK,
 };
