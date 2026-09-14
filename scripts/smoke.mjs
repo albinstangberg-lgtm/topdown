@@ -1324,34 +1324,72 @@ const arena = async (art, name) => zomPage.evaluate(async ([art, name]) => {
 }, [art, name]);
 
 // Zombies do not shoot. They close and they bite, and nothing they do ever puts an
-// enemy bullet in the world — the whole reason the gunner AI came out.
-await arena(ARENA, "zombie melee");
-const melee = await zomPage.evaluate(async () => {
-  const w = window.game.world;
-  const T = 48;
-  const p = w.players[0];
-  const e = w.enemies[0];
-  if (!e) return "no zombie in the arena";
-  p.x = 4.5 * T; p.y = 3.5 * T; p.prevX = p.x; p.prevY = p.y;
-  e.x = 8.5 * T; e.y = 3.5 * T; e.prevX = e.x; e.prevY = e.y;
-  e.facing = Math.PI; e.state = "wander"; e.alertness = 0; e.attackCooldown = 0;
+// enemy bullet in the world — the whole reason the gunner AI came out. WHICH bite is
+// the kind: four in five of them walk up and claw, the fifth leaps.
+const closesOn = async (kind, name) => {
+  await arena(ARENA, name);
+  return zomPage.evaluate(async (kind) => {
+    const w = window.game.world;
+    const T = 48;
+    const p = w.players[0];
+    const e = w.enemies[0];
+    if (!e) return "no zombie in the arena";
+    e.kind = kind;
+    p.x = 4.5 * T; p.y = 3.5 * T; p.prevX = p.x; p.prevY = p.y;
+    e.x = 8.5 * T; e.y = 3.5 * T; e.prevX = e.x; e.prevY = e.y;
+    e.facing = Math.PI; e.state = "wander"; e.alertness = 0; e.attackCooldown = 0;
 
-  const health = p.health;
-  const states = [];
-  let enemyBullet = false;
-  const until = performance.now() + 3200;
-  while (performance.now() < until) {
-    if (states[states.length - 1] !== e.state) states.push(e.state);
-    if (w.bullets.items.some((b) => b.active && b.team === "enemy")) enemyBullet = true;
-    await new Promise((r) => requestAnimationFrame(r));
+    const health = p.health;
+    const states = [];
+    let enemyBullet = false;
+    const until = performance.now() + 3200;
+    while (performance.now() < until) {
+      if (states[states.length - 1] !== e.state) states.push(e.state);
+      if (w.bullets.items.some((b) => b.active && b.team === "enemy")) enemyBullet = true;
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    return { states, enemyBullet, hurt: health - p.health };
+  }, kind);
+};
+
+const clawed = await closesOn("walker", "walker melee");
+check("a Walker closes, claws, and never leaves the floor",
+  typeof clawed === "object" && !clawed.enemyBullet &&
+  clawed.states.includes("swipe") && !clawed.states.includes("windup") &&
+  !clawed.states.includes("lunge") && clawed.hurt > 0,
+  JSON.stringify(clawed));
+
+const leapt = await closesOn("lunger", "lunger melee");
+check("a Lunger closes, winds up, leaps — and never fires a shot",
+  typeof leapt === "object" && !leapt.enemyBullet &&
+  leapt.states.includes("windup") && leapt.states.includes("lunge") &&
+  leapt.states.includes("recover") && !leapt.states.includes("swipe") &&
+  leapt.hurt > 0,
+  JSON.stringify(leapt));
+
+// The mix the director draws from. Four in five Walkers, one in five Lungers, and
+// nothing else without an author putting it there.
+const mix = await zomPage.evaluate(async () => {
+  // Through the real spawn path the director uses, not the table — the Stalker rule
+  // lives in that closure too, and on an unpressured floor it must not fire.
+  const w = window.game.world;
+  const deps = w.directorDeps();
+  const counts = {};
+  const n = 6000;
+  for (let i = 0; i < n; i++) {
+    w.enemies.length = 0;
+    deps.spawn(100, 100, false);
+    const k = w.enemies[0]?.kind ?? "none";
+    counts[k] = (counts[k] ?? 0) + 1;
   }
-  return { states, enemyBullet, hurt: health - p.health };
+  w.enemies.length = 0;
+  return { walker: (counts.walker ?? 0) / n, lunger: (counts.lunger ?? 0) / n,
+    others: Object.keys(counts).filter((k) => k !== "walker" && k !== "lunger") };
 });
-check("a zombie closes, winds up, leaps — and never fires a shot",
-  typeof melee === "object" && !melee.enemyBullet &&
-  melee.states.includes("windup") && melee.states.includes("lunge") &&
-  melee.states.includes("recover") && melee.hurt > 0,
-  JSON.stringify(melee));
+check("waves are four Walkers to every Lunger",
+  Math.abs(mix.walker - 0.8) < 0.03 && Math.abs(mix.lunger - 0.2) < 0.03 &&
+  mix.others.length === 0,
+  JSON.stringify(mix));
 
 // The leap is a commitment, and the recovery is the payoff for dodging it.
 await arena(ARENA, "zombie recovery");
@@ -1361,6 +1399,8 @@ const vulnerable = await zomPage.evaluate(async () => {
   const p = w.players[0];
   const e = w.enemies[0];
   if (!e) return "no zombie in the arena";
+  // Only a leaping kind ever ends up on the floor, so this is a Lunger's payoff.
+  e.kind = "lunger";
   p.x = 4.5 * T; p.y = 3.5 * T;
 
   const hitOnce = async (state) => {

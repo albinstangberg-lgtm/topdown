@@ -201,8 +201,9 @@ the objective chain.
 
 ### 8c. The mutants — `src/sim/mutants.ts`
 
-Three creatures that do something a walker cannot: a ranged grab that drags a player
-away, a leap that pins one to the floor, and one that never touches the floor at all.
+Three creatures that do something neither common kind can: a ranged grab that drags a
+player away, a leap that pins one to the floor, and one that never touches the floor at
+all.
 Each is one row in `ZOMBIE_DEFS` with an ability block on it (`tendril`, `pounce`,
 `drop`), so the registry rule still holds — but their *state machines* live in their own
 file rather than as more branches inside `updateEnemy`, because an ambusher, a pouncer
@@ -381,10 +382,12 @@ with the game.
   life; anything with ears inside one walks to it. Deliberately *not* gated on line of
   sight — blocking sound on walls would make firing from cover free, which is backwards.
 - **One table per enemy kind** (`src/sim/zombies.ts`) — the same trick as `TILE_DEFS`.
-  Health, pace, senses, hearing and the whole leap are rows in `ZOMBIE_DEFS`, and the
-  state machine reads them by key. A runner is a walker with a bigger `chaseSpeed`; a
-  brute is one with more health and a fatter `lunge.damage`. Adding a kind touches no
-  other file.
+  Health, pace, senses, hearing and both attacks are rows in `ZOMBIE_DEFS`, and the state
+  machine reads them by key. The two common kinds are one row each and differ in two
+  fields: a Walker carries a `melee` block and closes to claw, a Lunger carries a
+  `lunge.range` and leaps, and `weight` (4 against 1) is where the four-to-one mix in
+  every wave comes from. A brute is a Walker with more health and a fatter swing. Adding
+  a kind touches no other file.
 - **A director, not a spawn table** (`src/sim/director.ts`) — modelled on Left 4 Dead's.
   Four phases in a loop — buildup, peak, fade, relax — driven by a survivor-intensity
   metric rather than a timetable, because a constant drip is something you stop noticing
@@ -518,6 +521,9 @@ In rough order of when it starts hurting:
 | World size, room count, enemies per player | `src/world/tilemap.ts`, `src/sim/world.ts` |
 | How long a terminal, a fusion socket and the bridge door take | `src/sim/devices.ts` (top of file) |
 | Melee reach, arc and damage | `WEAPONS` in `src/sim/entities.ts` |
+| A Walker's reach, tell and claw | `melee` on the Walker row in `src/sim/zombies.ts` |
+| A Lunger's range, windup and leap | `lunge` on the Lunger row in `src/sim/zombies.ts` |
+| How many of a wave leap rather than claw | `weight` on those two rows (4 to 1) |
 | Tendril range, reel speed and how much cuts it | `tendril` on the Strangler row in `src/sim/zombies.ts` |
 | Pounce range, the skitter, the blind and the shove | `pounce` on the Stalker row in `src/sim/zombies.ts` |
 | What each utility item is worth | `src/sim/items.ts` (top of file) |

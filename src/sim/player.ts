@@ -117,7 +117,7 @@ const BLEEDOUT = 30;
 /**
  * Seconds of bleedout one point of damage takes off somebody already on the floor.
  *
- * With `CHEW_BITE` and the walker's bite cooldown in `sim/enemy.ts`, one of them
+ * With `CHEW_BITE` and a Walker's swing cooldown in `sim/enemy.ts`, one of them
  * chewing uninterrupted costs about 1.5s of clock a second on top of the 1s the clock
  * was already losing — so it roughly halves a thirty-second bleedout to twelve. Long
  * enough that it is a problem you can solve, short enough that it is one.
