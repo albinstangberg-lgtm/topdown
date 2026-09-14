@@ -6,11 +6,36 @@
  * from it. **Adding a zombie type is one entry here** — no new state machine, no new
  * branch in `updateEnemy`, no renderer change.
  *
- * The state machine is deliberately generic: wander → investigate → chase → windup →
- * lunge → recover. A runner is a walker with a bigger `chaseSpeed` and a shorter
- * `windup`; a brute is one with more `health`, a slower `chaseSpeed` and a fatter
- * `lunge.damage`. That is the whole extension point.
+ * The state machine is deliberately generic: wander → investigate → chase → swipe, or
+ * wander → investigate → chase → windup → lunge → recover. Which of the two a kind
+ * runs is decided by the table and nothing else: a `melee` block makes it walk up and
+ * claw, a `lunge.range` above zero makes it leap. A brute is a walker with more
+ * `health`, a slower `chaseSpeed` and a fatter swing. That is the whole extension point.
+ *
+ * **Two kinds are common, and the split is deliberate.** Four in five of the dead a
+ * floor throws at you are Walkers: no leap, no telegraph worth the name, they simply
+ * come and they keep coming a shade slower than you walk. The fifth is a Lunger, which
+ * is slower on its feet and crosses the last four metres in one jump — so the room you
+ * left yourself against the first four is not room at all against the fifth. Neither is
+ * interesting on its own; the mix is, because you cannot read a crowd at a glance and
+ * the answer to one is the wrong answer to the other.
  */
+
+/**
+ * A plain swing, and the only attack a Walker has. It does not leave the floor and it
+ * does not cross a room: it gets within arm's reach, its arms come up for a quarter of
+ * a second, and then it takes a piece out of whoever is still standing there. The
+ * counter is not dodging the swing — it is not letting the thing arrive.
+ */
+export interface MeleeDef {
+  /** The gap between the two bodies it can swing across, in world units. */
+  reach: number;
+  /** Seconds of raised arms before the swing lands. The whole of the tell. */
+  windup: number;
+  damage: number;
+  /** Seconds after a swing before it can raise its arms again. */
+  cooldown: number;
+}
 
 export interface LungeDef {
   /** Starts the windup once the target is this close and in sight. */
@@ -54,7 +79,7 @@ export interface TendrilDef {
 }
 
 /**
- * The Stalker's leap. Unlike the walker's lunge — which is a telegraphed hop that ends
+ * The Stalker's leap. Unlike a Lunger's leap — which is a telegraphed hop that ends
  * on the floor if you dodge — this one ends *on top of you* and stays there. The
  * counterplay is not dodging, it is the rest of the squad.
  */
@@ -105,8 +130,8 @@ export interface ZombieDef {
   radius: number;
   /** Shambling pace, used while wandering and investigating. */
   wanderSpeed: number;
-  /** Pace once it has a target. Below the player's walk on purpose — the lunge is
-   *  the threat, not the chase. */
+  /** Pace once it has a target. Always below a player's walk, so the squad can always
+   *  choose to give ground — how far below is what separates the two common kinds. */
   chaseSpeed: number;
   /** Half-angle of what it can see, in radians. Wide and short: hard to walk past
    *  head-on, easy to slip behind. */
@@ -116,7 +141,17 @@ export interface ZombieDef {
   hearing: number;
   /** Damage multiplier while it is down after a leap — the reward for dodging. */
   vulnerable: number;
+  /**
+   * The leap. `range: 0` switches the whole windup → lunge → recover branch off — the
+   * rest of the numbers stay because a lunge block is the shape of the table, not
+   * because a kind without a range will ever use them.
+   */
   lunge: LungeDef;
+  /**
+   * A swing on contact. A kind with this closes and claws instead of leaping, which is
+   * what makes the common Walker a pressure system rather than a dodging puzzle.
+   */
+  melee?: MeleeDef;
   /**
    * A ranged grab. A kind with this is a Strangler: it holds a post in the dark rather
    * than shambling, and reaches for whoever walks into its line.
@@ -149,7 +184,41 @@ export const ZOMBIE_DEFS: readonly ZombieDef[] = [
     health: 40,
     radius: 14,
     wanderSpeed: 52,
-    chaseSpeed: 140,
+    /*
+     * Four in five of them, and the pace is the entire design. Just under a player's
+     * walk (165), so backing off buys ground a foot at a time rather than instantly,
+     * a sprint breaks contact outright, and standing still to line up a shot is a
+     * decision you make rather than a thing you do between reloads. A slower number
+     * than this and the common dead are scenery you walk around.
+     */
+    chaseSpeed: 155,
+    senseHalf: 1.4,
+    senseRange: 220,
+    hearing: 1,
+    // It never ends up on the floor, so this never comes up. Kept honest anyway.
+    vulnerable: 1.2,
+    // It does not leap: `range: 0` takes it straight past the whole windup branch.
+    lunge: {
+      range: 0, windup: 0.3, speed: 520, duration: 0.25,
+      recover: 0.5, damage: 12, cooldown: 1,
+    },
+    // Less per swing than a Lunger's leap and far more often. One of them on you is
+    // survivable and slow; three of them is the reason you do not let three arrive.
+    melee: { reach: 10, windup: 0.28, damage: 11, cooldown: 0.9 },
+    color: "#7aa77f",
+    weight: 4,
+  },
+  {
+    key: "lunger",
+    name: "Lunger",
+    // The one in five that does not simply arrive. Same body as a Walker — what it
+    // takes off you is the four metres you thought you still had.
+    health: 40,
+    radius: 14,
+    wanderSpeed: 52,
+    // Slower on its feet than a Walker on purpose: you can see this one coming and
+    // still back out of its range. The leap is the threat, not the chase.
+    chaseSpeed: 128,
     senseHalf: 1.4,
     senseRange: 220,
     hearing: 1,
@@ -161,7 +230,9 @@ export const ZOMBIE_DEFS: readonly ZombieDef[] = [
       range: 120, windup: 0.35, speed: 700, duration: 0.3,
       recover: 0.55, damage: 18, cooldown: 1.1,
     },
-    color: "#7aa77f",
+    // Sallow against a Walker's grey-green: a crowd has to be readable at a glance,
+    // because the answer to one of these is the wrong answer to the other.
+    color: "#9c9f5c",
     weight: 1,
   },
   {

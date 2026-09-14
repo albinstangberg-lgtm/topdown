@@ -1907,7 +1907,8 @@ function drawZombie(ctx: CanvasRenderingContext2D, e: Enemy, alpha: number): voi
     // Carries nothing, so the arms are free to be the tell: out in front while it is
     // coming for you, and further out the moment it commits to the leap.
     hands: null,
-    shamble: e.state === "lunge" || e.state === "windup" || e.state === "pounce" ? 1 : 0.72,
+    shamble: e.state === "lunge" || e.state === "windup" || e.state === "pounce"
+      || e.state === "swipe" ? 1 : 0.72,
   });
 
   // A Strangler's tell, before it throws: the maw opens and it draws a bead on you.
@@ -1945,6 +1946,23 @@ function drawZombie(ctx: CanvasRenderingContext2D, e: Enemy, alpha: number): voi
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(x, y, e.radius + 16 - 12 * t, 0, TAU);
+    ctx.stroke();
+  }
+
+  if (e.state === "swipe") {
+    /*
+     * A Walker's tell, and deliberately a different SHAPE from a Lunger's ring rather
+     * than a different colour: a ring says "this is going to move", and this one is
+     * not. An arc across the front says the damage is where it is already looking, and
+     * it sweeps closed over the quarter-second you have to not be there.
+     */
+    const melee = def.melee;
+    const t = melee ? 1 - e.stateTimer / melee.windup : 1;
+    const reach = e.radius + (melee?.reach ?? 10) + 6;
+    ctx.strokeStyle = `rgba(255,140,90,${0.3 + 0.45 * t})`;
+    ctx.lineWidth = 2 + 2 * t;
+    ctx.beginPath();
+    ctx.arc(x, y, reach, e.facing - 1.1, e.facing + 1.1);
     ctx.stroke();
   }
 

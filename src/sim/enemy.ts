@@ -1,4 +1,4 @@
-import { damp, randRange, rotateToward, TAU } from "../core/math";
+import { angleDelta, damp, randRange, rotateToward, TAU } from "../core/math";
 import { moveCircle } from "../world/collision";
 import { hasLineOfSight } from "../world/raycast";
 import type { TileMap } from "../world/tilemap";
@@ -8,15 +8,18 @@ import type { ParticlePool } from "./pools";
 import type { NoiseField } from "./noise";
 import type { FlowField } from "../world/flow";
 import { DEFAULT_ZOMBIE, zombieDef } from "./zombies";
+import type { MeleeDef } from "./zombies";
 import { NOISE } from "./noise";
 import { updateLurker, updateStalker, updateStrangler } from "./mutants";
 
 /**
  * CORE 7 — Zombies and perception.
  *
- * A six-state machine, and every number it runs on comes from the row in `ZOMBIE_DEFS`
- * named by `e.kind` — so a new kind of zombie is a table entry, not a new file.
+ * One state machine with two endings, and every number it runs on comes from the row in
+ * `ZOMBIE_DEFS` named by `e.kind` — so a new kind of zombie is a table entry, not a
+ * new file.
  *
+ *   wander → hunt → investigate → chase → swipe
  *   wander → hunt → investigate → chase → windup → lunge → recover
  *
  * They have two senses, and both are the ones the player already understands:
@@ -39,9 +42,20 @@ import { updateLurker, updateStalker, updateStrangler } from "./mutants";
  * out — so when the straight line to the noise is blocked, the field is a better
  * heading than walking into the wall between here and there.
  *
- * They never shoot. The attack is a telegraphed leap you can dodge: it plants, it
- * winds up where you can see it, it commits to a direction, and if you are not there
- * any more it lands face down and takes extra damage while it gets up.
+ * They never shoot, and which of the two attacks a kind has is a field in the table.
+ *
+ * A **Walker** — four in five of them — has `melee` and closes to arm's length: its
+ * arms come up for a quarter of a second and then it claws whoever is still standing
+ * there. Nothing about it is dodgeable once it has arrived, which is the point; it is
+ * slower than your walk, so the answer is the ground you keep rather than the moment
+ * you time.
+ *
+ * A **Lunger** — the other one in five — has a `lunge.range` instead: a telegraphed
+ * leap you *can* dodge. It plants, it winds up where you can see it, it commits to a
+ * direction, and if you are not there any more it lands face down and takes extra
+ * damage while it gets up. It is the slower of the two on its feet, so a crowd of the
+ * dead is never one problem: give ground and the Walkers close it, hold ground and the
+ * Lunger crosses it.
  *
  * ---
  *
@@ -95,9 +109,9 @@ const ARRIVED = 26;
 const ALERT_FULL = 1;
 /**
  * Sight, as a fraction of a kind's `senseRange`. `DARK_SEEN` is what is left of you in
- * an unlit room with the beam off: the suit halo and nothing else, which for a walker
+ * an unlit room with the beam off: the suit halo and nothing else, which for a Walker
  * is about two tiles. `MAX_SEEN` caps a lit room plus a lit beam plus a muzzle flash,
- * so no stack of tells turns a walker into a sniper.
+ * so no stack of tells turns a Walker into a sniper.
  */
 const DARK_SEEN = 0.5;
 const MAX_SEEN = 1.35;
@@ -209,8 +223,10 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
     return;
   }
 
-  // The leap is a commitment: nothing it perceives mid-flight changes where it lands.
-  if (e.state === "windup" || e.state === "lunge" || e.state === "recover") {
+  // An attack is a commitment: nothing either kind perceives mid-swing or mid-flight
+  // changes where it lands.
+  if (e.state === "swipe" || e.state === "windup"
+      || e.state === "lunge" || e.state === "recover") {
     updateAttack(e, deps, dt);
     advanceGait(e);
     return;
@@ -253,7 +269,7 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
         desiredX = 0;
         desiredY = 0;
         if (e.attackCooldown <= 0) {
-          e.attackCooldown = def.lunge.cooldown;
+          e.attackCooldown = def.melee?.cooldown ?? def.lunge.cooldown;
           deps.particles.burst(target.x, target.y, 6, 110, "#c23b3b", 0.3, 2);
           deps.hurtPlayer(target, CHEW_BITE);
         }
@@ -261,6 +277,25 @@ export function updateEnemy(e: Enemy, deps: EnemyDeps, dt: number): void {
         desiredX = dx / dist;
         desiredY = dy / dist;
       }
+    } else if (def.melee && dist <= e.radius + target.radius + def.melee.reach) {
+      if (e.attackCooldown <= 0) {
+        // Arm's length. The arms come up, and a quarter of a second later they come
+        // down on whatever is still in front of it. It does not aim and it does not
+        // lead you — the swing lands where the thing was already looking.
+        e.state = "swipe";
+        e.stateTimer = def.melee.windup;
+        e.vx = 0;
+        e.vy = 0;
+        e.facing = rotateToward(e.facing, lookAngle, 9 * dt);
+        return;
+      }
+      // In reach, still shaking off the last swing. Nothing stops a body walking
+      // through yours in this game, so a Walker that kept closing would blunder past
+      // you and have to come back — which reads as a bug and lets you tank a crowd by
+      // standing in it. It crowds you instead: planted, facing, and swinging again the
+      // moment the cooldown is up. Backing out of the reach is what makes it stop.
+      e.state = "chase";
+      speed = def.chaseSpeed;
     } else if (dist <= def.lunge.range && e.attackCooldown <= 0) {
       // Plant and telegraph. Direction is not locked until the windup ends, so it
       // tracks you a little first and then commits — dodge late, not early.
@@ -390,9 +425,33 @@ function advanceGait(e: Enemy): void {
   e.walkPhase = (e.walkPhase + (dist / ZOMBIE_STRIDE) * Math.PI) % TAU;
 }
 
-/** The three committed states. Nothing here looks at what the zombie can perceive. */
+/** The committed states. Nothing here looks at what the zombie can perceive. */
 function updateAttack(e: Enemy, deps: EnemyDeps, dt: number): void {
   const def = zombieDef(e.kind);
+
+  if (e.state === "swipe") {
+    /*
+     * A Walker's whole attack, and deliberately the dumbest thing in this file. It
+     * plants, it tracks you slowly through the tell — slowly enough that stepping
+     * round it works and stepping back does not — and then it swings at the arc in
+     * front of its own face. There is no second chance in the swing: miss, and it has
+     * to walk into you again.
+     */
+    const target = deps.players.find((p) => p.id === e.targetId);
+    if (target) {
+      const angle = Math.atan2(target.y - e.y, target.x - e.x);
+      e.facing = rotateToward(e.facing, angle, 4 * dt);
+    }
+    e.vx = damp(e.vx, 0, 16, dt);
+    e.vy = damp(e.vy, 0, 16, dt);
+    if (e.stateTimer <= 0) {
+      const melee = def.melee ?? FALLBACK_MELEE;
+      claw(e, deps, melee);
+      e.attackCooldown = melee.cooldown;
+      e.state = e.targetId >= 0 ? "chase" : "investigate";
+    }
+    return;
+  }
 
   if (e.state === "windup") {
     // Track the target through the telegraph, then launch at wherever it ended up.
@@ -441,6 +500,30 @@ function updateAttack(e: Enemy, deps: EnemyDeps, dt: number): void {
     e.state = e.targetId >= 0 ? "chase" : "investigate";
     e.attackCooldown = def.lunge.cooldown;
   }
+}
+
+/**
+ * A swing that has already been committed to. It lands on anything inside the reach
+ * AND inside the arc the thing is facing, so backing off or getting round the side of
+ * one is the counter — a swipe that hit everything within a radius would make walking
+ * past a Walker impossible rather than expensive.
+ */
+const SWIPE_ARC = 1.1;
+/** Only reached by a kind whose `melee` vanished mid-swing. Never in practice. */
+const FALLBACK_MELEE: MeleeDef = { reach: 10, windup: 0.28, damage: 11, cooldown: 0.9 };
+
+function claw(e: Enemy, deps: EnemyDeps, melee: MeleeDef): boolean {
+  for (const p of deps.players) {
+    const dx = p.x - e.x;
+    const dy = p.y - e.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > e.radius + p.radius + melee.reach) continue;
+    if (Math.abs(angleDelta(e.facing, Math.atan2(dy, dx))) > SWIPE_ARC) continue;
+    deps.particles.burst(p.x, p.y, 6, 130, "#c23b3b", 0.3, 2);
+    deps.hurtPlayer(p, melee.damage);
+    return true;
+  }
+  return false;
 }
 
 /** Contact damage, mid-leap only. Returns whether it connected. */

@@ -138,7 +138,7 @@ export interface TileDef {
    * how the two mutants get onto a floor at all — neither is ever drawn at random,
    * because both of them are about the place they are standing.
    */
-  enemyKind?: "walker" | "strangler" | "stalker" | "lurker";
+  enemyKind?: "walker" | "lunger" | "strangler" | "stalker" | "lurker";
   /** Editor palette colour. */
   color: string;
   /** Single character for the compact text form of a level. */
@@ -154,7 +154,8 @@ export const TILE_DEFS: readonly TileDef[] = [
   { id: 2, key: "player", name: "Player spawn", solid: false, opaque: false, spawn: "player",
     color: "#ffd257", glyph: "P", hint: "players spawn here in order; falls back to open floor" },
   { id: 3, key: "enemy", name: "Zombie", solid: false, opaque: false, spawn: "enemy",
-    color: "#ff6b6b", glyph: "E", hint: "one zombie, placed here at map start. Never respawns" },
+    color: "#ff6b6b",
+    glyph: "E", hint: "one Walker, placed here at map start. Closes and claws. Never respawns" },
   { id: 4, key: "crate", name: "Crate", solid: true, opaque: true,
     color: "#6b5334", glyph: "X", hint: "cover — same rules as a wall, drawn as a block" },
   { id: 5, key: "glass", name: "Glass", solid: true, opaque: false, blocksShots: false, breaksInto: 17,
@@ -322,7 +323,9 @@ export const TILE_DEFS: readonly TileDef[] = [
     color: "#41627f", glyph: "[",
     hint: "an airlock door mid-cycle. Rarely authored — the chamber makes these" },
 
-  // Placed mutants. Neither is ever drawn at random — see `weight: 0` in ZOMBIE_DEFS.
+  // A hand-placed Lunger, and the three mutants. The mutants are never drawn at random
+  // — see `weight: 0` in ZOMBIE_DEFS. A Lunger is (one wave body in five), but an
+  // author who wants one in a specific doorway says so here.
   { id: 40, key: "stranglerSpawn", name: "Strangler", solid: false, opaque: false,
     spawn: "enemy", enemyKind: "strangler",
     color: "#8f6f9a", glyph: "S",
@@ -331,6 +334,10 @@ export const TILE_DEFS: readonly TileDef[] = [
     spawn: "enemy", enemyKind: "stalker",
     color: "#5c6f7a", glyph: "s",
     hint: "one Stalker. It will take the ducts and come back at whoever is on their own" },
+  { id: 53, key: "lungerSpawn", name: "Lunger", solid: false, opaque: false,
+    spawn: "enemy", enemyKind: "lunger",
+    color: "#9c9f5c", glyph: "J",
+    hint: "one Lunger. Slower than a Walker, but it crosses the last four metres in one leap" },
   { id: 52, key: "lurkerSpawn", name: "Ceiling Lurker", solid: false, opaque: false,
     spawn: "enemy", enemyKind: "lurker",
     color: "#6a5c7a", glyph: "l",

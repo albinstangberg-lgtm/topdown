@@ -205,18 +205,21 @@ function drawLegs(
   for (const side of [-1, 1]) {
     const phase = side === RIGHT ? stride : -stride;
     const drag = side === RIGHT ? 1 : 1 - 0.55 * shamble;
-    const hipX = -8.5 * s;
+    const hipX = -7 * s;
     const hipY = side * 5.5 * s;
     /*
      * Seen from directly overhead a standing person's legs are genuinely hidden under
      * their own shoulders, and an actor with no legs at all is most of what was wrong
-     * with drawing one as a box. So the hips sit at the back of the torso and both feet
-     * trail clear behind it, one reaching further than the other through the stride:
-     * two boots behind a body, which is what a walking figure looks like from a
-     * helicopter. Prone folds them straight out the back instead.
+     * with drawing one as a box. So the hips sit at the back of the torso and the feet
+     * step either side of it: the leading one comes up level with the hip, the trailing
+     * one clears the body behind. Prone folds them both straight out the back instead.
      */
-    const footX = hipX + lerp(-4.5 * s + phase * gait * drag * 5 * s, -10 * s, prone);
-    const footY = hipY + side * (2.5 + 3 * shamble) * s + lerp(0, side * 3 * s, prone);
+    const swing = phase * gait * drag;
+    const footX = hipX + lerp(-2.5 * s + swing * 5.5 * s, -11 * s, prone);
+    // The leading foot swings out as well as forward, or it vanishes under the chest
+    // and a walk reads as one leg. The trailing one stays tucked in behind the hip.
+    const splay = (2.5 + 3 * shamble + 3.5 * Math.max(0, swing)) * s;
+    const footY = hipY + side * splay + lerp(0, side * 3 * s, prone);
 
     ctx.strokeStyle = line;
     ctx.lineWidth = 9 * s;
@@ -231,8 +234,14 @@ function drawLegs(
     ctx.lineTo(footX, footY);
     ctx.stroke();
 
-    // Boot: a dark cap on the end of the leg, turned the way the leg is going.
-    const ang = Math.atan2(footY - hipY, footX - hipX);
+    /*
+     * Boot: a dark cap on the end of the leg. It points the way the BODY is going,
+     * not the way the leg is lying — a trailing leg still has its toes forward, and
+     * turning the boot onto the hip-to-foot line is what put both feet on backwards.
+     * Toed out a little, because people stand that way. A crawl is the exception: down
+     * there the legs really are dragging behind and the boot follows them.
+     */
+    const ang = lerp(side * 0.16, Math.atan2(footY - hipY, footX - hipX), prone);
     ctx.save();
     ctx.translate(footX, footY);
     ctx.rotate(ang);

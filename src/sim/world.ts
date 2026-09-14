@@ -1905,9 +1905,10 @@ export class GameWorld {
       squadCanSee: this.squadCanSee,
       allowFallback: this.mode !== "story",
       spawn: (x, y, hunting) => {
-        // Waves are walkers. Once a floor is leaning hard, one body in a while is a
-        // Stalker instead — never more than one alive at a time, because two of them
-        // working a split squad is not a difficulty curve, it is a coin flip.
+        // Waves are four Walkers to every Lunger, drawn off the `weight` column. Once
+        // a floor is leaning hard, one body in a while is a Stalker instead — never more
+        // than one alive at a time, because two of them working a split squad is not a
+        // difficulty curve, it is a coin flip.
         const kind = this.mayAddStalker() ? "stalker" : randomZombieKind();
         this.enemies.push(createEnemy(this.nextEnemyId++, x, y, kind, hunting));
       },

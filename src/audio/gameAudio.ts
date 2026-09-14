@@ -366,6 +366,12 @@ export class GameAudio {
         this.bus.tone("screech", at, {
           freq: 260, to: 780, type: "sawtooth", attack: 0.02, decay: 0.3, level: 0.4,
         });
+      } else if (e.state === "swipe") {
+        // Shorter and lower than a Lunger's screech, because it means something
+        // different: not "get out of the way" but "it is already on you".
+        this.bus.tone("screech", at, {
+          freq: 180, to: 300, type: "square", attack: 0.01, decay: 0.16, level: 0.28,
+        });
       } else if (e.state === "lunge") {
         this.bus.noise("leap", at, { freq: 900, q: 0.8, decay: 0.18, level: 0.4, sweepTo: 300 });
       }

@@ -315,6 +315,7 @@ export interface Enemy {
    * - `wander` — shambling with no idea you exist
    * - `investigate` — walking to a noise or to where you last were
    * - `chase` — has you in sight and is closing
+   * - `swipe` — within arm's reach, arms up, about to claw. A Walker's whole attack
    * - `windup` — planted, telegraphing the leap. This is the window you dodge in
    * - `lunge` — committed to a direction, damage on contact
    * - `recover` — face down, cannot move or turn, takes extra damage
@@ -331,14 +332,15 @@ export interface Enemy {
    *                shot, a Lurker roosts in the ceiling and cannot
    */
   state:
-    | "wander" | "hunt" | "investigate" | "chase" | "windup" | "lunge" | "recover"
+    | "wander" | "hunt" | "investigate" | "chase" | "swipe"
+    | "windup" | "lunge" | "recover"
     | "lurk" | "reel" | "stalk" | "pounce" | "pin" | "vent" | "roost";
   /**
    * Came in with a wave, so it has a heading. A horde that spawns and then mills about
    * is not a horde. Ambient wanderers do not get this — being oblivious is their job.
    */
   hunting: boolean;
-  /** Seconds left in windup / lunge / recover. Unused in the other states. */
+  /** Seconds left in swipe / windup / lunge / recover. Unused in the other states. */
   stateTimer: number;
   /** Locked in at the end of the windup: a lunge does not steer. */
   lungeDirX: number;
@@ -355,7 +357,7 @@ export interface Enemy {
    * that has been chasing you for ten seconds has told the floor about it twice.
    */
   groanTimer: number;
-  /** Seconds before it may wind up another leap. */
+  /** Seconds before it may swing or wind up another leap. */
   attackCooldown: number;
   wanderAngle: number;
   /** Gait cycle, in radians, advanced by distance travelled. Presentation only. */

@@ -11,7 +11,7 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `0` | `.` | Floor | no | no | walkable |
 | `1` | `#` | Wall | yes | yes | blocks movement and sight — this is what casts the shadows |
 | `2` | `P` | Player spawn | no | no | players spawn here in grid order, cycling if there are more players than spawns |
-| `3` | `E` | Enemy spawn | no | no | the director spawns enemies at these, and only when nobody is looking |
+| `3` | `E` | Zombie | no | no | one Walker, standing here at map start — it closes and claws rather than leaping. Never respawns |
 | `4` | `X` | Crate | yes | yes | cover; same rules as a wall, drawn as an object on the floor |
 | `5` | `G` | Glass | yes | **no** | see and shoot straight through, but you cannot walk through — until a bullet shatters it |
 | `6` | `L` | Lamp | no | no | a static light; its visibility polygon is solved once at load, not per frame |
@@ -61,6 +61,7 @@ the vision, the renderer, the editor palette and the importer all read from that
 | `50` | `]` | Airlock door | no | no | an open airlock door. The chamber shuts both of them for the length of a cycle |
 | `51` | `[` | Airlock door (shut) | yes | yes | a door mid-cycle. Rarely authored — the chamber makes these |
 | `52` | `l` | Ceiling Lurker | no | no | one Ceiling Lurker. Needs vents to live in — it drops on anyone standing still under an unlit grate |
+| `53` | `J` | Lunger | no | no | one Lunger — the leaping kind. Waves already draw one for every four Walkers; place these where a leap across a gap is the point |
 
 ### Authoring the new tiles
 

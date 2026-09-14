@@ -8,11 +8,11 @@ import { zombieDef } from "./zombies";
 import type { EnemyDeps } from "./enemy";
 
 /**
- * CORE 7c — The two mutants that do something a walker cannot.
+ * CORE 7c — The two mutants that do something the common dead cannot.
  *
- * A walker is a pressure system: it comes at you, it telegraphs, you shoot it. Both
- * things in this file exist to break a habit the squad has already formed by the time
- * they meet one.
+ * A Walker is a pressure system and a Lunger is a timing puzzle: both of them come at
+ * you across open floor and you shoot them. Both things in this file exist to break a
+ * habit the squad has already formed by the time they meet one.
  *
  *   **The Strangler** breaks "the dark is empty". It never comes to you. It holds a
  *   corner outside your cone, reaches four hundred units, and drags whoever it catches
@@ -24,7 +24,7 @@ import type { EnemyDeps } from "./enemy";
  *   sit in the ducts all mission; split up and it takes the straggler off their feet.
  *
  * Both are one row in `ZOMBIE_DEFS` with an ability block on it (`tendril`, `pounce`)
- * — the same registry a walker comes from. What they do NOT share is a state machine,
+ * — the same registry a Walker comes from. What they do NOT share is a state machine,
  * which is why they live here rather than as more branches inside `updateEnemy`: an
  * ambusher and a pouncer have almost nothing in common except a body and a health bar.
  *
@@ -231,7 +231,7 @@ export function updateStalker(e: Enemy, deps: EnemyDeps, dt: number): boolean {
     case "vent": return ductTravel(e, deps, dt);
     case "pin": return pinning(e, deps, dt);
     case "pounce": return leaping(e, deps, dt);
-    // A Stalker's windup is always the run-up to a pounce, never to a walker's hop, so
+    // A Stalker's windup is always the run-up to a pounce, never a Lunger's hop, so
     // it has to be taken here. Handing it back would let the shared machine turn the
     // skitter into an ordinary lunge — which is a different attack with a different
     // counterplay, and the whole animal would quietly stop working.

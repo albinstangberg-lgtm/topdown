@@ -11,6 +11,7 @@ const STATE_COLORS: Record<string, string> = {
   hunt: "#4dd2ff",
   investigate: "#ffe14d",
   chase: "#ffaa4d",
+  swipe: "#ff8c5a",
   windup: "#ff4d4d",
   lunge: "#ff4dff",
   recover: "#8899aa",

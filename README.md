@@ -160,8 +160,8 @@ simulation:
   when the bar is actually out in front of you — not on the button press.
 - **Zombies use the same rig** with a different posture: arms out in front, one leg
   dragging, the head lolled over, and a face the colour of something that has stopped
-  circulating. Arms go fully out the moment one commits to a leap, which makes the
-  telegraph readable off the body as well as off the ring. A **Stalker** is the same rig
+  circulating. Arms go fully out the moment one commits to a leap or a swing, which
+  makes the telegraph readable off the body as well as off the ring. A **Stalker** is the same rig
   flattened along its own length — it goes about on all fours — and comes up onto its
   haunches when it is sitting on somebody, so you can see what has your teammate.
 
@@ -254,11 +254,23 @@ close-range, and every part of it is readable off the world rather than off UI.
   loudest thing wins, so a zombie between two noises goes to the one filling its ears.
   Sound deliberately ignores walls: shooting from cover should still pull the room
   toward you.
-- **They lunge.** In range they plant, and a red ring closes on them for about a third of
-  a second — that is your window. Then they commit to a direction and leap; the leap does
-  not steer. Contact costs you 18. A miss puts them face down for half a second, unable
-  to move or turn, taking **60% extra damage**. Dodging is worth more than backing up:
-  their chase pace is below your walk, so the leap is the only way they can catch you.
+- **Four in five of them are Walkers, and they do not leap.** They close, and at arm's
+  length an orange arc sweeps across their front for about a quarter of a second before
+  they claw for 11. There is no dodging that once it has arrived — the answer is the
+  ground you keep. They run at **155** against your walk of 165, so backing off buys a
+  foot at a time, a sprint breaks contact outright, and standing still to line up a shot
+  is a decision rather than something you do between reloads.
+- **The fifth is a Lunger, and it leaps.** In range it plants, and a red ring closes on
+  it for about a third of a second — that is your window. Then it commits to a direction
+  and jumps; the leap does not steer. Contact costs you 18. A miss puts it face down for
+  half a second, unable to move or turn, taking **60% extra damage**. It is the slower of
+  the two on its feet (128), so it is the one you *can* back away from — right up until
+  the moment you cannot.
+- **The mix is the point.** Neither kind is interesting on its own, and you cannot read a
+  crowd at a glance: give ground and the Walkers close it, hold ground and the Lunger
+  crosses it. They are told apart by colour — a Walker is grey-green, a Lunger sallow
+  yellow — and by the shape of the tell: an arc across the front means the damage is
+  where it is already looking, a ring means the thing is about to move.
 
 `F1` then `F3` draws the field, one arrow per tile — the fastest way to see why a horde
 is going the wrong way. `F1` also prints the live hunch count; **zero means the squad
@@ -298,15 +310,18 @@ idea — you cannot see, and the Strangler and the Lurker are counting on exactl
 but it is now a *trade* rather than a pure loss.
 
 Every number above lives in one row of `ZOMBIE_DEFS` (`src/sim/zombies.ts`). **Adding a
-kind of zombie is one entry in that table** — a runner is a walker with a bigger
-`chaseSpeed` and a shorter windup, a brute one with more health and a heavier bite. The
-state machine, the renderer and the director all read the table by key, so nothing else
-changes. `F1` draws each zombie's state and sense arc while you tune.
+kind of zombie is one entry in that table** — a Walker and a Lunger differ only in
+`chaseSpeed` and in which attack block they carry (`melee` for the claw, `lunge.range`
+for the leap), and a brute is a Walker with more health and a heavier swing. The `weight`
+column is the mix the director draws from: 4 and 1 is where the four-to-one split comes
+from, and 0 means "only if an author places it". The state machine, the renderer and the
+director all read the table by key, so nothing else changes. `F1` draws each zombie's
+state and sense arc while you tune.
 
 ## The mutants
 
-Three things on the ship are not walkers, and each one exists to break a habit the squad
-has already formed by the time they meet it.
+Three things on the ship are neither Walkers nor Lungers, and each one exists to break a
+habit the squad has already formed by the time they meet it.
 
 ### The Strangler — the dark is not empty
 
@@ -413,7 +428,7 @@ job for the squad, not for the person holding it.
 ## Vacuum, and the doors that split you up
 
 - **Hull breach levers** (`Y`). Ten seconds of open hull, and every one of them costs
-  something. Walkers go out of the hole and off the ship — that is what you paid for.
+  something. The dead go out of the hole and off the ship — that is what you paid for.
   But the squad's **oxygen is shared** and it goes with them, the depressurisation is the
   loudest thing on the deck, and anybody not standing on a **railing** (`|`) is being
   dragged toward the same hole as the horde. Run out of air in there and it starts
@@ -545,8 +560,10 @@ matters because the game now has a mechanic you cannot learn any other way.
 
 On top of that: a growl for the crowd, more often and higher the more of them are near
 and the more of them are hunting, so a horde sounds like a horde without forty voices; a
-rising **screech on the windup**, because a telegraph you can only see is no use when
-the thing is behind you; a whoosh on the leap; the two-tone whoop of a car alarm; and
+rising **screech on a Lunger's windup**, because a telegraph you can only see is no use
+when the thing is behind you, and a shorter, lower snarl on a Walker's swing — which
+means something different, not "get out of the way" but "it is already on you"; a whoosh
+on the leap; the two-tone whoop of a car alarm; and
 the ordinary business of hits, reloads, downs and revives.
 
 Sounds are placed against the player with the best **line** to them — nearest only
